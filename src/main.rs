@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use bslstatus::module::host::Host;
+use std::path::PathBuf;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
@@ -65,10 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.consume_fuel(true);
     let engine = Engine::new(&config)?;
 
-    let component = Component::from_file(
-        &engine,
-        "modules/datetime/target/wasm32-wasip2/debug/datetime.wasm",
-    )?;
+    let modules_dir: PathBuf = dirs::config_dir()
+        .ok_or("could not determine config directory")?
+        .join("bslstatus")
+        .join("modules");
+    let component = Component::from_file(&engine, modules_dir.join("datetime.wasm"))?;
 
     let mut linker = Linker::new(&engine);
     Module::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
