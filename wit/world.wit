@@ -10,8 +10,7 @@ interface guest {
     text: string,
     interval-ms: u32,
   }
-  metadata: func() -> string;
-  init: func();
+  init: func(config: string);
   update: func() -> output;
   on-click: func(button: u8);
 }

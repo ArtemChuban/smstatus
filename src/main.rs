@@ -77,17 +77,32 @@ fn instantiate_module(
     Ok((store, module))
 }
 
+fn load_module_config(config_path: &std::path::Path, module_name: &str) -> String {
+    let Ok(contents) = std::fs::read_to_string(config_path) else {
+        return "{}".to_string();
+    };
+    let Ok(parsed): Result<toml::Table, _> = toml::from_str(&contents) else {
+        return "{}".to_string();
+    };
+    match parsed.get(module_name) {
+        Some(section) => serde_json::to_string(section).unwrap_or_else(|_| "{}".to_string()),
+        None => "{}".to_string(),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
     config.consume_fuel(true);
     let engine = Engine::new(&config)?;
 
-    let modules_dir: PathBuf = dirs::config_dir()
+    let config_dir: PathBuf = dirs::config_dir()
         .ok_or("could not determine config directory")?
-        .join("bslstatus")
-        .join("modules");
-    let component = Component::from_file(&engine, modules_dir.join("battery.wasm"))?;
+        .join("bslstatus");
+    let modules_dir = config_dir.join("modules");
+    let module_name = "datetime";
+    let component = Component::from_file(&engine, modules_dir.join(format!("{module_name}.wasm")))?;
+    let module_config = load_module_config(&config_dir.join("config.toml"), module_name);
 
     let mut linker = Linker::new(&engine);
     Module::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
@@ -104,6 +119,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         FUEL_PER_TICK,
         vec![PathBuf::from("/sys/class/power_supply/BAT1/capacity")],
     )?;
+    module
+        .bslstatus_module_guest()
+        .call_init(&mut store, &module_config)?;
 
     let (connection, screen_num) = x11rb::connect(None)?;
     let screen = &connection.setup().roots[screen_num];

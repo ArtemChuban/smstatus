@@ -9,11 +9,7 @@ use exports::bslstatus::module::guest::{Guest, Output};
 struct Component;
 
 impl Guest for Component {
-    fn metadata() -> String {
-        r#"{"name":"battery","version":"0.1.0","capabilities":["read-sysfs"]}"#.to_string()
-    }
-
-    fn init() {}
+    fn init(_confog: String) {}
 
     fn update() -> Output {
         let text = match host::read_sysfs("/sys/class/power_supply/BAT1/capacity") {
