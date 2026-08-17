@@ -1,5 +1,5 @@
 [package]
-name = "example"
+name = "datetime"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,3 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.60.0"
+time = { version = "0.3.55", features = ["formatting", "macros"] }

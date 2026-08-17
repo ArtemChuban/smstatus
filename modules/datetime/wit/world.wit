@@ -2,9 +2,6 @@ package bslstatus:module;
 
 interface host {
   now-ms: func() -> u64;
-  read-sysfs: func(path: string) -> result<string, string>;
-  read-config: func(key: string) -> option<string>;
-  log: func(msg: string);
 }
 
 interface guest {

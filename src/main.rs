@@ -1,10 +1,15 @@
+use std::time::Duration;
+
 use bslstatus::module::host::Host;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{AtomEnum, PropMode};
+use x11rb::wrapper::ConnectionExt;
 
 wasmtime::component::bindgen!({
-    path: "modules/example/wit",
+    path: "modules/datetime/wit",
     world: "module",
 });
 
@@ -19,18 +24,6 @@ impl Host for HostState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64
-    }
-
-    fn read_sysfs(&mut self, _path: String) -> Result<String, String> {
-        Err("not implemented".to_string())
-    }
-
-    fn read_config(&mut self, _key: String) -> Option<String> {
-        None
-    }
-
-    fn log(&mut self, msg: String) {
-        println!("[module log] {msg}");
     }
 }
 
@@ -50,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let component = Component::from_file(
         &engine,
-        "modules/example/target/wasm32-wasip2/debug/example.wasm",
+        "modules/datetime/target/wasm32-wasip2/debug/datetime.wasm",
     )?;
 
     let mut linker = Linker::new(&engine);
@@ -67,11 +60,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut store = Store::new(&engine, state);
     let module = Module::instantiate(&mut store, &component, &linker)?;
 
-    let output = module.bslstatus_module_guest().call_update(&mut store)?;
-    println!(
-        "update() -> text={:?} interval_ms={}",
-        output.text, output.interval_ms
-    );
+    let (connection, screen_num) = x11rb::connect(None)?;
+    let screen = &connection.setup().roots[screen_num];
+    let root = screen.root;
 
-    Ok(())
+    loop {
+        let output = module.bslstatus_module_guest().call_update(&mut store)?;
+        connection.change_property8(
+            PropMode::REPLACE,
+            root,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            output.text.as_bytes(),
+        )?;
+        connection.flush()?;
+
+        println!("root name set to: {}", output.text);
+        std::thread::sleep(Duration::from_millis(output.interval_ms as u64));
+    }
 }
