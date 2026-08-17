@@ -3,6 +3,7 @@ use std::time::Duration;
 use bslstatus::module::host::Host;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
+use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, PropMode};
@@ -16,6 +17,7 @@ wasmtime::component::bindgen!({
 struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
+    limits: StoreLimits,
 }
 
 impl Host for HostState {
@@ -36,9 +38,31 @@ impl WasiView for HostState {
     }
 }
 
+fn instantiate_module(
+    engine: &Engine,
+    component: &Component,
+    linker: &Linker<HostState>,
+    fuel: u64,
+) -> Result<(Store<HostState>, Module), Box<dyn std::error::Error>> {
+    let state = HostState {
+        wasi_ctx: WasiCtxBuilder::new().build(),
+        table: ResourceTable::new(),
+        limits: StoreLimitsBuilder::new()
+            .memory_size(10 * 1024 * 1024)
+            .instances(3)
+            .build(),
+    };
+    let mut store = Store::new(engine, state);
+    store.limiter(|state| &mut state.limits);
+    store.set_fuel(fuel)?;
+    let module = Module::instantiate(&mut store, component, linker)?;
+    Ok((store, module))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.consume_fuel(true);
     let engine = Engine::new(&config)?;
 
     let component = Component::from_file(
@@ -53,19 +77,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
 
-    let state = HostState {
-        wasi_ctx: WasiCtxBuilder::new().build(),
-        table: ResourceTable::new(),
-    };
-    let mut store = Store::new(&engine, state);
-    let module = Module::instantiate(&mut store, &component, &linker)?;
+    const FUEL_PER_TICK: u64 = 10_000_000;
+    let (mut store, mut module) = instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
 
     let (connection, screen_num) = x11rb::connect(None)?;
     let screen = &connection.setup().roots[screen_num];
     let root = screen.root;
 
     loop {
-        let output = module.bslstatus_module_guest().call_update(&mut store)?;
+        store.set_fuel(FUEL_PER_TICK)?;
+
+        let output = match module.bslstatus_module_guest().call_update(&mut store) {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("module tick failed: {err}");
+                eprintln!("re-instantiating module after trap");
+                let (new_store, new_module) =
+                    instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
+                store = new_store;
+                module = new_module;
+                std::thread::sleep(Duration::from_millis(1_000));
+                continue;
+            }
+        };
+
         connection.change_property8(
             PropMode::REPLACE,
             root,
