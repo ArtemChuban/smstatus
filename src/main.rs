@@ -19,6 +19,7 @@ struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
+    allowed_sysfs_paths: Vec<PathBuf>,
 }
 
 impl Host for HostState {
@@ -27,6 +28,16 @@ impl Host for HostState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64
+    }
+
+    fn read_sysfs(&mut self, path: String) -> Result<String, String> {
+        let requested =
+            std::fs::canonicalize(&path).map_err(|e| format!("cannot resolve path: {e}"))?;
+        if !self.allowed_sysfs_paths.contains(&requested) {
+            return Err(format!("permission denied: {path}"));
+        }
+
+        std::fs::read_to_string(&requested).map_err(|e| format!("read failed: {e}"))
     }
 }
 
@@ -44,7 +55,12 @@ fn instantiate_module(
     component: &Component,
     linker: &Linker<HostState>,
     fuel: u64,
+    allowed_sysfs_paths: Vec<PathBuf>,
 ) -> Result<(Store<HostState>, Module), Box<dyn std::error::Error>> {
+    let allowed_sysfs_paths = allowed_sysfs_paths
+        .into_iter()
+        .filter_map(|p| std::fs::canonicalize(&p).ok())
+        .collect();
     let state = HostState {
         wasi_ctx: WasiCtxBuilder::new().build(),
         table: ResourceTable::new(),
@@ -52,6 +68,7 @@ fn instantiate_module(
             .memory_size(10 * 1024 * 1024)
             .instances(3)
             .build(),
+        allowed_sysfs_paths,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|state| &mut state.limits);
@@ -70,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("could not determine config directory")?
         .join("bslstatus")
         .join("modules");
-    let component = Component::from_file(&engine, modules_dir.join("datetime.wasm"))?;
+    let component = Component::from_file(&engine, modules_dir.join("battery.wasm"))?;
 
     let mut linker = Linker::new(&engine);
     Module::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
@@ -80,7 +97,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
 
     const FUEL_PER_TICK: u64 = 10_000_000;
-    let (mut store, mut module) = instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
+    let (mut store, mut module) = instantiate_module(
+        &engine,
+        &component,
+        &linker,
+        FUEL_PER_TICK,
+        vec![PathBuf::from("/sys/class/power_supply/BAT1/capacity")],
+    )?;
 
     let (connection, screen_num) = x11rb::connect(None)?;
     let screen = &connection.setup().roots[screen_num];
@@ -94,8 +117,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(err) => {
                 eprintln!("module tick failed: {err}");
                 eprintln!("re-instantiating module after trap");
-                let (new_store, new_module) =
-                    instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
+                let (new_store, new_module) = instantiate_module(
+                    &engine,
+                    &component,
+                    &linker,
+                    FUEL_PER_TICK,
+                    vec![PathBuf::from("/sys/class/power_supply/BAT1/capacity")],
+                )?;
                 store = new_store;
                 module = new_module;
                 std::thread::sleep(Duration::from_millis(1_000));
