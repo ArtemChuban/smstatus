@@ -11,7 +11,7 @@ use x11rb::protocol::xproto::{AtomEnum, PropMode};
 use x11rb::wrapper::ConnectionExt;
 
 wasmtime::component::bindgen!({
-    path: "modules/datetime/wit",
+    path: "wit",
     world: "module",
 });
 
