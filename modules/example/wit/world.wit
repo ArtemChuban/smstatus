@@ -1,0 +1,24 @@
+package bslstatus:module;
+
+interface host {
+  now-ms: func() -> u64;
+  read-sysfs: func(path: string) -> result<string, string>;
+  read-config: func(key: string) -> option<string>;
+  log: func(msg: string);
+}
+
+interface guest {
+  record output {
+    text: string,
+    interval-ms: u32,
+  }
+  metadata: func() -> string;
+  init: func();
+  update: func() -> output;
+  on-click: func(button: u8);
+}
+
+world module {
+  import host;
+  export guest;
+}

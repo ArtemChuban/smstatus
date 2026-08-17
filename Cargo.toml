@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+wasmtime = { version = "47.0.3", features = ["component-model"] }
+wasmtime-wasi = "47.0.3"
 x11rb = "0.14.0"
