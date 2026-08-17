@@ -35,6 +35,10 @@ impl Guest for Component {
         let ms = host::now_ms();
         let dt = OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        let offset_secs = host::local_offset_seconds();
+        let dt = dt.to_offset(
+            time::UtcOffset::from_whole_seconds(offset_secs).unwrap_or(time::UtcOffset::UTC),
+        );
 
         let text = FORMAT.with(|f| {
             let fmt = f.borrow();

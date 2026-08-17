@@ -3,6 +3,7 @@ package bslstatus:module;
 interface host {
   now-ms: func() -> u64;
   read-sysfs: func(path: string) -> result<string, string>;
+  local-offset-seconds: func() -> s32;
 }
 
 interface guest {

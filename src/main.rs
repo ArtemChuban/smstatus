@@ -31,6 +31,10 @@ impl Host for HostState {
     fn read_sysfs(&mut self, path: String) -> Result<String, String> {
         std::fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))
     }
+
+    fn local_offset_seconds(&mut self) -> i32 {
+        chrono::Local::now().offset().local_minus_utc()
+    }
 }
 
 impl WasiView for HostState {
