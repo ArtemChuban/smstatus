@@ -18,7 +18,6 @@ struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
-    allowed_sysfs_paths: Vec<PathBuf>,
 }
 
 impl Host for HostState {
@@ -30,13 +29,7 @@ impl Host for HostState {
     }
 
     fn read_sysfs(&mut self, path: String) -> Result<String, String> {
-        let requested =
-            std::fs::canonicalize(&path).map_err(|e| format!("cannot resolve path: {e}"))?;
-        if !self.allowed_sysfs_paths.contains(&requested) {
-            return Err(format!("permission denied: {path}"));
-        }
-
-        std::fs::read_to_string(&requested).map_err(|e| format!("read failed: {e}"))
+        std::fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))
     }
 }
 
@@ -64,12 +57,7 @@ fn instantiate_module(
     component: &Component,
     linker: &Linker<HostState>,
     fuel: u64,
-    allowed_sysfs_paths: Vec<PathBuf>,
 ) -> Result<(Store<HostState>, Module), Box<dyn std::error::Error>> {
-    let allowed_sysfs_paths = allowed_sysfs_paths
-        .into_iter()
-        .filter_map(|p| std::fs::canonicalize(&p).ok())
-        .collect();
     let state = HostState {
         wasi_ctx: WasiCtxBuilder::new().build(),
         table: ResourceTable::new(),
@@ -77,7 +65,6 @@ fn instantiate_module(
             .memory_size(10 * 1024 * 1024)
             .instances(3)
             .build(),
-        allowed_sysfs_paths,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|state| &mut state.limits);
@@ -138,13 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in module_names(&config)? {
         let config = module_config_json(&config, &name);
         let component = Component::from_file(&engine, modules_dir.join(format!("{name}.wasm")))?;
-        let (mut store, module) = instantiate_module(
-            &engine,
-            &component,
-            &linker,
-            FUEL_PER_TICK,
-            vec![PathBuf::from("/sys/class/power_supply/BAT1/capacity")],
-        )?;
+        let (mut store, module) = instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
         module
             .bslstatus_module_guest()
             .call_init(&mut store, &config)?;
@@ -185,13 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(err) => {
                     eprintln!("module tick failed: {err}");
                     eprintln!("re-instantiating module after trap");
-                    match instantiate_module(
-                        &engine,
-                        &state.component,
-                        &linker,
-                        FUEL_PER_TICK,
-                        vec![PathBuf::from("/sys/class/power_supply/BAT1/capacity")],
-                    ) {
+                    match instantiate_module(&engine, &state.component, &linker, FUEL_PER_TICK) {
                         Ok((mut store, module)) => {
                             if let Err(err) = module
                                 .bslstatus_module_guest()
