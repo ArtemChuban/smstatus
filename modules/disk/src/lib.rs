@@ -86,8 +86,6 @@ impl Guest for Component {
             interval_ms: 30_000,
         }
     }
-
-    fn on_click(_button: u8) {}
 }
 
 export!(Component);

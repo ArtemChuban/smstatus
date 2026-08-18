@@ -33,7 +33,6 @@ interface guest {
   }
   init: func(config: string);
   update: func() -> output;
-  on-click: func(button: u8);
 }
 
 world module {
