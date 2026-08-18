@@ -231,6 +231,14 @@ fn module_config_json(config: &toml::Table, module_name: &str) -> String {
     }
 }
 
+fn read_separator(config: &toml::Table) -> String {
+    config
+        .get("separator")
+        .and_then(|v| v.as_str())
+        .unwrap_or(" | ")
+        .to_string()
+}
+
 fn module_names(config: &toml::Table) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let modules = config
         .get("modules")
@@ -649,6 +657,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
         .join("smstatus");
     let modules_dir = config_dir.join("modules");
     let config = load_config(&config_dir.join("config.toml"))?;
+    let mut separator = read_separator(&config);
     const FUEL_PER_TICK: u64 = 10_000_000;
 
     let mut linker = Linker::new(&engine);
@@ -748,7 +757,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|s| s.last_output.as_str())
             .collect::<Vec<_>>()
-            .join(" | ");
+            .join(&separator);
 
         connection.change_property8(
             PropMode::REPLACE,
@@ -773,6 +782,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
                     while reload_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
                     match load_config(&config_dir.join("config.toml")) {
                         Ok(new_config) => {
+                            separator = read_separator(&new_config);
                             modules = reload_config(
                                 &engine,
                                 &linker,
