@@ -1,0 +1,29 @@
+use clap::{Parser, Subcommand};
+
+pub(crate) const DAEMON_ENV_VAR: &str = "SMSTATUS_DAEMON_CHILD";
+pub(crate) const EXIT_ALREADY_RUNNING: u8 = 3;
+
+#[derive(Parser)]
+#[command(
+    name = "smstatus",
+    about = "suckmore status",
+    version = env!("CARGO_PKG_VERSION"),
+    disable_version_flag = true
+)]
+pub(crate) struct Cli {
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: (),
+
+    #[command(subcommand)]
+    pub(crate) command: Commands,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum Commands {
+    /// Start smstatus as a background daemon.
+    Start,
+    /// Stop the running smstatus daemon.
+    Stop,
+    /// Run smstatus in the foreground (for debugging).
+    Run,
+}
