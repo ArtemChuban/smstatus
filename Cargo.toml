@@ -1,3 +1,11 @@
+[workspace]
+members = ["modules/battery", "modules/datetime"]
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+wit-bindgen = "0.60.0"
+
 [package]
 name = "bslstatus"
 version = "0.1.0"
@@ -6,7 +14,7 @@ edition = "2024"
 [dependencies]
 chrono = "0.4"
 dirs = "6.0.0"
-serde_json = "1.0.151"
+serde_json = { workspace = true }
 toml = "1.1.4"
 wasmtime = { version = "47.0.3", features = ["component-model"] }
 wasmtime-wasi = "47.0.3"
