@@ -13,6 +13,19 @@ build-app:
 
 build-all: build-modules build-app
 
+test-battery:
+    cargo test -p battery
+
+test-datetime:
+    cargo test -p datetime
+
+test-modules: test-battery test-datetime
+
+test-app:
+    cargo test -p bslstatus
+
+test-all: test-modules test-app
+
 fmt:
     cargo fmt --all
 
