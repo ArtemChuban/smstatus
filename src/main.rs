@@ -1,7 +1,16 @@
+use clap::{Parser, Subcommand};
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::{Pid, setsid};
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
 use smstatus::module::host::{DiskUsage, Host, MemUsage, TimeState, XkbState};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -16,6 +25,26 @@ use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::{AtomEnum, PropMode};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
+
+const DAEMON_ENV_VAR: &str = "SMSTATUS_DAEMON_CHILD";
+const EXIT_ALREADY_RUNNING: u8 = 3;
+
+#[derive(Parser)]
+#[command(name = "smstatus", about = "suckmore status")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start smstatus as a background daemon.
+    Start,
+    /// Stop the running smstatus daemon.
+    Stop,
+    /// Run smstatus in the foreground (for debugging).
+    Run,
+}
 
 wasmtime::component::bindgen!({
     path: "wit",
@@ -313,7 +342,295 @@ fn reload_config(
     new_modules
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+enum LockOutcome {
+    Acquired(Flock<File>),
+    AlreadyRunning(Option<i32>),
+}
+
+fn lock_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(runtime_dir) = dirs::runtime_dir() {
+        return Ok(runtime_dir.join("smstatus"));
+    }
+    let config_dir = dirs::config_dir().ok_or("could not determine config directory")?;
+    Ok(config_dir.join("smstatus").join("run"))
+}
+
+fn lock_file_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(lock_dir()?.join("smstatus.lock"))
+}
+
+fn log_file_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(lock_dir()?.join("smstatus.log"))
+}
+
+fn read_pid(file: &mut File) -> Option<i32> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    contents.trim().parse().ok()
+}
+
+fn acquire_lock() -> Result<LockOutcome, Box<dyn std::error::Error>> {
+    let path = lock_file_path()?;
+    std::fs::create_dir_all(path.parent().ok_or("lock file has no parent directory")?)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)?;
+
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(mut flock) => {
+            flock.set_len(0)?;
+            flock.seek(SeekFrom::Start(0))?;
+            write!(flock, "{}", std::process::id())?;
+            flock.flush()?;
+            Ok(LockOutcome::Acquired(flock))
+        }
+        Err((mut file, Errno::EWOULDBLOCK)) => Ok(LockOutcome::AlreadyRunning(read_pid(&mut file))),
+        Err((_, err)) => Err(format!("failed to lock {}: {err}", path.display()).into()),
+    }
+}
+
+fn run_daemon() -> ExitCode {
+    match acquire_lock() {
+        Ok(LockOutcome::AlreadyRunning(_)) => ExitCode::from(EXIT_ALREADY_RUNNING),
+        Ok(LockOutcome::Acquired(_flock)) => match run_bar_loop() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("smstatus exited with an error: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(err) => {
+            eprintln!("failed to acquire lock: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_run() -> ExitCode {
+    match acquire_lock() {
+        Ok(LockOutcome::AlreadyRunning(pid)) => {
+            match pid {
+                Some(pid) => eprintln!("smstatus is already running (pid {pid})"),
+                None => eprintln!("smstatus is already running"),
+            }
+            ExitCode::from(EXIT_ALREADY_RUNNING)
+        }
+        Ok(LockOutcome::Acquired(_flock)) => match run_bar_loop() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("smstatus exited with an error: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(err) => {
+            eprintln!("failed to acquire lock: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_start() -> ExitCode {
+    let log_path = match log_file_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("failed to determine log file path: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(parent) = log_path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("failed to create {}: {err}", parent.display());
+        return ExitCode::FAILURE;
+    }
+    let log_file = match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("failed to open log file {}: {err}", log_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let stdout_log = match log_file.try_clone() {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("failed to duplicate log file handle: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("failed to determine current executable: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut command = Command::new(current_exe);
+    command
+        .env(DAEMON_ENV_VAR, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(log_file));
+    unsafe {
+        command.pre_exec(|| setsid().map(|_| ()).map_err(std::io::Error::from));
+    }
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            eprintln!("failed to spawn smstatus daemon: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let lock_path = match lock_file_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("failed to determine lock file path: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.code() == Some(EXIT_ALREADY_RUNNING as i32) {
+                    let pid = File::open(&lock_path)
+                        .ok()
+                        .and_then(|mut f| read_pid(&mut f));
+                    match pid {
+                        Some(pid) => eprintln!("smstatus is already running (pid {pid})"),
+                        None => eprintln!("smstatus is already running"),
+                    }
+                    return ExitCode::from(EXIT_ALREADY_RUNNING);
+                }
+                eprintln!("smstatus failed to start, see {}:", log_path.display());
+                if let Ok(contents) = std::fs::read_to_string(&log_path) {
+                    eprint!("{contents}");
+                }
+                return ExitCode::FAILURE;
+            }
+            Ok(None) => {
+                if let Some(pid) = File::open(&lock_path)
+                    .ok()
+                    .and_then(|mut f| read_pid(&mut f))
+                    && pid == child.id() as i32
+                {
+                    println!("smstatus started (pid {pid})");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            Err(err) => {
+                eprintln!("failed to check daemon status: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            eprintln!(
+                "smstatus did not confirm startup in time; check {}",
+                log_path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn cmd_stop() -> ExitCode {
+    let lock_path = match lock_file_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("failed to determine lock file path: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if !lock_path.exists() {
+        println!("smstatus is not running");
+        return ExitCode::SUCCESS;
+    }
+
+    let file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("failed to open {}: {err}", lock_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut file = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(flock) => {
+            drop(flock);
+            println!("smstatus is not running");
+            return ExitCode::SUCCESS;
+        }
+        Err((file, Errno::EWOULDBLOCK)) => file,
+        Err((_, err)) => {
+            eprintln!("failed to check lock on {}: {err}", lock_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let pid = match read_pid(&mut file) {
+        Some(pid) => pid,
+        None => {
+            eprintln!("smstatus is running, but its pid file is unreadable");
+            return ExitCode::FAILURE;
+        }
+    };
+    let target = Pid::from_raw(pid);
+
+    match kill(target, Signal::SIGTERM) {
+        Ok(()) => {}
+        Err(Errno::ESRCH) => {
+            println!("smstatus is not running");
+            return ExitCode::SUCCESS;
+        }
+        Err(err) => {
+            eprintln!("failed to signal smstatus (pid {pid}): {err}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if let Err(Errno::ESRCH) = kill(target, None) {
+            println!("smstatus stopped (pid {pid})");
+            return ExitCode::SUCCESS;
+        }
+        if Instant::now() >= deadline {
+            eprintln!("sent SIGTERM to smstatus (pid {pid}) but it has not exited yet");
+            return ExitCode::FAILURE;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn main() -> ExitCode {
+    if std::env::var_os(DAEMON_ENV_VAR).is_some() {
+        return run_daemon();
+    }
+
+    match Cli::parse().command {
+        Commands::Start => cmd_start(),
+        Commands::Stop => cmd_stop(),
+        Commands::Run => cmd_run(),
+    }
+}
+
+fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
     config.consume_fuel(true);
