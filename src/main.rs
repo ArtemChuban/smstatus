@@ -776,6 +776,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
         let combined = modules
             .iter()
             .map(|s| s.last_output.as_str())
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(&separator);
 
