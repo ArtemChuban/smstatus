@@ -25,6 +25,7 @@ interface host {
   }
   read-mem-usage: func() -> result<mem-usage, string>;
   read-process-running: func(name: string) -> result<bool, string>;
+  http-get: func(url: string, headers: list<tuple<string, string>>) -> result<string, string>;
 }
 
 interface guest {

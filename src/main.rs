@@ -64,11 +64,18 @@ struct HostState {
     table: ResourceTable,
     limits: StoreLimits,
     connection: Arc<RustConnection>,
+    http_agent: ureq::Agent,
 }
 
 impl Host for HostState {
     fn read_sysfs(&mut self, path: String) -> Result<String, String> {
-        std::fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))
+        let expanded = match path.strip_prefix("~/") {
+            Some(rest) => dirs::home_dir()
+                .ok_or_else(|| "could not determine home directory".to_string())?
+                .join(rest),
+            None => PathBuf::from(&path),
+        };
+        std::fs::read_to_string(&expanded).map_err(|e| format!("read failed: {e}"))
     }
 
     fn read_time_state(&mut self) -> TimeState {
@@ -194,6 +201,20 @@ impl Host for HostState {
         }
         Ok(false)
     }
+
+    fn http_get(&mut self, url: String, headers: Vec<(String, String)>) -> Result<String, String> {
+        let mut request = self.http_agent.get(&url);
+        for (name, value) in &headers {
+            request = request.header(name, value);
+        }
+        let mut response = request
+            .call()
+            .map_err(|e| format!("http request failed: {e}"))?;
+        response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| format!("failed to read response body: {e}"))
+    }
 }
 
 impl WasiView for HostState {
@@ -230,6 +251,12 @@ fn instantiate_module(
             .instances(3)
             .build(),
         connection,
+        http_agent: {
+            let config = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(10)))
+                .build();
+            ureq::Agent::new_with_config(config)
+        },
     };
     let mut store = Store::new(engine, state);
     store.limiter(|state| &mut state.limits);
