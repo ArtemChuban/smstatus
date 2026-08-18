@@ -18,6 +18,12 @@ interface host {
     free-bytes: u64,
   }
   read-disk-usage: func(device: string) -> result<disk-usage, string>;
+  record mem-usage {
+    total-bytes: u64,
+    used-bytes: u64,
+    free-bytes: u64,
+  }
+  read-mem-usage: func() -> result<mem-usage, string>;
 }
 
 interface guest {

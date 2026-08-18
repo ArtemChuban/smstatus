@@ -1,5 +1,5 @@
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
-use smstatus::module::host::{DiskUsage, Host, TimeState, XkbState};
+use smstatus::module::host::{DiskUsage, Host, MemUsage, TimeState, XkbState};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -106,6 +106,32 @@ impl Host for HostState {
         let used_bytes = total_bytes.saturating_sub(free_bytes);
 
         Ok(DiskUsage {
+            total_bytes,
+            used_bytes,
+            free_bytes,
+        })
+    }
+
+    fn read_mem_usage(&mut self) -> Result<MemUsage, String> {
+        let meminfo = std::fs::read_to_string("/proc/meminfo")
+            .map_err(|e| format!("cannot read /proc/meminfo: {e}"))?;
+
+        let field = |key: &str| -> Option<u64> {
+            meminfo.lines().find_map(|line| {
+                let rest = line.strip_prefix(key)?;
+                rest.split_whitespace().next()?.parse().ok()
+            })
+        };
+
+        let total_kb = field("MemTotal:").ok_or("MemTotal not found in /proc/meminfo")?;
+        let available_kb =
+            field("MemAvailable:").ok_or("MemAvailable not found in /proc/meminfo")?;
+
+        let total_bytes = total_kb * 1024;
+        let free_bytes = available_kb * 1024;
+        let used_bytes = total_bytes.saturating_sub(free_bytes);
+
+        Ok(MemUsage {
             total_bytes,
             used_bytes,
             free_bytes,
