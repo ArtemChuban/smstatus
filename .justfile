@@ -1,35 +1,57 @@
 wasm-target := "wasm32-wasip2"
 
-build-battery:
-    cargo build -p battery --target {{wasm-target}}
+build-battery flags="":
+    cargo build -p battery --target {{wasm-target}} {{flags}}
 
-build-datetime:
-    cargo build -p datetime --target {{wasm-target}}
+build-battery-release: (build-battery "--release")
 
-build-keyboard:
-    cargo build -p keyboard --target {{wasm-target}}
+build-datetime flags="":
+    cargo build -p datetime --target {{wasm-target}} {{flags}}
 
-build-disk:
-    cargo build -p disk --target {{wasm-target}}
+build-datetime-release: (build-datetime "--release")
 
-build-ram:
-    cargo build -p ram --target {{wasm-target}}
+build-keyboard flags="":
+    cargo build -p keyboard --target {{wasm-target}} {{flags}}
 
-build-cpu:
-    cargo build -p cpu --target {{wasm-target}}
+build-keyboard-release: (build-keyboard "--release")
 
-build-process:
-    cargo build -p process --target {{wasm-target}}
+build-disk flags="":
+    cargo build -p disk --target {{wasm-target}} {{flags}}
 
-build-claude:
-    cargo build -p claude --target {{wasm-target}}
+build-disk-release: (build-disk "--release")
+
+build-ram flags="":
+    cargo build -p ram --target {{wasm-target}} {{flags}}
+
+build-ram-release: (build-ram "--release")
+
+build-cpu flags="":
+    cargo build -p cpu --target {{wasm-target}} {{flags}}
+
+build-cpu-release: (build-cpu "--release")
+
+build-process flags="":
+    cargo build -p process --target {{wasm-target}} {{flags}}
+
+build-process-release: (build-process "--release")
+
+build-claude flags="":
+    cargo build -p claude --target {{wasm-target}} {{flags}}
+
+build-claude-release: (build-claude "--release")
 
 build-modules: build-battery build-datetime build-keyboard build-disk build-ram build-cpu build-process build-claude
 
-build-app:
-    cargo build -p smstatus
+build-modules-release: build-battery-release build-datetime-release build-keyboard-release build-disk-release build-ram-release build-cpu-release build-process-release build-claude-release
+
+build-app flags="":
+    cargo build -p smstatus {{flags}}
+
+build-app-release: (build-app "--release")
 
 build-all: build-modules build-app
+
+build-all-release: build-modules-release build-app-release
 
 test-battery:
     cargo test -p battery
