@@ -29,6 +29,9 @@ test-all: test-modules test-app
 fmt:
     cargo fmt --all
 
+fmt-check:
+    cargo fmt --all -- --check
+
 clippy:
-    cargo clippy -p battery -p datetime --target {{wasm-target}}
-    cargo clippy -p smstatus
+    cargo clippy -p battery -p datetime --target {{wasm-target}} -- -D warnings
+    cargo clippy -p smstatus -- -D warnings
