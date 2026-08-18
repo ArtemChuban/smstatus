@@ -1,7 +1,8 @@
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
-use smstatus::module::host::Host;
+use smstatus::module::host::{Host, XkbState};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wasmtime::component::{Component, Linker};
@@ -9,8 +10,12 @@ use wasmtime::{Config, Engine, Store};
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use x11rb::connection::Connection;
+use x11rb::protocol::xkb;
+use x11rb::protocol::xkb::ConnectionExt as _;
+use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::protocol::xproto::{AtomEnum, PropMode};
-use x11rb::wrapper::ConnectionExt;
+use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 wasmtime::component::bindgen!({
     path: "wit",
@@ -21,6 +26,7 @@ struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
+    connection: Arc<RustConnection>,
 }
 
 impl Host for HostState {
@@ -37,6 +43,41 @@ impl Host for HostState {
 
     fn local_offset_seconds(&mut self) -> i32 {
         chrono::Local::now().offset().local_minus_utc()
+    }
+
+    fn read_xkb_state(&mut self) -> Result<XkbState, String> {
+        let group = self
+            .connection
+            .xkb_get_state(xkb::ID::USE_CORE_KBD.into())
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())?
+            .group;
+
+        let names_reply = self
+            .connection
+            .xkb_get_names(xkb::ID::USE_CORE_KBD.into(), xkb::NameDetail::SYMBOLS)
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())?;
+
+        let symbols_atom = names_reply
+            .value_list
+            .symbols_name
+            .ok_or("no symbols name reported")?;
+
+        let symbols = self
+            .connection
+            .get_atom_name(symbols_atom)
+            .map_err(|e| e.to_string())?
+            .reply()
+            .map_err(|e| e.to_string())
+            .map(|r| String::from_utf8_lossy(&r.name).into_owned())?;
+
+        Ok(XkbState {
+            active_group: u8::from(group),
+            symbols,
+        })
     }
 }
 
@@ -64,6 +105,7 @@ fn instantiate_module(
     component: &Component,
     linker: &Linker<HostState>,
     fuel: u64,
+    connection: Arc<RustConnection>,
 ) -> Result<(Store<HostState>, Module), Box<dyn std::error::Error>> {
     let state = HostState {
         wasi_ctx: WasiCtxBuilder::new().build(),
@@ -72,6 +114,7 @@ fn instantiate_module(
             .memory_size(10 * 1024 * 1024)
             .instances(3)
             .build(),
+        connection,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|state| &mut state.limits);
@@ -115,9 +158,10 @@ fn start_module(
     name: &str,
     config: &str,
     fuel: u64,
+    connection: Arc<RustConnection>,
 ) -> Result<ModuleState, Box<dyn std::error::Error>> {
     let component = Component::from_file(engine, modules_dir.join(format!("{name}.wasm")))?;
-    let (mut store, module) = instantiate_module(engine, &component, linker, fuel)?;
+    let (mut store, module) = instantiate_module(engine, &component, linker, fuel, connection)?;
     module
         .smstatus_module_guest()
         .call_init(&mut store, config)?;
@@ -139,6 +183,7 @@ fn reload_config(
     old_modules: Vec<ModuleState>,
     new_config: &toml::Table,
     fuel: u64,
+    connection: &Arc<RustConnection>,
 ) -> Vec<ModuleState> {
     let new_names = match module_names(new_config) {
         Ok(names) => names,
@@ -193,7 +238,15 @@ fn reload_config(
                 }
                 new_modules.push(existing);
             }
-            None => match start_module(engine, linker, modules_dir, &name, &config, fuel) {
+            None => match start_module(
+                engine,
+                linker,
+                modules_dir,
+                &name,
+                &config,
+                fuel,
+                Arc::clone(connection),
+            ) {
                 Ok(state) => new_modules.push(state),
                 Err(err) => eprintln!("failed to start new module `{name}`: {err}"),
             },
@@ -222,6 +275,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |state: &mut HostState| state,
     )?;
 
+    let (connection, screen_num) = x11rb::connect(None)?;
+    connection.xkb_use_extension(1, 0)?.reply()?;
+    let connection = Arc::new(connection);
+    let screen = &connection.setup().roots[screen_num];
+    let root = screen.root;
+
     let mut modules = Vec::new();
     for name in module_names(&config)? {
         let config = module_config_json(&config, &name);
@@ -232,12 +291,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &name,
             &config,
             FUEL_PER_TICK,
+            Arc::clone(&connection),
         )?)
     }
-
-    let (connection, screen_num) = x11rb::connect(None)?;
-    let screen = &connection.setup().roots[screen_num];
-    let root = screen.root;
 
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let watch_target = config_dir.join("config.toml");
@@ -281,7 +337,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(err) => {
                     eprintln!("module tick failed: {err}");
                     eprintln!("re-instantiating module after trap");
-                    match instantiate_module(&engine, &state.component, &linker, FUEL_PER_TICK) {
+                    match instantiate_module(
+                        &engine,
+                        &state.component,
+                        &linker,
+                        FUEL_PER_TICK,
+                        Arc::clone(&connection),
+                    ) {
                         Ok((mut store, module)) => {
                             if let Err(err) = module
                                 .smstatus_module_guest()
@@ -335,6 +397,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 modules,
                                 &new_config,
                                 FUEL_PER_TICK,
+                                &connection,
                             );
                         }
                         Err(err) => eprintln!(

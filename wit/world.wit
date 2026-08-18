@@ -4,6 +4,11 @@ interface host {
   now-ms: func() -> u64;
   read-sysfs: func(path: string) -> result<string, string>;
   local-offset-seconds: func() -> s32;
+  record xkb-state {
+    active-group: u8,
+    symbols: string,
+  }
+  read-xkb-state: func() -> result<xkb-state, string>;
 }
 
 interface guest {
