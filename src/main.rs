@@ -242,6 +242,7 @@ fn instantiate_module(
     linker: &Linker<HostState>,
     fuel: u64,
     connection: Arc<RustConnection>,
+    http_agent: ureq::Agent,
 ) -> Result<(Store<HostState>, Module), Box<dyn std::error::Error>> {
     let state = HostState {
         wasi_ctx: WasiCtxBuilder::new().build(),
@@ -251,12 +252,7 @@ fn instantiate_module(
             .instances(3)
             .build(),
         connection,
-        http_agent: {
-            let config = ureq::Agent::config_builder()
-                .timeout_global(Some(Duration::from_secs(10)))
-                .build();
-            ureq::Agent::new_with_config(config)
-        },
+        http_agent,
     };
     let mut store = Store::new(engine, state);
     store.limiter(|state| &mut state.limits);
@@ -309,9 +305,11 @@ fn start_module(
     config: &str,
     fuel: u64,
     connection: Arc<RustConnection>,
+    http_agent: ureq::Agent,
 ) -> Result<ModuleState, Box<dyn std::error::Error>> {
     let component = Component::from_file(engine, modules_dir.join(format!("{name}.wasm")))?;
-    let (mut store, module) = instantiate_module(engine, &component, linker, fuel, connection)?;
+    let (mut store, module) =
+        instantiate_module(engine, &component, linker, fuel, connection, http_agent)?;
     module
         .smstatus_module_guest()
         .call_init(&mut store, config)?;
@@ -334,6 +332,7 @@ fn reload_config(
     new_config: &toml::Table,
     fuel: u64,
     connection: &Arc<RustConnection>,
+    http_agent: &ureq::Agent,
 ) -> Vec<ModuleState> {
     let new_names = match module_names(new_config) {
         Ok(names) => names,
@@ -396,6 +395,7 @@ fn reload_config(
                 &config,
                 fuel,
                 Arc::clone(connection),
+                http_agent.clone(),
             ) {
                 Ok(state) => new_modules.push(state),
                 Err(err) => eprintln!("failed to start new module `{name}`: {err}"),
@@ -720,6 +720,13 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
     let screen = &connection.setup().roots[screen_num];
     let root = screen.root;
 
+    let http_agent = {
+        let agent_config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .build();
+        ureq::Agent::new_with_config(agent_config)
+    };
+
     let mut modules = Vec::new();
     for name in module_names(&config)? {
         let config = module_config_json(&config, &name);
@@ -731,6 +738,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
             &config,
             FUEL_PER_TICK,
             Arc::clone(&connection),
+            http_agent.clone(),
         )?)
     }
 
@@ -782,6 +790,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
                         &linker,
                         FUEL_PER_TICK,
                         Arc::clone(&connection),
+                        http_agent.clone(),
                     ) {
                         Ok((mut store, module)) => {
                             if let Err(err) = module
@@ -839,6 +848,7 @@ fn run_bar_loop() -> Result<(), Box<dyn std::error::Error>> {
                                 &new_config,
                                 FUEL_PER_TICK,
                                 &connection,
+                                &http_agent,
                             );
                         }
                         Err(err) => eprintln!(

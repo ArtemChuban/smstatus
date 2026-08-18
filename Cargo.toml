@@ -20,6 +20,12 @@ notify = "8.2.0"
 serde_json = { workspace = true }
 toml = "1.1.4"
 ureq = "3.4"
-wasmtime = { version = "47.0.3", features = ["component-model"] }
-wasmtime-wasi = "47.0.3"
+wasmtime = { version = "47.0.3", default-features = false, features = ["component-model", "cranelift", "async", "runtime", "std"] }
+wasmtime-wasi = { version = "47.0.3", default-features = false, features = ["p2"] }
 x11rb = { version = "0.14.0", features = ["xkb"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
