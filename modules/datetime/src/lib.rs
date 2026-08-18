@@ -57,9 +57,8 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let ms = host::now_ms();
-        let offset_secs = host::local_offset_seconds();
-        let dt = logic::to_local_datetime(ms, offset_secs);
+        let state = host::read_time_state();
+        let dt = logic::to_local_datetime(state.now_ms, state.offset_seconds);
         let text = FORMAT.with(|f| logic::format_datetime(dt, &f.borrow()));
 
         Output {

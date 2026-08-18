@@ -1,9 +1,12 @@
 package smstatus:module;
 
 interface host {
-  now-ms: func() -> u64;
   read-sysfs: func(path: string) -> result<string, string>;
-  local-offset-seconds: func() -> s32;
+  record time-state {
+    now-ms: u64,
+    offset-seconds: s32,
+  }
+  read-time-state: func() -> time-state;
   record xkb-state {
     active-group: u8,
     symbols: string,

@@ -1,5 +1,5 @@
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
-use smstatus::module::host::{Host, XkbState};
+use smstatus::module::host::{Host, TimeState, XkbState};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,19 +30,20 @@ struct HostState {
 }
 
 impl Host for HostState {
-    fn now_ms(&mut self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-    }
-
     fn read_sysfs(&mut self, path: String) -> Result<String, String> {
         std::fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))
     }
 
-    fn local_offset_seconds(&mut self) -> i32 {
-        chrono::Local::now().offset().local_minus_utc()
+    fn read_time_state(&mut self) -> TimeState {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let offset_seconds = chrono::Local::now().offset().local_minus_utc();
+        TimeState {
+            now_ms,
+            offset_seconds,
+        }
     }
 
     fn read_xkb_state(&mut self) -> Result<XkbState, String> {
