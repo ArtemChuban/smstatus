@@ -1,5 +1,5 @@
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
-use smstatus::module::host::{Host, TimeState, XkbState};
+use smstatus::module::host::{DiskUsage, Host, TimeState, XkbState};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -78,6 +78,37 @@ impl Host for HostState {
         Ok(XkbState {
             active_group: u8::from(group),
             symbols,
+        })
+    }
+
+    fn read_disk_usage(&mut self, device: String) -> Result<DiskUsage, String> {
+        let target = std::fs::canonicalize(&device).unwrap_or_else(|_| PathBuf::from(&device));
+
+        let mounts = std::fs::read_to_string("/proc/mounts")
+            .map_err(|e| format!("cannot read /proc/mounts: {e}"))?;
+        let mount_point = mounts
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let dev = fields.next()?;
+                let mount_point = fields.next()?;
+                let dev_canon = std::fs::canonicalize(dev).unwrap_or_else(|_| PathBuf::from(dev));
+                (dev_canon == target).then(|| mount_point.to_string())
+            })
+            .next()
+            .ok_or_else(|| format!("device `{device}` not found in /proc/mounts"))?;
+
+        let stat = nix::sys::statvfs::statvfs(mount_point.as_str())
+            .map_err(|e| format!("statvfs failed for `{mount_point}`: {e}"))?;
+        let block_size = stat.fragment_size();
+        let total_bytes = stat.blocks() * block_size;
+        let free_bytes = stat.blocks_free() * block_size;
+        let used_bytes = total_bytes.saturating_sub(free_bytes);
+
+        Ok(DiskUsage {
+            total_bytes,
+            used_bytes,
+            free_bytes,
         })
     }
 }

@@ -9,7 +9,10 @@ build-datetime:
 build-keyboard:
     cargo build -p keyboard --target {{wasm-target}}
 
-build-modules: build-battery build-datetime build-keyboard
+build-disk:
+    cargo build -p disk --target {{wasm-target}}
+
+build-modules: build-battery build-datetime build-keyboard build-disk
 
 build-app:
     cargo build -p smstatus
@@ -25,7 +28,10 @@ test-datetime:
 test-keyboard:
     cargo test -p keyboard
 
-test-modules: test-battery test-datetime test-keyboard
+test-disk:
+    cargo test -p disk
+
+test-modules: test-battery test-datetime test-keyboard test-disk
 
 test-app:
     cargo test -p smstatus
@@ -39,5 +45,5 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy -p battery -p datetime -p keyboard --target {{wasm-target}} -- -D warnings
+    cargo clippy -p battery -p datetime -p keyboard -p disk --target {{wasm-target}} -- -D warnings
     cargo clippy -p smstatus -- -D warnings
