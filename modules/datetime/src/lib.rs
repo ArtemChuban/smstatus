@@ -24,10 +24,10 @@ struct Component;
 
 impl Guest for Component {
     fn init(config: String) {
-        if let Ok(parsed) = serde_json::from_str::<Config>(&config) {
-            if let Some(format) = parsed.format {
-                FORMAT.with(|f| *f.borrow_mut() = format);
-            }
+        if let Ok(parsed) = serde_json::from_str::<Config>(&config)
+            && let Some(format) = parsed.format
+        {
+            FORMAT.with(|f| *f.borrow_mut() = format);
         }
     }
 
