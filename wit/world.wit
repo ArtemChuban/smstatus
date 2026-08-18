@@ -1,4 +1,4 @@
-package bslstatus:module;
+package smstatus:module;
 
 interface host {
   now-ms: func() -> u64;

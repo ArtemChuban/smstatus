@@ -92,20 +92,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bslstatus"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs",
- "notify",
- "serde_json",
- "toml 1.1.4+spec-1.1.0",
- "wasmtime",
- "wasmtime-wasi",
- "x11rb",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1547,6 +1533,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "smstatus"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "notify",
+ "serde_json",
+ "toml 1.1.4+spec-1.1.0",
+ "wasmtime",
+ "wasmtime-wasi",
+ "x11rb",
 ]
 
 [[package]]

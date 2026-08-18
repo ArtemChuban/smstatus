@@ -1,5 +1,5 @@
-use bslstatus::module::host::Host;
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
+use smstatus::module::host::Host;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -119,7 +119,7 @@ fn start_module(
     let component = Component::from_file(engine, modules_dir.join(format!("{name}.wasm")))?;
     let (mut store, module) = instantiate_module(engine, &component, linker, fuel)?;
     module
-        .bslstatus_module_guest()
+        .smstatus_module_guest()
         .call_init(&mut store, config)?;
     Ok(ModuleState {
         name: name.to_string(),
@@ -176,7 +176,7 @@ fn reload_config(
                     .and_then(|()| {
                         existing
                             .module
-                            .bslstatus_module_guest()
+                            .smstatus_module_guest()
                             .call_init(&mut existing.store, &config)
                             .map_err(|e| e.to_string())
                     });
@@ -210,7 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config_dir: PathBuf = dirs::config_dir()
         .ok_or("could not determine config directory")?
-        .join("bslstatus");
+        .join("smstatus");
     let modules_dir = config_dir.join("modules");
     let config = load_config(&config_dir.join("config.toml"))?;
     const FUEL_PER_TICK: u64 = 10_000_000;
@@ -271,7 +271,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match state
                 .module
-                .bslstatus_module_guest()
+                .smstatus_module_guest()
                 .call_update(&mut state.store)
             {
                 Ok(output) => {
@@ -284,7 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match instantiate_module(&engine, &state.component, &linker, FUEL_PER_TICK) {
                         Ok((mut store, module)) => {
                             if let Err(err) = module
-                                .bslstatus_module_guest()
+                                .smstatus_module_guest()
                                 .call_init(&mut store, &state.config)
                             {
                                 eprintln!("failed to re-init `{}`: {err}", state.name);

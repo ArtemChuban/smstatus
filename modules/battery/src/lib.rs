@@ -3,8 +3,8 @@ wit_bindgen::generate!({
     world: "module",
 });
 
-use crate::bslstatus::module::host;
-use exports::bslstatus::module::guest::{Guest, Output};
+use crate::smstatus::module::host;
+use exports::smstatus::module::guest::{Guest, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 

@@ -1,0 +1,1 @@
+smstatus - suckmore status

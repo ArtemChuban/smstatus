@@ -9,7 +9,7 @@ build-datetime:
 build-modules: build-battery build-datetime
 
 build-app:
-    cargo build -p bslstatus
+    cargo build -p smstatus
 
 build-all: build-modules build-app
 
@@ -22,7 +22,7 @@ test-datetime:
 test-modules: test-battery test-datetime
 
 test-app:
-    cargo test -p bslstatus
+    cargo test -p smstatus
 
 test-all: test-modules test-app
 
@@ -31,4 +31,4 @@ fmt:
 
 clippy:
     cargo clippy -p battery -p datetime --target {{wasm-target}}
-    cargo clippy -p bslstatus
+    cargo clippy -p smstatus
