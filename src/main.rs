@@ -30,8 +30,16 @@ const DAEMON_ENV_VAR: &str = "SMSTATUS_DAEMON_CHILD";
 const EXIT_ALREADY_RUNNING: u8 = 3;
 
 #[derive(Parser)]
-#[command(name = "smstatus", about = "suckmore status")]
+#[command(
+    name = "smstatus",
+    about = "suckmore status",
+    version = env!("CARGO_PKG_VERSION"),
+    disable_version_flag = true
+)]
 struct Cli {
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: (),
+
     #[command(subcommand)]
     command: Commands,
 }
