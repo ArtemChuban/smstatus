@@ -24,6 +24,7 @@ interface host {
     free-bytes: u64,
   }
   read-mem-usage: func() -> result<mem-usage, string>;
+  read-process-running: func(name: string) -> result<bool, string>;
 }
 
 interface guest {

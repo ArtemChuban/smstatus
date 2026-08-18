@@ -18,7 +18,10 @@ build-ram:
 build-cpu:
     cargo build -p cpu --target {{wasm-target}}
 
-build-modules: build-battery build-datetime build-keyboard build-disk build-ram build-cpu
+build-process:
+    cargo build -p process --target {{wasm-target}}
+
+build-modules: build-battery build-datetime build-keyboard build-disk build-ram build-cpu build-process
 
 build-app:
     cargo build -p smstatus
@@ -43,7 +46,10 @@ test-ram:
 test-cpu:
     cargo test -p cpu
 
-test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu
+test-process:
+    cargo test -p process
+
+test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process
 
 test-app:
     cargo test -p smstatus
@@ -57,5 +63,5 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu --target {{wasm-target}} -- -D warnings
+    cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process --target {{wasm-target}} -- -D warnings
     cargo clippy -p smstatus -- -D warnings

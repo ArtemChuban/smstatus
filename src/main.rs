@@ -174,6 +174,26 @@ impl Host for HostState {
             free_bytes,
         })
     }
+
+    fn read_process_running(&mut self, name: String) -> Result<bool, String> {
+        let entries = std::fs::read_dir("/proc").map_err(|e| format!("cannot read /proc: {e}"))?;
+        for entry in entries.flatten() {
+            let is_pid_dir = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
+            if !is_pid_dir {
+                continue;
+            }
+            let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
+                continue;
+            };
+            if comm.trim() == name {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl WasiView for HostState {
