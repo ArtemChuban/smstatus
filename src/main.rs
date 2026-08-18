@@ -1,5 +1,8 @@
 use bslstatus::module::host::Host;
+use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store};
@@ -105,6 +108,100 @@ fn module_names(config: &toml::Table) -> Result<Vec<String>, Box<dyn std::error:
         .collect()
 }
 
+fn start_module(
+    engine: &Engine,
+    linker: &Linker<HostState>,
+    modules_dir: &std::path::Path,
+    name: &str,
+    config: &str,
+    fuel: u64,
+) -> Result<ModuleState, Box<dyn std::error::Error>> {
+    let component = Component::from_file(engine, modules_dir.join(format!("{name}.wasm")))?;
+    let (mut store, module) = instantiate_module(engine, &component, linker, fuel)?;
+    module
+        .bslstatus_module_guest()
+        .call_init(&mut store, config)?;
+    Ok(ModuleState {
+        name: name.to_string(),
+        component,
+        store,
+        module,
+        config: config.to_string(),
+        last_output: String::new(),
+        next_due: Instant::now(),
+    })
+}
+
+fn reload_config(
+    engine: &Engine,
+    linker: &Linker<HostState>,
+    modules_dir: &std::path::Path,
+    old_modules: Vec<ModuleState>,
+    new_config: &toml::Table,
+    fuel: u64,
+) -> Vec<ModuleState> {
+    let new_names = match module_names(new_config) {
+        Ok(names) => names,
+        Err(err) => {
+            eprintln!("reload aborted, bad `modules` list: {err}");
+            return old_modules;
+        }
+    };
+
+    let mut old_by_name: HashMap<String, Vec<ModuleState>> = HashMap::new();
+    for module in old_modules {
+        old_by_name
+            .entry(module.name.clone())
+            .or_default()
+            .push(module);
+    }
+
+    let mut new_modules = Vec::with_capacity(new_names.len());
+    for name in new_names {
+        let config = module_config_json(new_config, &name);
+        let reused = old_by_name
+            .get_mut(&name)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.remove(0));
+
+        match reused {
+            Some(existing) if existing.config == config => {
+                new_modules.push(existing);
+            }
+            Some(mut existing) => {
+                let reinit_result = existing
+                    .store
+                    .set_fuel(fuel)
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| {
+                        existing
+                            .module
+                            .bslstatus_module_guest()
+                            .call_init(&mut existing.store, &config)
+                            .map_err(|e| e.to_string())
+                    });
+                match reinit_result {
+                    Ok(()) => {
+                        existing.config = config;
+                        existing.next_due = Instant::now();
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "failed to re-init `{name}` with new config, keeping old config running: {err}"
+                        );
+                    }
+                }
+                new_modules.push(existing);
+            }
+            None => match start_module(engine, linker, modules_dir, &name, &config, fuel) {
+                Ok(state) => new_modules.push(state),
+                Err(err) => eprintln!("failed to start new module `{name}`: {err}"),
+            },
+        }
+    }
+    new_modules
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
@@ -128,25 +225,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut modules = Vec::new();
     for name in module_names(&config)? {
         let config = module_config_json(&config, &name);
-        let component = Component::from_file(&engine, modules_dir.join(format!("{name}.wasm")))?;
-        let (mut store, module) = instantiate_module(&engine, &component, &linker, FUEL_PER_TICK)?;
-        module
-            .bslstatus_module_guest()
-            .call_init(&mut store, &config)?;
-        modules.push(ModuleState {
-            name,
-            component,
-            store,
-            module,
-            config,
-            last_output: String::new(),
-            next_due: Instant::now(),
-        })
+        modules.push(start_module(
+            &engine,
+            &linker,
+            &modules_dir,
+            &name,
+            &config,
+            FUEL_PER_TICK,
+        )?)
     }
 
     let (connection, screen_num) = x11rb::connect(None)?;
     let screen = &connection.setup().roots[screen_num];
     let root = screen.root;
+
+    let (reload_tx, reload_rx) = mpsc::channel::<()>();
+    let watch_target = config_dir.join("config.toml");
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| match res {
+        Ok(event) => {
+            let is_content_change = matches!(
+                event.kind,
+                EventKind::Create(_)
+                    | EventKind::Remove(_)
+                    | EventKind::Modify(ModifyKind::Data(_))
+                    | EventKind::Modify(ModifyKind::Name(_))
+            );
+            if is_content_change && event.paths.contains(&watch_target) {
+                let _ = reload_tx.send(());
+            }
+        }
+        Err(err) => eprintln!("config watcher error: {err}"),
+    })?;
+    watcher.watch(&config_dir, RecursiveMode::NonRecursive)?;
+    let mut watcher_alive = true;
 
     loop {
         let now = Instant::now();
@@ -210,6 +321,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|s| s.next_due.saturating_duration_since(Instant::now()))
             .min()
             .unwrap_or(Duration::from_millis(100).max(Duration::from_millis(20)));
-        std::thread::sleep(sleep_for);
+
+        if watcher_alive {
+            match reload_rx.recv_timeout(sleep_for) {
+                Ok(()) => {
+                    while reload_rx.recv_timeout(Duration::from_millis(100)).is_ok() {}
+                    match load_config(&config_dir.join("config.toml")) {
+                        Ok(new_config) => {
+                            modules = reload_config(
+                                &engine,
+                                &linker,
+                                &modules_dir,
+                                modules,
+                                &new_config,
+                                FUEL_PER_TICK,
+                            );
+                        }
+                        Err(err) => eprintln!(
+                            "config reload failed ({err}); keeping previous configuration runnong"
+                        ),
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eprintln!(
+                        "config watcher channel disconnected; disabling hot-reload for the rest of this run"
+                    );
+                    watcher_alive = false;
+                }
+            }
+        } else {
+            std::thread::sleep(sleep_for);
+        }
     }
 }

@@ -43,12 +43,10 @@ struct Component;
 impl Guest for Component {
     fn init(config: String) {
         if let Some(parsed) = logic::parse_config(&config) {
-            if let Some(path) = parsed.path {
-                PATH.with(|p| *p.borrow_mut() = path);
-            }
-            if let Some(format) = parsed.format {
-                FORMAT.with(|f| *f.borrow_mut() = format);
-            }
+            let path = parsed.path.unwrap_or_else(|| DEFAULT_PATH.to_string());
+            let format = parsed.format.unwrap_or_else(|| DEFAULT_FORMAT.to_string());
+            PATH.with(|p| *p.borrow_mut() = path);
+            FORMAT.with(|f| *f.borrow_mut() = format);
         }
     }
 

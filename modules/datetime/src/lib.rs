@@ -20,11 +20,15 @@ thread_local! {
 }
 
 mod logic {
+    use crate::DEFAULT_FORMAT;
+
     use super::Config;
     use time::OffsetDateTime;
 
     pub fn parse_format_from_config(config: &str) -> Option<String> {
-        serde_json::from_str::<Config>(config).ok()?.format
+        serde_json::from_str::<Config>(config)
+            .ok()
+            .map(|c| c.format.unwrap_or_else(|| DEFAULT_FORMAT.to_string()))
     }
 
     pub fn to_local_datetime(ms: u64, offset_secs: i32) -> OffsetDateTime {
@@ -71,6 +75,7 @@ export!(Component);
 
 #[cfg(test)]
 mod tests {
+    use super::DEFAULT_FORMAT;
     use super::logic::*;
     use time::OffsetDateTime;
 
@@ -83,15 +88,20 @@ mod tests {
     }
 
     #[test]
-    fn returns_none_for_missing_format_field() {
-        assert_eq!(parse_format_from_config(r#"{}"#), None);
+    fn missing_format_field_falls_back_to_default() {
+        assert_eq!(
+            parse_format_from_config(r#"{}"#),
+            Some(DEFAULT_FORMAT.to_string())
+        );
     }
 
     #[test]
-    fn returns_none_for_null_format_field() {
-        assert_eq!(parse_format_from_config(r#"{"format":null}"#), None);
+    fn null_format_field_falls_back_to_default() {
+        assert_eq!(
+            parse_format_from_config(r#"{"format":null}"#),
+            Some(DEFAULT_FORMAT.to_string())
+        );
     }
-
     #[test]
     fn returns_none_for_invalid_json() {
         assert_eq!(parse_format_from_config("not json"), None);
