@@ -61,9 +61,10 @@ pub(crate) fn run() -> Result<()> {
     );
 
     let mut modules = Vec::new();
-    for name in config.module_names()? {
-        let module_config = config.module_config_json(&name);
-        match runtime.start(&name, &module_config) {
+    for entry in config.module_names()? {
+        let (kind, name) = BarConfig::split_module_entry(&entry);
+        let module_config = config.module_config_json(name);
+        match runtime.start(kind, name, &module_config) {
             Ok(state) => modules.push(state),
             Err(err) => eprintln!("failed to start module `{name}`: {err}"),
         }

@@ -14,6 +14,7 @@ use crate::host::HostState;
 use crate::version;
 
 pub(crate) struct ModuleState {
+    kind: String,
     name: String,
     component: Component,
     store: Store<HostState>,
@@ -70,20 +71,21 @@ impl ModuleRuntime {
         Ok((store, module))
     }
 
-    pub(crate) fn start(&self, name: &str, config: &str) -> Result<ModuleState> {
+    pub(crate) fn start(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
         let component =
-            Component::from_file(&self.engine, self.modules_dir.join(format!("{name}.wasm")))?;
+            Component::from_file(&self.engine, self.modules_dir.join(format!("{kind}.wasm")))?;
         let (mut store, module) = self.instantiate(&component)?;
 
         let required = module
             .smstatus_module_guest()
             .call_required_host_api_version(&mut store)?;
-        version::check_compatible(name, (required.major, required.minor, required.patch))?;
+        version::check_compatible(kind, (required.major, required.minor, required.patch))?;
 
         module
             .smstatus_module_guest()
             .call_init(&mut store, config)?;
         Ok(ModuleState {
+            kind: kind.to_string(),
             name: name.to_string(),
             component,
             store,
@@ -111,7 +113,10 @@ impl ModuleRuntime {
                 state.next_due = now + Duration::from_millis(output.interval_ms as u64);
             }
             Err(err) => {
-                eprintln!("module tick failed: {err}");
+                eprintln!(
+                    "module `{}` (kind `{}`) tick failed: {err}",
+                    state.name, state.kind
+                );
                 eprintln!("re-instantiating module after trap");
                 match self.instantiate(&state.component) {
                     Ok((mut store, module)) => {
@@ -161,10 +166,11 @@ impl ModuleRuntime {
         }
 
         let mut new_modules = Vec::with_capacity(new_names.len());
-        for name in new_names {
-            let config = new_config.module_config_json(&name);
+        for entry in new_names {
+            let (kind, name) = BarConfig::split_module_entry(&entry);
+            let config = new_config.module_config_json(name);
             let reused = old_by_name
-                .get_mut(&name)
+                .get_mut(name)
                 .filter(|v| !v.is_empty())
                 .map(|v| v.remove(0));
 
@@ -197,7 +203,7 @@ impl ModuleRuntime {
                     }
                     new_modules.push(existing);
                 }
-                None => match self.start(&name, &config) {
+                None => match self.start(kind, name, &config) {
                     Ok(state) => new_modules.push(state),
                     Err(err) => eprintln!("failed to start new module `{name}`: {err}"),
                 },
