@@ -12,6 +12,13 @@ use crate::bar;
 use crate::cli::{DAEMON_ENV_VAR, EXIT_ALREADY_RUNNING};
 use crate::lock::{self, LockOutcome};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonStatus {
+    Stopped,
+    Running { pid: i32 },
+    RunningPidUnknown,
+}
+
 fn run_locked(report_already_running: impl FnOnce(Option<i32>)) -> ExitCode {
     match lock::acquire_lock() {
         Ok(LockOutcome::AlreadyRunning(pid)) => {
@@ -165,45 +172,45 @@ pub(crate) fn cmd_start() -> ExitCode {
     }
 }
 
-pub(crate) fn cmd_stop() -> ExitCode {
-    let lock_path = match lock::lock_file_path() {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("failed to determine lock file path: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-
+pub(crate) fn status() -> crate::error::Result<DaemonStatus> {
+    let lock_path = lock::lock_file_path()?;
     if !lock_path.exists() {
-        println!("smstatus is not running");
-        return ExitCode::SUCCESS;
+        return Ok(DaemonStatus::Stopped);
     }
 
-    let file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("failed to open {}: {err}", lock_path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let mut file = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|err| format!("failed to open {}: {err}", lock_path.display()))?;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
         Ok(flock) => {
             drop(flock);
+            Ok(DaemonStatus::Stopped)
+        }
+        Err((mut file, Errno::EWOULDBLOCK)) => Ok(match lock::read_pid(&mut file) {
+            Some(pid) => DaemonStatus::Running { pid },
+            None => DaemonStatus::RunningPidUnknown,
+        }),
+        Err((_, err)) => {
+            Err(format!("failed to check lock on {}: {err}", lock_path.display()).into())
+        }
+    }
+}
+
+pub(crate) fn cmd_stop() -> ExitCode {
+    let pid = match status() {
+        Ok(DaemonStatus::Stopped) => {
             println!("smstatus is not running");
             return ExitCode::SUCCESS;
         }
-        Err((file, Errno::EWOULDBLOCK)) => file,
-        Err((_, err)) => {
-            eprintln!("failed to check lock on {}: {err}", lock_path.display());
+        Ok(DaemonStatus::Running { pid }) => pid,
+        Ok(DaemonStatus::RunningPidUnknown) => {
+            eprintln!("smstatus is running, but its pid file is unreadable");
             return ExitCode::FAILURE;
         }
-    };
-
-    let pid = match lock::read_pid(&mut file) {
-        Some(pid) => pid,
-        None => {
-            eprintln!("smstatus is running, but its pid file is unreadable");
+        Err(err) => {
+            eprintln!("failed to check daemon status: {err}");
             return ExitCode::FAILURE;
         }
     };
