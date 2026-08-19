@@ -33,8 +33,17 @@ interface guest {
     text: string,
     interval-ms: u32,
   }
+
+  record host-api-version {
+    major: u32,
+    minor: u32,
+    patch: u32,
+  }
+
   init: func(config: string);
   update: func() -> output;
+
+  required-host-api-version: func() -> host-api-version;
 }
 
 world module {

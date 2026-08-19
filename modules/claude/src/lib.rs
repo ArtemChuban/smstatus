@@ -4,7 +4,7 @@ wit_bindgen::generate!({
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, Output};
+use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
@@ -13,6 +13,7 @@ const DEFAULT_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_FORMAT: &str = "5h:{session}% 7d:{week}%";
 const DEFAULT_INTERVAL_MS: u32 = 300_000;
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
+const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -135,6 +136,11 @@ impl Guest for Component {
             text,
             interval_ms: INTERVAL_MS.with(|i| *i.borrow()),
         }
+    }
+
+    fn required_host_api_version() -> HostApiVersion {
+        let (major, minor, patch) = REQUIRED_HOST_API;
+        HostApiVersion { major, minor, patch }
     }
 }
 

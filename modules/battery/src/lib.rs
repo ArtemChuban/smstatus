@@ -4,12 +4,13 @@ wit_bindgen::generate!({
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, Output};
+use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/sys/class/power_supply/BAT0/capacity";
 const DEFAULT_FORMAT: &str = "BAT {}%";
+const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -59,6 +60,15 @@ impl Guest for Component {
         Output {
             text,
             interval_ms: 5000,
+        }
+    }
+
+    fn required_host_api_version() -> HostApiVersion {
+        let (major, minor, patch) = REQUIRED_HOST_API;
+        HostApiVersion {
+            major,
+            minor,
+            patch,
         }
     }
 }

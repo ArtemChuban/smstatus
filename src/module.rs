@@ -11,6 +11,7 @@ use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
 use crate::host::HostState;
+use crate::version;
 
 pub(crate) struct ModuleState {
     name: String,
@@ -73,6 +74,12 @@ impl ModuleRuntime {
         let component =
             Component::from_file(&self.engine, self.modules_dir.join(format!("{name}.wasm")))?;
         let (mut store, module) = self.instantiate(&component)?;
+
+        let required = module
+            .smstatus_module_guest()
+            .call_required_host_api_version(&mut store)?;
+        version::check_compatible(name, (required.major, required.minor, required.patch))?;
+
         module
             .smstatus_module_guest()
             .call_init(&mut store, config)?;

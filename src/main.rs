@@ -8,6 +8,7 @@ mod host;
 mod lock;
 mod module;
 mod sysinfo;
+mod version;
 mod watcher;
 mod x11;
 
