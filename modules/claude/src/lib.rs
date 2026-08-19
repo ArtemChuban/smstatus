@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 const DEFAULT_CREDENTIALS_PATH: &str = "~/.claude/.credentials.json";
 const DEFAULT_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-const DEFAULT_FORMAT: &str = "5h:{session}% 7d:{week}%";
+const DEFAULT_FORMAT: &str = "5h:{session}%({session_reset}) 7d:{week}%({week_reset})";
 const DEFAULT_INTERVAL_MS: u32 = 300_000;
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
 const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
@@ -33,6 +33,7 @@ thread_local! {
 mod logic {
     use super::Config;
     use serde::Deserialize;
+    use time::OffsetDateTime;
 
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
@@ -78,18 +79,65 @@ mod logic {
     #[derive(Deserialize)]
     struct Window {
         utilization: f64,
+        #[serde(default)]
+        resets_at: Option<String>,
     }
 
-    pub fn parse_usage(body: &str) -> Result<(f64, f64), String> {
+    #[derive(Debug, PartialEq)]
+    pub struct Usage {
+        pub session_pct: f64,
+        pub week_pct: f64,
+        pub session_resets_at: Option<String>,
+        pub week_resets_at: Option<String>,
+    }
+
+    pub fn parse_usage(body: &str) -> Result<Usage, String> {
         serde_json::from_str::<UsageResponse>(body)
-            .map(|u| (u.five_hour.utilization, u.seven_day.utilization))
+            .map(|u| Usage {
+                session_pct: u.five_hour.utilization,
+                week_pct: u.seven_day.utilization,
+                session_resets_at: u.five_hour.resets_at,
+                week_resets_at: u.seven_day.resets_at,
+            })
             .map_err(|e| format!("malformed usage response: {e}"))
     }
 
-    pub fn format_usage(format: &str, session_pct: f64, week_pct: f64) -> String {
+    pub fn seconds_until(resets_at: Option<&str>, now_ms: u64) -> Option<i64> {
+        let resets_at = resets_at?;
+        let target =
+            OffsetDateTime::parse(resets_at, &time::format_description::well_known::Rfc3339)
+                .ok()?;
+        let now = OffsetDateTime::from_unix_timestamp_nanos(now_ms as i128 * 1_000_000)
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        Some((target - now).whole_seconds().max(0))
+    }
+
+    pub fn format_duration(seconds: Option<i64>) -> String {
+        let seconds = seconds.unwrap_or(0).max(0);
+        let days = seconds / 86_400;
+        let hours = (seconds % 86_400) / 3600;
+        let minutes = (seconds % 3600) / 60;
+        if days >= 1 {
+            format!("{days}d{hours}h")
+        } else if hours >= 1 {
+            format!("{hours}h{minutes}m")
+        } else {
+            format!("{minutes}m")
+        }
+    }
+
+    pub fn format_usage(
+        format: &str,
+        session_pct: f64,
+        week_pct: f64,
+        session_reset_secs: Option<i64>,
+        week_reset_secs: Option<i64>,
+    ) -> String {
         format
             .replace("{session}", &format!("{session_pct:.0}"))
             .replace("{week}", &format!("{week_pct:.0}"))
+            .replace("{session_reset}", &format_duration(session_reset_secs))
+            .replace("{week_reset}", &format_duration(week_reset_secs))
     }
 
     pub fn format_error(err: &str) -> String {
@@ -97,13 +145,26 @@ mod logic {
     }
 }
 
-fn fetch_usage_text(credentials_path: &str, url: &str, format: &str) -> Result<String, String> {
+fn fetch_usage_text(
+    credentials_path: &str,
+    url: &str,
+    format: &str,
+    now_ms: u64,
+) -> Result<String, String> {
     let credentials = host::read_sysfs(credentials_path)?;
     let token = logic::extract_access_token(&credentials)?;
     let headers = logic::build_headers(&token);
     let body = host::http_get(url, &headers)?;
-    let (session_pct, week_pct) = logic::parse_usage(&body)?;
-    Ok(logic::format_usage(format, session_pct, week_pct))
+    let usage = logic::parse_usage(&body)?;
+    let session_reset_secs = logic::seconds_until(usage.session_resets_at.as_deref(), now_ms);
+    let week_reset_secs = logic::seconds_until(usage.week_resets_at.as_deref(), now_ms);
+    Ok(logic::format_usage(
+        format,
+        usage.session_pct,
+        usage.week_pct,
+        session_reset_secs,
+        week_reset_secs,
+    ))
 }
 
 struct Component;
@@ -128,7 +189,8 @@ impl Guest for Component {
         let credentials_path = CREDENTIALS_PATH.with(|p| p.borrow().clone());
         let url = URL.with(|u| u.borrow().clone());
         let format = FORMAT.with(|f| f.borrow().clone());
-        let text = match fetch_usage_text(&credentials_path, &url, &format) {
+        let now_ms = host::read_time_state().now_ms;
+        let text = match fetch_usage_text(&credentials_path, &url, &format, now_ms) {
             Ok(t) => t,
             Err(err) => logic::format_error(&err),
         };
@@ -140,7 +202,11 @@ impl Guest for Component {
 
     fn required_host_api_version() -> HostApiVersion {
         let (major, minor, patch) = REQUIRED_HOST_API;
-        HostApiVersion { major, minor, patch }
+        HostApiVersion {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 
@@ -150,6 +216,7 @@ export!(Component);
 mod tests {
     use super::Config;
     use super::logic::*;
+    use time::OffsetDateTime;
 
     #[test]
     fn parses_valid_config_with_all_fields() {
@@ -301,14 +368,30 @@ mod tests {
     #[test]
     fn parses_valid_usage_response() {
         let body = r#"{"five_hour":{"utilization":14.0,"resets_at":"2026-08-18T20:00:00Z"},"seven_day":{"utilization":26.0}}"#;
-        assert_eq!(parse_usage(body), Ok((14.0, 26.0)));
+        assert_eq!(
+            parse_usage(body),
+            Ok(Usage {
+                session_pct: 14.0,
+                week_pct: 26.0,
+                session_resets_at: Some("2026-08-18T20:00:00Z".to_string()),
+                week_resets_at: None,
+            })
+        );
     }
 
     #[test]
     fn parse_usage_ignores_unknown_top_level_fields() {
         let body =
             r#"{"five_hour":{"utilization":1.0},"seven_day":{"utilization":2.0},"extra":null}"#;
-        assert_eq!(parse_usage(body), Ok((1.0, 2.0)));
+        assert_eq!(
+            parse_usage(body),
+            Ok(Usage {
+                session_pct: 1.0,
+                week_pct: 2.0,
+                session_resets_at: None,
+                week_resets_at: None,
+            })
+        );
     }
 
     #[test]
@@ -331,25 +414,155 @@ mod tests {
     #[test]
     fn parse_usage_accepts_integer_utilization() {
         let body = r#"{"five_hour":{"utilization":14},"seven_day":{"utilization":26}}"#;
-        assert_eq!(parse_usage(body), Ok((14.0, 26.0)));
+        assert_eq!(
+            parse_usage(body),
+            Ok(Usage {
+                session_pct: 14.0,
+                week_pct: 26.0,
+                session_resets_at: None,
+                week_resets_at: None,
+            })
+        );
     }
 
     #[test]
     fn format_usage_substitutes_and_rounds_both_placeholders() {
         assert_eq!(
-            format_usage("5h:{session}% 7d:{week}%", 14.4, 26.6),
+            format_usage("5h:{session}% 7d:{week}%", 14.4, 26.6, None, None),
             "5h:14% 7d:27%"
         );
     }
 
     #[test]
     fn format_usage_with_no_placeholders_returns_unchanged() {
-        assert_eq!(format_usage("static text", 14.0, 26.0), "static text");
+        assert_eq!(
+            format_usage("static text", 14.0, 26.0, None, None),
+            "static text"
+        );
     }
 
     #[test]
     fn format_usage_repeated_placeholder_replaced_everywhere() {
-        assert_eq!(format_usage("{session}/{session}", 14.0, 26.0), "14/14");
+        assert_eq!(
+            format_usage("{session}/{session}", 14.0, 26.0, None, None),
+            "14/14"
+        );
+    }
+
+    #[test]
+    fn format_usage_substitutes_reset_placeholders() {
+        assert_eq!(
+            format_usage(
+                "5h:{session}%({session_reset}) 7d:{week}%({week_reset})",
+                14.0,
+                26.0,
+                Some(4 * 3600 + 32 * 60),
+                Some(3 * 86_400 + 12 * 3600),
+            ),
+            "5h:14%(4h32m) 7d:26%(3d12h)"
+        );
+    }
+
+    #[test]
+    fn format_usage_missing_reset_renders_zero_minutes() {
+        assert_eq!(
+            format_usage("{session_reset}/{week_reset}", 14.0, 26.0, None, None),
+            "0m/0m"
+        );
+    }
+
+    #[test]
+    fn format_usage_repeated_reset_placeholder_replaced_everywhere() {
+        assert_eq!(
+            format_usage(
+                "{session_reset}-{session_reset}",
+                0.0,
+                0.0,
+                Some(90),
+                Some(0)
+            ),
+            "1m-1m"
+        );
+    }
+
+    #[test]
+    fn seconds_until_computes_positive_delta() {
+        let now_ms = OffsetDateTime::parse(
+            "2026-08-18T19:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp() as u64
+            * 1000;
+        assert_eq!(
+            seconds_until(Some("2026-08-18T20:00:00Z"), now_ms),
+            Some(3600)
+        );
+    }
+
+    #[test]
+    fn seconds_until_returns_none_for_missing_resets_at() {
+        assert_eq!(seconds_until(None, 0), None);
+    }
+
+    #[test]
+    fn seconds_until_returns_none_for_malformed_timestamp() {
+        assert_eq!(seconds_until(Some("not a date"), 0), None);
+    }
+
+    #[test]
+    fn seconds_until_clamps_past_due_to_zero() {
+        let now_ms = OffsetDateTime::parse(
+            "2026-08-18T20:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp() as u64
+            * 1000;
+        assert_eq!(seconds_until(Some("2026-08-18T19:00:00Z"), now_ms), Some(0));
+    }
+
+    #[test]
+    fn format_duration_under_a_minute_floors_to_zero_minutes() {
+        assert_eq!(format_duration(Some(30)), "0m");
+    }
+
+    #[test]
+    fn format_duration_under_an_hour_shows_minutes_only() {
+        assert_eq!(format_duration(Some(45 * 60)), "45m");
+    }
+
+    #[test]
+    fn format_duration_at_exact_one_hour_boundary_shows_hours_and_minutes() {
+        assert_eq!(format_duration(Some(3600)), "1h0m");
+    }
+
+    #[test]
+    fn format_duration_hours_and_minutes() {
+        assert_eq!(format_duration(Some(4 * 3600 + 32 * 60)), "4h32m");
+    }
+
+    #[test]
+    fn format_duration_at_exact_one_day_boundary_drops_minutes() {
+        assert_eq!(format_duration(Some(86_400)), "1d0h");
+    }
+
+    #[test]
+    fn format_duration_multi_day_drops_minutes() {
+        assert_eq!(
+            format_duration(Some(3 * 86_400 + 12 * 3600 + 59 * 60)),
+            "3d12h"
+        );
+    }
+
+    #[test]
+    fn format_duration_none_renders_as_zero_minutes() {
+        assert_eq!(format_duration(None), "0m");
+    }
+
+    #[test]
+    fn format_duration_negative_seconds_clamped_to_zero_minutes() {
+        assert_eq!(format_duration(Some(-100)), "0m");
     }
 
     #[test]
