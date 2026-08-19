@@ -50,47 +50,25 @@ pub(crate) fn cmd_run() -> ExitCode {
     })
 }
 
-pub(crate) fn cmd_start() -> ExitCode {
-    let log_path = match lock::log_file_path() {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("failed to determine log file path: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if let Some(parent) = log_path.parent()
-        && let Err(err) = std::fs::create_dir_all(parent)
-    {
-        eprintln!("failed to create {}: {err}", parent.display());
-        return ExitCode::FAILURE;
+pub(crate) fn spawn_daemon() -> crate::error::Result<std::process::Child> {
+    let log_path =
+        lock::log_file_path().map_err(|err| format!("failed to determine log file path: {err}"))?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
-    let log_file = match OpenOptions::new()
+    let log_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&log_path)
-    {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("failed to open log file {}: {err}", log_path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let stdout_log = match log_file.try_clone() {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("failed to duplicate log file handle: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+        .map_err(|err| format!("failed to open log file {}: {err}", log_path.display()))?;
+    let stdout_log = log_file
+        .try_clone()
+        .map_err(|err| format!("failed to duplicate log file handle: {err}"))?;
 
-    let current_exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("failed to determine current executable: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let current_exe = std::env::current_exe()
+        .map_err(|err| format!("failed to determine current executable: {err}"))?;
 
     let mut command = Command::new(current_exe);
     command
@@ -109,10 +87,16 @@ pub(crate) fn cmd_start() -> ExitCode {
         command.pre_exec(|| setsid().map(|_| ()).map_err(std::io::Error::from));
     }
 
-    let mut child = match command.spawn() {
+    command
+        .spawn()
+        .map_err(|err| format!("failed to spawn smstatus daemon: {err}").into())
+}
+
+pub(crate) fn cmd_start() -> ExitCode {
+    let mut child = match spawn_daemon() {
         Ok(child) => child,
         Err(err) => {
-            eprintln!("failed to spawn smstatus daemon: {err}");
+            eprintln!("{err}");
             return ExitCode::FAILURE;
         }
     };
@@ -121,6 +105,13 @@ pub(crate) fn cmd_start() -> ExitCode {
         Ok(path) => path,
         Err(err) => {
             eprintln!("failed to determine lock file path: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let log_path = match lock::log_file_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("failed to determine log file path: {err}");
             return ExitCode::FAILURE;
         }
     };
@@ -198,35 +189,43 @@ pub(crate) fn status() -> crate::error::Result<DaemonStatus> {
     }
 }
 
+pub(crate) enum StopOutcome {
+    Signaled { pid: i32 },
+    NotRunning,
+    PidUnknown,
+}
+
+pub(crate) fn signal_stop() -> crate::error::Result<StopOutcome> {
+    let pid = match status()? {
+        DaemonStatus::Stopped => return Ok(StopOutcome::NotRunning),
+        DaemonStatus::RunningPidUnknown => return Ok(StopOutcome::PidUnknown),
+        DaemonStatus::Running { pid } => pid,
+    };
+
+    match kill(Pid::from_raw(pid), Signal::SIGTERM) {
+        Ok(()) => Ok(StopOutcome::Signaled { pid }),
+        Err(Errno::ESRCH) => Ok(StopOutcome::NotRunning),
+        Err(err) => Err(format!("failed to signal smstatus (pid {pid}): {err}").into()),
+    }
+}
+
 pub(crate) fn cmd_stop() -> ExitCode {
-    let pid = match status() {
-        Ok(DaemonStatus::Stopped) => {
+    let pid = match signal_stop() {
+        Ok(StopOutcome::Signaled { pid }) => pid,
+        Ok(StopOutcome::NotRunning) => {
             println!("smstatus is not running");
             return ExitCode::SUCCESS;
         }
-        Ok(DaemonStatus::Running { pid }) => pid,
-        Ok(DaemonStatus::RunningPidUnknown) => {
+        Ok(StopOutcome::PidUnknown) => {
             eprintln!("smstatus is running, but its pid file is unreadable");
             return ExitCode::FAILURE;
         }
         Err(err) => {
-            eprintln!("failed to check daemon status: {err}");
+            eprintln!("failed to stop daemon: {err}");
             return ExitCode::FAILURE;
         }
     };
     let target = Pid::from_raw(pid);
-
-    match kill(target, Signal::SIGTERM) {
-        Ok(()) => {}
-        Err(Errno::ESRCH) => {
-            println!("smstatus is not running");
-            return ExitCode::SUCCESS;
-        }
-        Err(err) => {
-            eprintln!("failed to signal smstatus (pid {pid}): {err}");
-            return ExitCode::FAILURE;
-        }
-    }
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {

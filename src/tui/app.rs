@@ -1,15 +1,26 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub(super) const ACTION_LOG_CAPACITY: usize = 3;
+
 #[derive(Default)]
 pub(super) struct App {
     pub(super) should_quit: bool,
     pub(super) daemon_status: Option<crate::daemon::DaemonStatus>,
+    pub(super) action_log: Vec<String>,
+    pub(super) pending_start: Option<std::process::Child>,
+    pub(super) pending_start_confirmed_running: bool,
 }
 
 impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
         if is_quit(key) {
             self.should_quit = true;
+            return;
+        }
+        match key.code {
+            KeyCode::Char('s') => self.start_daemon(),
+            KeyCode::Char('k') => self.stop_daemon(),
+            _ => {}
         }
     }
 
@@ -18,6 +29,101 @@ impl App {
         status: crate::error::Result<crate::daemon::DaemonStatus>,
     ) {
         self.daemon_status = status.ok();
+        if self.pending_start.is_some()
+            && matches!(
+                self.daemon_status,
+                Some(crate::daemon::DaemonStatus::Running { .. })
+                    | Some(crate::daemon::DaemonStatus::RunningPidUnknown)
+            )
+        {
+            self.pending_start_confirmed_running = true;
+        }
+    }
+
+    pub(super) fn poll_pending_start(&mut self) {
+        let Some(child) = self.pending_start.as_mut() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.code() == Some(crate::cli::EXIT_ALREADY_RUNNING as i32) {
+                    self.push_action_message("smstatus is already running".to_string());
+                } else if self.pending_start_confirmed_running {
+                    match crate::lock::log_file_path() {
+                        Ok(log_path) => self.push_action_message(format!(
+                            "smstatus exited unexpectedly, see {}",
+                            log_path.display()
+                        )),
+                        Err(_) => {
+                            self.push_action_message("smstatus exited unexpectedly".to_string())
+                        }
+                    }
+                } else {
+                    match crate::lock::log_file_path() {
+                        Ok(log_path) => self.push_action_message(format!(
+                            "smstatus failed to start, see {}",
+                            log_path.display()
+                        )),
+                        Err(_) => self.push_action_message("smstatus failed to start".to_string()),
+                    }
+                }
+                self.pending_start = None;
+                self.pending_start_confirmed_running = false;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                self.push_action_message(format!("failed to check daemon start: {err}"));
+                self.pending_start = None;
+                self.pending_start_confirmed_running = false;
+            }
+        }
+    }
+
+    pub(super) fn start_daemon(&mut self) {
+        match self.daemon_status {
+            Some(crate::daemon::DaemonStatus::Running { .. })
+            | Some(crate::daemon::DaemonStatus::RunningPidUnknown) => {
+                self.push_action_message("smstatus is already running".to_string());
+            }
+            _ if self.pending_start.is_some() => {
+                self.push_action_message("smstatus is already starting".to_string());
+            }
+            _ => match crate::daemon::spawn_daemon() {
+                Ok(child) => {
+                    self.pending_start = Some(child);
+                    self.pending_start_confirmed_running = false;
+                    self.push_action_message("Starting smstatus...".to_string());
+                }
+                Err(err) => self.push_action_message(format!("Failed to start smstatus: {err}")),
+            },
+        }
+    }
+
+    pub(super) fn stop_daemon(&mut self) {
+        match self.daemon_status {
+            Some(crate::daemon::DaemonStatus::Stopped) | None => {
+                self.push_action_message("smstatus is not running".to_string());
+            }
+            _ => match crate::daemon::signal_stop() {
+                Ok(crate::daemon::StopOutcome::Signaled { pid }) => {
+                    self.push_action_message(format!("Sent stop signal to smstatus (pid {pid})"))
+                }
+                Ok(crate::daemon::StopOutcome::NotRunning) => {
+                    self.push_action_message("smstatus is not running".to_string())
+                }
+                Ok(crate::daemon::StopOutcome::PidUnknown) => self.push_action_message(
+                    "smstatus is running, but its pid file is unreadable".to_string(),
+                ),
+                Err(err) => self.push_action_message(format!("Failed to stop smstatus: {err}")),
+            },
+        }
+    }
+
+    fn push_action_message(&mut self, message: String) {
+        self.action_log.push(message);
+        if self.action_log.len() > ACTION_LOG_CAPACITY {
+            self.action_log.remove(0);
+        }
     }
 }
 
@@ -85,5 +191,161 @@ mod tests {
         let mut app = App::default();
         app.refresh_daemon_status(Err("boom".into()));
         assert_eq!(app.daemon_status, None);
+    }
+
+    #[test]
+    fn push_action_message_caps_at_capacity_keeping_most_recent() {
+        let mut app = App::default();
+        app.push_action_message("one".to_string());
+        app.push_action_message("two".to_string());
+        app.push_action_message("three".to_string());
+        app.push_action_message("four".to_string());
+        assert_eq!(app.action_log, vec!["two", "three", "four"]);
+    }
+
+    #[test]
+    fn stop_daemon_when_stopped_is_a_noop_with_message() {
+        let mut app = App {
+            daemon_status: Some(crate::daemon::DaemonStatus::Stopped),
+            ..App::default()
+        };
+        app.stop_daemon();
+        assert_eq!(app.action_log, vec!["smstatus is not running"]);
+        assert!(app.pending_start.is_none());
+    }
+
+    #[test]
+    fn stop_daemon_when_status_unknown_is_a_noop_with_message() {
+        let mut app = App {
+            daemon_status: None,
+            ..App::default()
+        };
+        app.stop_daemon();
+        assert_eq!(app.action_log, vec!["smstatus is not running"]);
+        assert!(app.pending_start.is_none());
+    }
+
+    #[test]
+    fn start_daemon_when_running_is_a_noop_with_message() {
+        let mut app = App {
+            daemon_status: Some(crate::daemon::DaemonStatus::Running { pid: 42 }),
+            ..App::default()
+        };
+        app.start_daemon();
+        assert_eq!(app.action_log, vec!["smstatus is already running"]);
+        assert!(app.pending_start.is_none());
+    }
+
+    #[test]
+    fn start_daemon_when_running_pid_unknown_is_a_noop_with_message() {
+        let mut app = App {
+            daemon_status: Some(crate::daemon::DaemonStatus::RunningPidUnknown),
+            ..App::default()
+        };
+        app.start_daemon();
+        assert_eq!(app.action_log, vec!["smstatus is already running"]);
+        assert!(app.pending_start.is_none());
+    }
+
+    #[test]
+    fn poll_pending_start_is_noop_when_nothing_pending() {
+        let mut app = App::default();
+        app.poll_pending_start();
+        assert!(app.action_log.is_empty());
+        assert!(app.pending_start.is_none());
+    }
+
+    fn spawn_test_child(shell_code: &str) -> std::process::Child {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell_code)
+            .spawn()
+            .expect("failed to spawn test child process")
+    }
+
+    fn wait_for_pending_start_to_be_reaped(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll_pending_start();
+            if app.pending_start.is_none() {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("pending_start was not reaped in time");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn start_daemon_when_pending_start_already_some_is_a_noop_and_keeps_existing_child() {
+        let child = spawn_test_child(":");
+        let pid = child.id();
+        let mut app = App {
+            pending_start: Some(child),
+            ..App::default()
+        };
+        app.start_daemon();
+        assert_eq!(app.action_log, vec!["smstatus is already starting"]);
+        assert_eq!(app.pending_start.as_ref().map(|c| c.id()), Some(pid));
+        app.pending_start.as_mut().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn pending_start_confirmed_running_stays_false_for_stopped_or_unknown_status() {
+        let mut app = App {
+            pending_start: Some(spawn_test_child("sleep 0.2")),
+            ..App::default()
+        };
+        app.refresh_daemon_status(Ok(crate::daemon::DaemonStatus::Stopped));
+        assert!(!app.pending_start_confirmed_running);
+        app.refresh_daemon_status(Err("boom".into()));
+        assert!(!app.pending_start_confirmed_running);
+        app.pending_start.as_mut().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn pending_start_confirmed_running_is_set_once_status_shows_running() {
+        let mut app = App {
+            pending_start: Some(spawn_test_child("sleep 0.2")),
+            ..App::default()
+        };
+        app.refresh_daemon_status(Ok(crate::daemon::DaemonStatus::Running { pid: 4242 }));
+        assert!(app.pending_start_confirmed_running);
+        app.pending_start.as_mut().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn poll_pending_start_reports_failed_to_start_when_never_confirmed_running() {
+        let mut app = App {
+            pending_start: Some(spawn_test_child("exit 7")),
+            ..App::default()
+        };
+        wait_for_pending_start_to_be_reaped(&mut app);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("smstatus failed to start"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert!(!app.pending_start_confirmed_running);
+    }
+
+    #[test]
+    fn poll_pending_start_reports_exited_unexpectedly_when_confirmed_running_first() {
+        let mut app = App {
+            pending_start: Some(spawn_test_child("exit 7")),
+            ..App::default()
+        };
+        app.refresh_daemon_status(Ok(crate::daemon::DaemonStatus::Running { pid: 4242 }));
+        assert!(app.pending_start_confirmed_running);
+        wait_for_pending_start_to_be_reaped(&mut app);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("smstatus exited unexpectedly"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert!(!app.pending_start_confirmed_running);
     }
 }

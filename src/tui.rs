@@ -27,6 +27,7 @@ fn run_inner() -> crate::error::Result<()> {
 
     while !app.should_quit {
         app.refresh_daemon_status(crate::daemon::status());
+        app.poll_pending_start();
         guard.terminal.draw(|frame| ui::draw(frame, &app))?;
         if let Some(key) = event::next_key_event(EVENT_POLL_TIMEOUT)? {
             app.handle_key(key);
