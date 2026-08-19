@@ -573,6 +573,7 @@ dependencies = [
 name = "disk"
 version = "0.1.0"
 dependencies = [
+ "fmt-common",
  "serde",
  "serde_json",
  "wit-bindgen",
@@ -647,6 +648,10 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
+
+[[package]]
+name = "fmt-common"
+version = "0.1.0"
 
 [[package]]
 name = "fnv"
@@ -1400,6 +1405,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 name = "ram"
 version = "0.1.0"
 dependencies = [
+ "fmt-common",
  "serde",
  "serde_json",
  "wit-bindgen",

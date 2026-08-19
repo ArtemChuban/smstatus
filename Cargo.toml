@@ -1,5 +1,5 @@
 [workspace]
-members = ["modules/battery", "modules/datetime", "modules/keyboard", "modules/disk", "modules/ram", "modules/cpu", "modules/process", "modules/claude"]
+members = ["modules/battery", "modules/datetime", "modules/keyboard", "modules/disk", "modules/ram", "modules/cpu", "modules/process", "modules/claude", "modules/fmt-common"]
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

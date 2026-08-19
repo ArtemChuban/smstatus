@@ -27,26 +27,8 @@ mod logic {
         serde_json::from_str::<Config>(config).ok()
     }
 
-    pub fn human_bytes(bytes: u64) -> String {
-        const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
-        let mut value = bytes as f64;
-        let mut unit = 0;
-        while value >= 1024.0 && unit < UNITS.len() - 1 {
-            value /= 1024.0;
-            unit += 1;
-        }
-        if unit == 0 {
-            format!("{value:.0}{}", UNITS[unit])
-        } else {
-            format!("{value:.1}{}", UNITS[unit])
-        }
-    }
-
     pub fn format_ram(format: &str, total_bytes: u64, used_bytes: u64, free_bytes: u64) -> String {
-        format
-            .replace("{total}", &human_bytes(total_bytes))
-            .replace("{used}", &human_bytes(used_bytes))
-            .replace("{free}", &human_bytes(free_bytes))
+        fmt_common::format_usage(format, total_bytes, used_bytes, free_bytes)
     }
 
     pub fn format_error(err: &str) -> String {
@@ -98,6 +80,7 @@ export!(Component);
 mod tests {
     use super::Config;
     use super::logic::*;
+    use fmt_common::human_bytes;
 
     #[test]
     fn parses_valid_config_with_format() {
