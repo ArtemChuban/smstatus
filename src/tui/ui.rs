@@ -3,19 +3,31 @@ use ratatui::layout::Alignment;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::app::App;
+use super::app::{ACTION_LOG_CAPACITY, App};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let block = Block::default().title("smstatus").borders(Borders::ALL);
-    let paragraph = Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(format!("smstatus v{}", env!("CARGO_PKG_VERSION"))),
         Line::from(daemon_status_line(app.daemon_status)),
-        Line::from("Press q to quit"),
-    ])
-    .alignment(Alignment::Center)
-    .block(block);
+        Line::from("Press q to quit, s to start, k to stop"),
+    ];
+    for line in action_log_lines(&app.action_log) {
+        lines.push(Line::from(line));
+    }
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .block(block);
 
     frame.render_widget(paragraph, frame.area());
+}
+
+fn action_log_lines(action_log: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> = action_log.to_vec();
+    while lines.len() < ACTION_LOG_CAPACITY {
+        lines.push(String::new());
+    }
+    lines
 }
 
 fn daemon_status_line(status: Option<crate::daemon::DaemonStatus>) -> String {
@@ -48,25 +60,38 @@ mod tests {
     }
 
     fn render(app: &App) -> Buffer {
-        let backend = TestBackend::new(40, 6);
+        let backend = TestBackend::new(40, 8);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
         terminal.backend().buffer().clone()
     }
 
-    fn expected_for(status_text: &str) -> Buffer {
+    fn expected_for(status_text: &str, action_log: &[&str]) -> Buffer {
         let version_line = format!(
             "│{}│",
             centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
         );
         let status_line = format!("│{}│", centered(status_text, 38));
+        let hint_line = format!(
+            "│{}│",
+            centered("Press q to quit, s to start, k to stop", 38)
+        );
+        let mut action_lines: Vec<String> = action_log
+            .iter()
+            .map(|text| format!("│{}│", centered(text, 38)))
+            .collect();
+        while action_lines.len() < ACTION_LOG_CAPACITY {
+            action_lines.push(format!("│{}│", centered("", 38)));
+        }
         Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐",
-            &version_line,
-            &status_line,
-            "│            Press q to quit           │",
-            "│                                      │",
-            "└──────────────────────────────────────┘",
+            "┌smstatus──────────────────────────────┐".to_string(),
+            version_line,
+            status_line,
+            hint_line,
+            action_lines[0].clone(),
+            action_lines[1].clone(),
+            action_lines[2].clone(),
+            "└──────────────────────────────────────┘".to_string(),
         ])
     }
 
@@ -102,45 +127,95 @@ mod tests {
     #[test]
     fn draw_renders_stopped_status() {
         let app = App {
-            should_quit: false,
             daemon_status: Some(DaemonStatus::Stopped),
+            ..App::default()
         };
-        assert_eq!(render(&app), expected_for("smstatus daemon: stopped"));
+        assert_eq!(render(&app), expected_for("smstatus daemon: stopped", &[]));
     }
 
     #[test]
     fn draw_renders_running_status() {
         let app = App {
-            should_quit: false,
             daemon_status: Some(DaemonStatus::Running { pid: 12345 }),
+            ..App::default()
         };
         assert_eq!(
             render(&app),
-            expected_for("smstatus daemon: running (pid 12345)")
+            expected_for("smstatus daemon: running (pid 12345)", &[])
         );
     }
 
     #[test]
     fn draw_renders_running_pid_unknown_status() {
         let app = App {
-            should_quit: false,
             daemon_status: Some(DaemonStatus::RunningPidUnknown),
+            ..App::default()
         };
         assert_eq!(
             render(&app),
-            expected_for("smstatus daemon: running (pid unknown)")
+            expected_for("smstatus daemon: running (pid unknown)", &[])
         );
     }
 
     #[test]
     fn draw_renders_unknown_status() {
         let app = App {
-            should_quit: false,
             daemon_status: None,
+            ..App::default()
         };
         assert_eq!(
             render(&app),
-            expected_for("smstatus daemon: status unknown")
+            expected_for("smstatus daemon: status unknown", &[])
+        );
+    }
+
+    #[test]
+    fn draw_renders_empty_action_log_as_blank_rows() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            action_log: vec![],
+            ..App::default()
+        };
+        assert_eq!(render(&app), expected_for("smstatus daemon: stopped", &[]));
+    }
+
+    #[test]
+    fn draw_renders_single_action_message() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Running { pid: 42 }),
+            action_log: vec!["Starting smstatus...".to_string()],
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app),
+            expected_for(
+                "smstatus daemon: running (pid 42)",
+                &["Starting smstatus..."]
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_action_log_at_capacity() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            action_log: vec![
+                "Starting smstatus...".to_string(),
+                "smstatus is already running".to_string(),
+                "Sent stop signal to smstatus (pid 42)".to_string(),
+            ],
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app),
+            expected_for(
+                "smstatus daemon: stopped",
+                &[
+                    "Starting smstatus...",
+                    "smstatus is already running",
+                    "Sent stop signal to smstatus (pid 42)",
+                ]
+            )
         );
     }
 }
