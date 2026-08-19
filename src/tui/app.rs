@@ -3,6 +3,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[derive(Default)]
 pub(super) struct App {
     pub(super) should_quit: bool,
+    pub(super) daemon_status: Option<crate::daemon::DaemonStatus>,
 }
 
 impl App {
@@ -10,6 +11,13 @@ impl App {
         if is_quit(key) {
             self.should_quit = true;
         }
+    }
+
+    pub(super) fn refresh_daemon_status(
+        &mut self,
+        status: crate::error::Result<crate::daemon::DaemonStatus>,
+    ) {
+        self.daemon_status = status.ok();
     }
 }
 
@@ -60,5 +68,22 @@ mod tests {
         let mut app = App::default();
         app.handle_key(key(KeyCode::Char('c'), KeyModifiers::NONE));
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn refresh_daemon_status_stores_ok_value() {
+        let mut app = App::default();
+        app.refresh_daemon_status(Ok(crate::daemon::DaemonStatus::Running { pid: 42 }));
+        assert_eq!(
+            app.daemon_status,
+            Some(crate::daemon::DaemonStatus::Running { pid: 42 })
+        );
+    }
+
+    #[test]
+    fn refresh_daemon_status_maps_err_to_none() {
+        let mut app = App::default();
+        app.refresh_daemon_status(Err("boom".into()));
+        assert_eq!(app.daemon_status, None);
     }
 }
