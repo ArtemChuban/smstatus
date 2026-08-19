@@ -13,7 +13,10 @@ impl BarConfig {
 
     pub(crate) fn module_config_json(&self, module_name: &str) -> String {
         match self.0.get(module_name) {
-            Some(section) => serde_json::to_string(section).unwrap_or_else(|_| "{}".to_string()),
+            Some(section) => serde_json::to_string(section).unwrap_or_else(|err| {
+                eprintln!("failed to serialize config for module `{module_name}`: {err}");
+                "{}".to_string()
+            }),
             None => "{}".to_string(),
         }
     }
