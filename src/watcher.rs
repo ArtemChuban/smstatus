@@ -15,6 +15,13 @@ pub(crate) struct ConfigWatcher {
 impl ConfigWatcher {
     pub(crate) fn new(config_dir: &Path, watch_target: PathBuf) -> Result<Self> {
         let (reload_tx, reload_rx) = mpsc::channel::<()>();
+        let canonical_target = watch_target.canonicalize().unwrap_or_else(|err| {
+            eprintln!(
+                "config watcher: failed to canonicalize watch target {}: {err}",
+                watch_target.display()
+            );
+            watch_target.clone()
+        });
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<Event>| match res {
                 Ok(event) => {
@@ -25,7 +32,17 @@ impl ConfigWatcher {
                             | EventKind::Modify(ModifyKind::Data(_))
                             | EventKind::Modify(ModifyKind::Name(_))
                     );
-                    if is_content_change && event.paths.contains(&watch_target) {
+                    let matches_target = event.paths.iter().any(|path| match path.canonicalize() {
+                        Ok(canonical) => canonical == canonical_target,
+                        Err(err) => {
+                            eprintln!(
+                                "config watcher: failed to canonicalize event path {}: {err}",
+                                path.display()
+                            );
+                            *path == canonical_target || *path == watch_target
+                        }
+                    });
+                    if is_content_change && matches_target {
                         let _ = reload_tx.send(());
                     }
                 }
