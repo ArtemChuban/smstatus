@@ -58,7 +58,10 @@ pub(crate) fn run() -> Result<()> {
     let mut modules = Vec::new();
     for name in config.module_names()? {
         let module_config = config.module_config_json(&name);
-        modules.push(runtime.start(&name, &module_config)?);
+        match runtime.start(&name, &module_config) {
+            Ok(state) => modules.push(state),
+            Err(err) => eprintln!("failed to start module `{name}`: {err}"),
+        }
     }
 
     let mut watcher = ConfigWatcher::new(&config_dir, config_path.clone())?;
