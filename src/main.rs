@@ -8,6 +8,7 @@ mod host;
 mod lock;
 mod module;
 mod sysinfo;
+mod tui;
 mod version;
 mod watcher;
 mod x11;
@@ -24,8 +25,9 @@ fn main() -> ExitCode {
     }
 
     match Cli::parse().command {
-        Commands::Start => daemon::cmd_start(),
-        Commands::Stop => daemon::cmd_stop(),
-        Commands::Run => daemon::cmd_run(),
+        Some(Commands::Start) => daemon::cmd_start(),
+        Some(Commands::Stop) => daemon::cmd_stop(),
+        Some(Commands::Run) => daemon::cmd_run(),
+        None => tui::run(),
     }
 }
