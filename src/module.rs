@@ -115,14 +115,21 @@ impl ModuleRuntime {
                 eprintln!("re-instantiating module after trap");
                 match self.instantiate(&state.component) {
                     Ok((mut store, module)) => {
-                        if let Err(err) = module
+                        match module
                             .smstatus_module_guest()
                             .call_init(&mut store, &state.config)
                         {
-                            eprintln!("failed to re-init `{}`: {err}", state.name);
+                            Ok(()) => {
+                                state.store = store;
+                                state.module = module;
+                            }
+                            Err(err) => {
+                                eprintln!(
+                                    "failed to re-init `{}`, keeping previous instance running: {err}",
+                                    state.name
+                                );
+                            }
                         }
-                        state.store = store;
-                        state.module = module;
                     }
                     Err(err) => eprintln!("failed to re-instantiate `{}`: {err}", state.name),
                 }
