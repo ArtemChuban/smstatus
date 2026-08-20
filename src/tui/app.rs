@@ -12,6 +12,21 @@ pub(super) enum Mode {
         buffer: String,
         cursor: usize,
     },
+    AddingModule {
+        available: Vec<String>,
+        selected: usize,
+        scroll_offset: usize,
+    },
+    NamingModuleInstance {
+        kind: String,
+        buffer: String,
+        cursor: usize,
+    },
+    ConfirmingRemove {
+        index: usize,
+        name: String,
+    },
+    Help,
 }
 
 #[derive(Default)]
@@ -23,6 +38,7 @@ pub(super) struct App {
     pub(super) pending_start_confirmed_running: bool,
     pub(super) mode: Mode,
     pub(super) config_path: Option<PathBuf>,
+    pub(super) modules_dir: Option<PathBuf>,
     pub(super) separator: Option<String>,
     pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
     pub(super) last_separator_error: Option<String>,
@@ -51,6 +67,7 @@ impl App {
                     }
                 }
                 app.config_path = Some(config_path);
+                app.modules_dir = Some(config_dir.join("modules"));
                 app.refresh_config();
             }
             Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
@@ -59,9 +76,17 @@ impl App {
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
+        if is_hard_quit(key) {
+            self.should_quit = true;
+            return;
+        }
         match self.mode {
             Mode::EditingSeparator { .. } => self.handle_key_editing_separator(key),
             Mode::Normal => self.handle_key_normal(key),
+            Mode::AddingModule { .. } => self.handle_key_adding_module(key),
+            Mode::NamingModuleInstance { .. } => self.handle_key_naming_module_instance(key),
+            Mode::ConfirmingRemove { .. } => self.handle_key_confirming_remove(key),
+            Mode::Help => self.handle_key_help(key),
         }
     }
 
@@ -80,15 +105,14 @@ impl App {
             }
             KeyCode::Up => self.select_previous_module(),
             KeyCode::Down => self.select_next_module(),
+            KeyCode::Char('a') => self.begin_add_module(),
+            KeyCode::Char('d') => self.begin_remove_module(),
+            KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
         }
     }
 
     fn handle_key_editing_separator(&mut self, key: KeyEvent) {
-        if is_hard_quit(key) {
-            self.should_quit = true;
-            return;
-        }
         match key.code {
             KeyCode::Esc => self.cancel_edit_separator(),
             KeyCode::Enter => self.commit_edit_separator(),
@@ -213,18 +237,29 @@ impl App {
                 }
             }
         }
+        self.drop_stale_confirming_remove_mode();
+    }
+
+    fn drop_stale_confirming_remove_mode(&mut self) {
+        let Mode::ConfirmingRemove { index, name } = &self.mode else {
+            return;
+        };
+        let still_armed = self
+            .modules
+            .as_ref()
+            .and_then(|modules| modules.get(*index))
+            .is_some_and(|current| current == name);
+        if !still_armed {
+            self.mode = Mode::Normal;
+        }
     }
 
     fn ensure_selected_visible(&mut self) {
         let Some(idx) = self.selected_index else {
             return;
         };
-        let viewport = self.modules_viewport_height.max(1);
-        if idx < self.module_scroll_offset {
-            self.module_scroll_offset = idx;
-        } else if idx >= self.module_scroll_offset + viewport {
-            self.module_scroll_offset = idx + 1 - viewport;
-        }
+        self.module_scroll_offset =
+            clamped_scroll_offset(self.module_scroll_offset, idx, self.modules_viewport_height);
     }
 
     fn select_previous_module(&mut self) {
@@ -287,6 +322,192 @@ impl App {
                 self.push_action_message(format!("Moved {name} {direction}"));
             }
             Err(err) => self.push_action_message(format!("Failed to reorder modules: {err}")),
+        }
+    }
+
+    fn begin_add_module(&mut self) {
+        let Some(modules_dir) = self.modules_dir.clone() else {
+            self.push_action_message("cannot add module: modules directory unknown".to_string());
+            return;
+        };
+        let available = match crate::config::discover_module_kinds(&modules_dir) {
+            Ok(list) => list,
+            Err(err) => {
+                self.push_action_message(format!("cannot list available modules: {err}"));
+                Vec::new()
+            }
+        };
+        self.mode = Mode::AddingModule {
+            available,
+            selected: 0,
+            scroll_offset: 0,
+        };
+    }
+
+    fn handle_key_adding_module(&mut self, key: KeyEvent) {
+        let Mode::AddingModule {
+            available,
+            selected,
+            scroll_offset,
+        } = &mut self.mode
+        else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Up => {
+                *selected = selected.saturating_sub(1);
+                *scroll_offset =
+                    clamped_scroll_offset(*scroll_offset, *selected, self.modules_viewport_height);
+            }
+            KeyCode::Down => {
+                if !available.is_empty() {
+                    *selected = (*selected + 1).min(available.len() - 1);
+                }
+                *scroll_offset =
+                    clamped_scroll_offset(*scroll_offset, *selected, self.modules_viewport_height);
+            }
+            KeyCode::Enter => self.begin_naming_module_instance(),
+            _ => {}
+        }
+    }
+
+    fn begin_naming_module_instance(&mut self) {
+        let Mode::AddingModule {
+            available,
+            selected,
+            ..
+        } = &self.mode
+        else {
+            return;
+        };
+        let Some(kind) = available.get(*selected).cloned() else {
+            return;
+        };
+        self.mode = Mode::NamingModuleInstance {
+            kind,
+            buffer: String::new(),
+            cursor: 0,
+        };
+    }
+
+    fn handle_key_naming_module_instance(&mut self, key: KeyEvent) {
+        let Mode::NamingModuleInstance { buffer, cursor, .. } = &mut self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Left => {
+                *cursor = cursor.saturating_sub(1);
+                return;
+            }
+            KeyCode::Right => {
+                *cursor = (*cursor + 1).min(buffer.chars().count());
+                return;
+            }
+            KeyCode::Backspace => {
+                if *cursor > 0 {
+                    let byte = super::char_byte_offset(buffer, *cursor - 1);
+                    buffer.remove(byte);
+                    *cursor -= 1;
+                }
+                return;
+            }
+            KeyCode::Char(c) => {
+                let byte = super::char_byte_offset(buffer, *cursor);
+                buffer.insert(byte, c);
+                *cursor += 1;
+                return;
+            }
+            KeyCode::Enter => {}
+            _ => return,
+        }
+        self.commit_add_module();
+    }
+
+    fn commit_add_module(&mut self) {
+        let Mode::NamingModuleInstance { kind, buffer, .. } = std::mem::take(&mut self.mode) else {
+            return;
+        };
+        let new_entry = if buffer.is_empty() {
+            kind
+        } else {
+            format!("{kind}#{buffer}")
+        };
+        let (Some(modules), Some(path)) = (self.modules.clone(), self.config_path.clone()) else {
+            self.push_action_message("cannot add module: config state unknown".to_string());
+            return;
+        };
+        match crate::config::BarConfig::write_module_add(&path, &modules, &new_entry) {
+            Ok(()) => {
+                let mut new_modules = modules;
+                new_modules.push(new_entry.clone());
+                self.selected_index = Some(new_modules.len() - 1);
+                self.modules = Some(new_modules);
+                self.ensure_selected_visible();
+                self.push_action_message(format!("Added {new_entry}"));
+            }
+            Err(err) => self.push_action_message(format!("Failed to add module: {err}")),
+        }
+    }
+
+    fn begin_remove_module(&mut self) {
+        let (Some(modules), Some(idx)) = (self.modules.as_ref(), self.selected_index) else {
+            self.push_action_message("no module selected to remove".to_string());
+            return;
+        };
+        self.mode = Mode::ConfirmingRemove {
+            index: idx,
+            name: modules[idx].clone(),
+        };
+    }
+
+    fn handle_key_confirming_remove(&mut self, key: KeyEvent) {
+        let Mode::ConfirmingRemove { index, .. } = &self.mode else {
+            return;
+        };
+        let index = *index;
+        match key.code {
+            KeyCode::Char('d') => self.commit_remove_module(index),
+            _ => self.mode = Mode::Normal,
+        }
+    }
+
+    fn commit_remove_module(&mut self, index: usize) {
+        self.mode = Mode::Normal;
+        let Some(modules) = self.modules.clone() else {
+            return;
+        };
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot remove module: config path unknown".to_string());
+            return;
+        };
+        let name = modules[index].clone();
+        match crate::config::BarConfig::write_module_remove(&path, &modules, index) {
+            Ok(()) => {
+                let mut new_modules = modules;
+                new_modules.remove(index);
+                let new_len = new_modules.len();
+                self.selected_index = if new_len == 0 {
+                    None
+                } else {
+                    Some(index.min(new_len - 1))
+                };
+                self.modules = Some(new_modules);
+                self.ensure_selected_visible();
+                self.push_action_message(format!("Removed {name}"));
+            }
+            Err(err) => self.push_action_message(format!("Failed to remove module: {err}")),
+        }
+    }
+
+    fn handle_key_help(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
         }
     }
 
@@ -390,6 +611,17 @@ impl App {
         if self.action_log.len() > ACTION_LOG_CAPACITY {
             self.action_log.remove(0);
         }
+    }
+}
+
+fn clamped_scroll_offset(offset: usize, idx: usize, viewport_height: usize) -> usize {
+    let viewport = viewport_height.max(1);
+    if idx < offset {
+        idx
+    } else if idx >= offset + viewport {
+        idx + 1 - viewport
+    } else {
+        offset
     }
 }
 
@@ -1185,6 +1417,69 @@ mod tests {
     }
 
     #[test]
+    fn refresh_config_drops_stale_confirming_remove_mode_when_armed_entry_disappears() {
+        let path = unique_temp_path("confirming-remove-armed-entry-disappears");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(2),
+            mode: Mode::ConfirmingRemove {
+                index: 2,
+                name: "battery".to_string(),
+            },
+            ..App::default()
+        };
+
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn refresh_config_keeps_confirming_remove_mode_when_armed_entry_still_matches() {
+        let path = unique_temp_path("confirming-remove-armed-entry-still-valid");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            mode: Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            },
+            ..App::default()
+        };
+
+        std::fs::write(
+            &path,
+            "separator = \" | \"\nmodules = [\"cpu\", \"disk\", \"battery\"]\n",
+        )
+        .unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            app.mode,
+            Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn refresh_config_resets_selected_index_to_none_when_modules_key_becomes_missing() {
         let path = unique_temp_path("selected-index-modules-key-missing");
         std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
@@ -1463,5 +1758,476 @@ mod tests {
             "unexpected message: {}",
             app.action_log[0]
         );
+    }
+
+    #[test]
+    fn begin_add_module_without_modules_dir_pushes_message_and_stays_normal() {
+        let mut app = App {
+            modules_dir: None,
+            ..App::default()
+        };
+        app.begin_add_module();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.action_log,
+            vec!["cannot add module: modules directory unknown"]
+        );
+    }
+
+    #[test]
+    fn begin_add_module_when_directory_missing_opens_empty_picker_without_message() {
+        let dir = unique_temp_path("modules-dir-missing");
+        let mut app = App {
+            modules_dir: Some(dir),
+            ..App::default()
+        };
+        app.begin_add_module();
+        assert_eq!(
+            app.mode,
+            Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            }
+        );
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn begin_add_module_lists_available_wasm_kinds_sorted_and_enters_adding_mode() {
+        let dir = unique_temp_path("modules-dir-with-kinds");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("ram.wasm"), b"").unwrap();
+        std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
+        let mut app = App {
+            modules_dir: Some(dir.clone()),
+            ..App::default()
+        };
+        app.begin_add_module();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            app.mode,
+            Mode::AddingModule {
+                available: vec!["cpu".to_string(), "ram".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            }
+        );
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn adding_module_down_key_clamps_at_last_available_entry() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec!["a".to_string(), "b".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            modules_viewport_height: 2,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::AddingModule {
+                available: vec!["a".to_string(), "b".to_string()],
+                selected: 1,
+                scroll_offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn adding_module_up_key_clamps_at_zero() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec!["a".to_string(), "b".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::AddingModule {
+                available: vec!["a".to_string(), "b".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn adding_module_enter_on_empty_list_is_a_noop() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn esc_cancels_adding_module_without_log_message() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec!["a".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_hard_quits_while_adding_module() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn enter_on_adding_module_transitions_to_naming_module_instance_with_chosen_kind() {
+        let mut app = App {
+            mode: Mode::AddingModule {
+                available: vec!["cpu".to_string(), "disk".to_string()],
+                selected: 1,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: String::new(),
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn naming_module_instance_left_right_backspace_edit_buffer_like_separator_editing() {
+        let mut app = App {
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "ac".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "abc".to_string(),
+                cursor: 2,
+            }
+        );
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "abc".to_string(),
+                cursor: 0,
+            }
+        );
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "abc".to_string(),
+                cursor: 0,
+            }
+        );
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "abc".to_string(),
+                cursor: 1,
+            }
+        );
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "bc".to_string(),
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn commit_add_module_with_empty_buffer_inserts_bare_kind() {
+        let path = unique_temp_path("add-empty-buffer");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+        let mut app = App {
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: String::new(),
+                cursor: 0,
+            },
+            config_path: Some(path.clone()),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+        assert_eq!(app.action_log, vec!["Added disk"]);
+    }
+
+    #[test]
+    fn commit_add_module_with_buffer_inserts_kind_hash_instance() {
+        let path = unique_temp_path("add-with-buffer");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+        let mut app = App {
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "root".to_string(),
+                cursor: 4,
+            },
+            config_path: Some(path.clone()),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk#root".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+        assert_eq!(app.action_log, vec!["Added disk#root"]);
+    }
+
+    #[test]
+    fn commit_add_module_failure_logs_error_and_returns_to_normal_mode() {
+        let path = unique_temp_path("add-write-fails");
+        let mut app = App {
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: String::new(),
+                cursor: 0,
+            },
+            config_path: Some(path),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to add module:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert_eq!(app.modules, Some(vec!["cpu".to_string()]));
+    }
+
+    #[test]
+    fn esc_cancels_naming_module_instance_without_log_message() {
+        let mut app = App {
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "abc".to_string(),
+                cursor: 3,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn begin_remove_module_with_no_selection_pushes_message_and_stays_normal() {
+        let mut app = App {
+            modules: None,
+            selected_index: None,
+            ..App::default()
+        };
+        app.begin_remove_module();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.action_log, vec!["no module selected to remove"]);
+    }
+
+    #[test]
+    fn begin_remove_module_arms_confirming_remove_without_log_message() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.begin_remove_module();
+        assert_eq!(
+            app.mode,
+            Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            }
+        );
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn confirming_remove_any_other_key_cancels_silently() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            mode: Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk".to_string()])
+        );
+    }
+
+    #[test]
+    fn confirming_remove_second_d_removes_and_keeps_selection_on_shifted_entry() {
+        let path = unique_temp_path("remove-shift");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            mode: Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "battery".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+        assert_eq!(app.action_log, vec!["Removed disk"]);
+    }
+
+    #[test]
+    fn confirming_remove_on_the_only_remaining_entry_clears_selection() {
+        let path = unique_temp_path("remove-only-entry");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            mode: Mode::ConfirmingRemove {
+                index: 0,
+                name: "cpu".to_string(),
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.modules, Some(vec![]));
+        assert_eq!(app.selected_index, None);
+        assert_eq!(app.action_log, vec!["Removed cpu"]);
+    }
+
+    #[test]
+    fn confirming_remove_failure_pushes_message_and_leaves_modules_unchanged() {
+        let path = unique_temp_path("remove-write-fails");
+        let mut app = App {
+            config_path: Some(path),
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            mode: Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to remove module:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn question_mark_enters_help_mode_and_esc_or_question_mark_exits() {
+        let mut app = App::default();
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Help);
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Help);
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
     }
 }

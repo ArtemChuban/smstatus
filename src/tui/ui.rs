@@ -104,7 +104,8 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
         frame.render_widget(settings_block, areas.settings);
         frame.render_widget(Paragraph::new(separator_line(app)), settings_inner);
         if let Mode::EditingSeparator { buffer, cursor } = &app.mode {
-            let col = separator_cursor_column(settings_inner.x, buffer, *cursor);
+            let col =
+                settings_inner.x + text_edit_cursor_column(SEPARATOR_EDIT_PREFIX, buffer, *cursor);
             frame.set_cursor_position((col, settings_inner.y));
         }
     }
@@ -117,8 +118,41 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
             .border_type(BorderType::Rounded);
         let modules_inner = modules_block.inner(areas.modules);
         frame.render_widget(modules_block, areas.modules);
-        let module_lines = visible_module_lines(app, viewport_height, modules_inner.width);
-        frame.render_widget(Paragraph::new(module_lines), modules_inner);
+        match &app.mode {
+            Mode::NamingModuleInstance {
+                kind,
+                buffer,
+                cursor,
+            } => {
+                let prefix = instance_name_prefix(kind);
+                frame.render_widget(Paragraph::new(format!("{prefix}{buffer:?}")), modules_inner);
+                let col = modules_inner.x + text_edit_cursor_column(&prefix, buffer, *cursor);
+                frame.set_cursor_position((col, modules_inner.y));
+            }
+            Mode::AddingModule {
+                available,
+                selected,
+                scroll_offset,
+            } => {
+                let lines = styled_list_lines(
+                    available,
+                    Some(*selected),
+                    *scroll_offset,
+                    viewport_height,
+                    modules_inner.width,
+                );
+                frame.render_widget(Paragraph::new(lines), modules_inner);
+            }
+            Mode::Help => {
+                let lines =
+                    styled_list_lines(&help_lines(), None, 0, viewport_height, modules_inner.width);
+                frame.render_widget(Paragraph::new(lines), modules_inner);
+            }
+            Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {
+                let module_lines = visible_module_lines(app, viewport_height, modules_inner.width);
+                frame.render_widget(Paragraph::new(module_lines), modules_inner);
+            }
+        }
     }
 
     if areas.logs.height > 0 {
@@ -165,27 +199,41 @@ fn daemon_status_phrase(status: Option<crate::daemon::DaemonStatus>) -> String {
 fn separator_line(app: &App) -> String {
     match &app.mode {
         Mode::EditingSeparator { buffer, .. } => format!("{SEPARATOR_EDIT_PREFIX}{buffer:?}"),
-        Mode::Normal => match &app.separator {
+        Mode::Normal
+        | Mode::AddingModule { .. }
+        | Mode::NamingModuleInstance { .. }
+        | Mode::ConfirmingRemove { .. }
+        | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
         },
     }
 }
 
-fn separator_cursor_column(area_x: u16, buffer: &str, cursor: usize) -> u16 {
+fn text_edit_cursor_column(prefix: &str, buffer: &str, cursor: usize) -> u16 {
     let byte_idx = super::char_byte_offset(buffer, cursor);
     let escaped_prefix_quoted = format!("{:?}", &buffer[..byte_idx]);
     let escaped_prefix = &escaped_prefix_quoted[..escaped_prefix_quoted.len() - 1];
-    area_x + (SEPARATOR_EDIT_PREFIX.chars().count() + escaped_prefix.chars().count()) as u16
+    (prefix.chars().count() + escaped_prefix.chars().count()) as u16
 }
 
 fn hint_line(mode: &Mode) -> Cow<'static, str> {
     match mode {
-        Mode::Normal => Cow::Borrowed(
-            "Quit: q | Start: s | Kill: k | Edit separator: e | Select: \u{2191}/\u{2193} | Move: Ctrl+\u{2191}/\u{2193}",
-        ),
+        Mode::Normal => Cow::Borrowed("Quit: q | Start: s | Kill: k | Help: ?"),
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
+        Mode::AddingModule { .. } => {
+            Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
+        }
+        Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
+        Mode::ConfirmingRemove { name, .. } => {
+            Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
+        }
+        Mode::Help => Cow::Borrowed("Close: ? or Esc"),
     }
+}
+
+fn instance_name_prefix(kind: &str) -> String {
+    format!("instance name for {kind}: ")
 }
 
 fn module_window(total: usize, offset: usize, viewport_height: usize) -> (usize, usize, usize) {
@@ -198,33 +246,54 @@ fn module_window(total: usize, offset: usize, viewport_height: usize) -> (usize,
 }
 
 fn modules_title(app: &App, viewport_height: usize) -> String {
-    let text = match &app.modules {
-        None => "modules unknown".to_string(),
-        Some(modules) if modules.is_empty() => "modules (none configured)".to_string(),
-        Some(modules) => {
+    let text = match &app.mode {
+        Mode::AddingModule {
+            available,
+            scroll_offset,
+            ..
+        } => {
             let (start, end, total) =
-                module_window(modules.len(), app.module_scroll_offset, viewport_height);
+                module_window(available.len(), *scroll_offset, viewport_height);
             if viewport_height == 0 {
-                format!("modules {total} configured")
+                format!("add module {total} available")
             } else {
-                format!("modules {}-{end}/{total}", start + 1)
+                format!("add module {}-{end}/{total}", start + 1)
+            }
+        }
+        Mode::NamingModuleInstance { kind, .. } => format!("name instance of {kind}"),
+        Mode::Help => "help".to_string(),
+        Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {
+            match &app.modules {
+                None => "modules unknown".to_string(),
+                Some(modules) if modules.is_empty() => "modules (none configured)".to_string(),
+                Some(modules) => {
+                    let (start, end, total) =
+                        module_window(modules.len(), app.module_scroll_offset, viewport_height);
+                    if viewport_height == 0 {
+                        format!("modules {total} configured")
+                    } else {
+                        format!("modules {}-{end}/{total}", start + 1)
+                    }
+                }
             }
         }
     };
     boxed_title(&text)
 }
 
-fn visible_module_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Line<'static>> {
-    let Some(modules) = &app.modules else {
-        return Vec::new();
-    };
-    let (start, end, _total) =
-        module_window(modules.len(), app.module_scroll_offset, viewport_height);
-    modules[start..end]
+fn styled_list_lines(
+    entries: &[String],
+    selected: Option<usize>,
+    offset: usize,
+    viewport_height: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let (start, end, _total) = module_window(entries.len(), offset, viewport_height);
+    entries[start..end]
         .iter()
         .enumerate()
         .map(|(i, name)| {
-            if Some(start + i) == app.selected_index {
+            if Some(start + i) == selected {
                 let display_width = name.width();
                 let padding = " ".repeat((width as usize).saturating_sub(display_width));
                 Line::styled(
@@ -236,6 +305,48 @@ fn visible_module_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Li
             }
         })
         .collect()
+}
+
+fn visible_module_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Line<'static>> {
+    let Some(modules) = &app.modules else {
+        return Vec::new();
+    };
+    styled_list_lines(
+        modules,
+        app.selected_index,
+        app.module_scroll_offset,
+        viewport_height,
+        width,
+    )
+}
+
+fn help_lines() -> Vec<String> {
+    [
+        "Quit: q",
+        "Hard quit: Ctrl+c or Ctrl+d",
+        "Start daemon: s",
+        "Kill daemon: k",
+        "Edit separator: e",
+        "Select module: \u{2191}/\u{2193}",
+        "Move module: Ctrl+\u{2191}/\u{2193}",
+        "Add module: a",
+        "Remove module: d",
+        "Help: ?",
+        "Save separator: Enter",
+        "Cancel separator edit: Esc",
+        "Separator cursor: \u{2190}/\u{2192}",
+        "Separator backspace: Backspace",
+        "Select add-picker entry: \u{2191}/\u{2193}",
+        "Confirm add-picker selection: Enter",
+        "Cancel add picker: Esc",
+        "Confirm instance name: Enter",
+        "Cancel instance naming: Esc",
+        "Confirm remove: d",
+        "Cancel remove: any other key",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 fn action_log_lines(action_log: &[String]) -> Vec<String> {
@@ -364,7 +475,7 @@ mod tests {
         Buffer::with_lines(rows)
     }
 
-    const NORMAL_HINT: &str = "Quit: q | Start: s | Kill: k | Edit separator: e | Select: \u{2191}/\u{2193} | Move: Ctrl+\u{2191}/\u{2193}";
+    const NORMAL_HINT: &str = "Quit: q | Start: s | Kill: k | Help: ?";
 
     const BASELINE_HEIGHT: u16 = 13;
 
@@ -380,6 +491,14 @@ mod tests {
             .backend()
             .buffer()
             .clone()
+    }
+
+    fn with_reversed_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+        buffer.set_style(
+            Rect::new(2, y, width - 4, 1),
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+        buffer
     }
 
     #[test]
@@ -601,6 +720,49 @@ mod tests {
             .as_ref(),
             "Save: Enter | Cancel: Esc"
         );
+    }
+
+    #[test]
+    fn hint_line_adding_module_mode() {
+        assert_eq!(
+            hint_line(&Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            })
+            .as_ref(),
+            "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc"
+        );
+    }
+
+    #[test]
+    fn hint_line_naming_module_instance_mode() {
+        assert_eq!(
+            hint_line(&Mode::NamingModuleInstance {
+                kind: "cpu".to_string(),
+                buffer: String::new(),
+                cursor: 0,
+            })
+            .as_ref(),
+            "Confirm: Enter | Cancel: Esc"
+        );
+    }
+
+    #[test]
+    fn hint_line_confirming_remove_mode_includes_module_name() {
+        assert_eq!(
+            hint_line(&Mode::ConfirmingRemove {
+                index: 0,
+                name: "cpu".to_string(),
+            })
+            .as_ref(),
+            "Remove cpu? Confirm: d | Cancel: any key"
+        );
+    }
+
+    #[test]
+    fn hint_line_help_mode() {
+        assert_eq!(hint_line(&Mode::Help).as_ref(), "Close: ? or Esc");
     }
 
     #[test]
@@ -1105,5 +1267,185 @@ mod tests {
         let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
         assert!(terminal.backend().cursor_visible());
         assert_eq!(terminal.backend().cursor_position(), Position::new(21, 2));
+    }
+
+    #[test]
+    fn draw_renders_add_picker_title_list_and_hint() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::AddingModule {
+                available: vec!["battery".to_string(), "cpu".to_string(), "disk".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 3;
+        let expected_buf = expected(
+            70,
+            height,
+            Some(DaemonStatus::Stopped),
+            "separator: unknown",
+            "add module 1-3/3",
+            &["battery", "cpu", "disk"],
+            &[],
+            "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc",
+        );
+        let expected_buf = with_reversed_row(expected_buf, 5, 70);
+        assert_eq!(render(&app, 70, height), expected_buf);
+    }
+
+    #[test]
+    fn draw_renders_add_picker_with_empty_available_list() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::AddingModule {
+                available: vec![],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "add module 0 available",
+                &[],
+                &[],
+                "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc",
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_naming_instance_prompt_and_cursor() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::NamingModuleInstance {
+                kind: "disk".to_string(),
+                buffer: "root".to_string(),
+                cursor: 4,
+            },
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 1;
+        let terminal = render_terminal(&app, 70, height);
+        assert_eq!(
+            terminal.backend().buffer().clone(),
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "name instance of disk",
+                &["instance name for disk: \"root\""],
+                &[],
+                "Confirm: Enter | Cancel: Esc",
+            )
+        );
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(31, 5));
+    }
+
+    #[test]
+    fn draw_renders_confirming_remove_hint_with_unchanged_list_and_title() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            mode: Mode::ConfirmingRemove {
+                index: 1,
+                name: "disk".to_string(),
+            },
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 3;
+        let expected_buf = expected(
+            70,
+            height,
+            Some(DaemonStatus::Stopped),
+            "separator: unknown",
+            "modules 1-3/3",
+            &["cpu", "disk", "battery"],
+            &[],
+            "Remove disk? Confirm: d | Cancel: any key",
+        );
+        let expected_buf = with_reversed_row(expected_buf, 6, 70);
+        assert_eq!(render(&app, 70, height), expected_buf);
+    }
+
+    #[test]
+    fn draw_renders_help_title_content_and_hint() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::Help,
+            ..App::default()
+        };
+        let lines = help_lines();
+        let height = BASELINE_HEIGHT + lines.len() as u16;
+        let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        assert_eq!(
+            render(&app, 70, height),
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "help",
+                &line_refs,
+                &[],
+                "Close: ? or Esc",
+            )
+        );
+    }
+
+    #[test]
+    fn cursor_hidden_in_help_mode() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::Help,
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(!terminal.backend().cursor_visible());
+    }
+
+    #[test]
+    fn cursor_hidden_in_adding_module_mode() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::AddingModule {
+                available: vec!["cpu".to_string()],
+                selected: 0,
+                scroll_offset: 0,
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(!terminal.backend().cursor_visible());
+    }
+
+    #[test]
+    fn cursor_hidden_in_confirming_remove_mode() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            mode: Mode::ConfirmingRemove {
+                index: 0,
+                name: "cpu".to_string(),
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(!terminal.backend().cursor_visible());
     }
 }
