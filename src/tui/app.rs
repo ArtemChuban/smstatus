@@ -30,6 +30,7 @@ pub(super) struct App {
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,
+    pub(super) selected_index: Option<usize>,
 }
 
 impl App {
@@ -73,8 +74,12 @@ impl App {
             KeyCode::Char('s') => self.start_daemon(),
             KeyCode::Char('k') => self.stop_daemon(),
             KeyCode::Char('e') => self.begin_edit_separator(),
-            KeyCode::Up => self.scroll_modules_up(),
-            KeyCode::Down => self.scroll_modules_down(),
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_module_up(),
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.move_module_down()
+            }
+            KeyCode::Up => self.select_previous_module(),
+            KeyCode::Down => self.select_next_module(),
             _ => {}
         }
     }
@@ -177,11 +182,18 @@ impl App {
                         self.module_scroll_offset = self
                             .module_scroll_offset
                             .min(names.len().saturating_sub(self.modules_viewport_height));
+                        self.selected_index = if names.is_empty() {
+                            None
+                        } else {
+                            Some(self.selected_index.unwrap_or(0).min(names.len() - 1))
+                        };
                         self.modules = Some(names);
                         self.last_modules_error = None;
+                        self.ensure_selected_visible();
                     }
                     Err(err) => {
                         self.modules = None;
+                        self.selected_index = None;
                         let message = err.to_string();
                         if self.last_modules_error.as_deref() != Some(message.as_str()) {
                             self.push_action_message(format!("Failed to read modules: {message}"));
@@ -193,6 +205,7 @@ impl App {
             Err(err) => {
                 self.separator = None;
                 self.modules = None;
+                self.selected_index = None;
                 let message = err.to_string();
                 if self.last_separator_error.as_deref() != Some(message.as_str()) {
                     self.push_action_message(format!("Failed to read config: {message}"));
@@ -202,14 +215,79 @@ impl App {
         }
     }
 
-    fn scroll_modules_up(&mut self) {
-        self.module_scroll_offset = self.module_scroll_offset.saturating_sub(1);
+    fn ensure_selected_visible(&mut self) {
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+        let viewport = self.modules_viewport_height.max(1);
+        if idx < self.module_scroll_offset {
+            self.module_scroll_offset = idx;
+        } else if idx >= self.module_scroll_offset + viewport {
+            self.module_scroll_offset = idx + 1 - viewport;
+        }
     }
 
-    fn scroll_modules_down(&mut self) {
-        let total = self.modules.as_ref().map(|m| m.len()).unwrap_or(0);
-        let max = total.saturating_sub(self.modules_viewport_height);
-        self.module_scroll_offset = (self.module_scroll_offset + 1).min(max);
+    fn select_previous_module(&mut self) {
+        let Some(modules) = self.modules.as_ref() else {
+            return;
+        };
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+        if !modules.is_empty() && idx > 0 {
+            self.selected_index = Some(idx - 1);
+            self.ensure_selected_visible();
+        }
+    }
+
+    fn select_next_module(&mut self) {
+        let Some(modules) = self.modules.as_ref() else {
+            return;
+        };
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+        if idx + 1 < modules.len() {
+            self.selected_index = Some(idx + 1);
+            self.ensure_selected_visible();
+        }
+    }
+
+    fn move_module_up(&mut self) {
+        self.move_module(-1);
+    }
+
+    fn move_module_down(&mut self) {
+        self.move_module(1);
+    }
+
+    fn move_module(&mut self, delta: isize) {
+        let Some(modules) = self.modules.as_ref() else {
+            return;
+        };
+        let Some(idx) = self.selected_index else {
+            return;
+        };
+        let Some(target) = idx.checked_add_signed(delta).filter(|&t| t < modules.len()) else {
+            return;
+        };
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot reorder modules: config path unknown".to_string());
+            return;
+        };
+        let mut new_order = modules.clone();
+        new_order.swap(idx, target);
+        let name = modules[idx].clone();
+        match crate::config::BarConfig::write_module_order(&path, &new_order) {
+            Ok(()) => {
+                self.modules = Some(new_order);
+                self.selected_index = Some(target);
+                self.ensure_selected_visible();
+                let direction = if delta < 0 { "up" } else { "down" };
+                self.push_action_message(format!("Moved {name} {direction}"));
+            }
+            Err(err) => self.push_action_message(format!("Failed to reorder modules: {err}")),
+        }
     }
 
     pub(super) fn refresh_daemon_status(
@@ -1036,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_config_reload_clamps_scroll_offset_using_viewport_height() {
+    fn refresh_config_reload_clamps_selected_index_and_keeps_it_visible() {
         let path = unique_temp_path("reload-clamp-viewport");
         std::fs::write(
             &path,
@@ -1045,157 +1123,325 @@ mod tests {
         .unwrap();
         let mut app = App {
             config_path: Some(path.clone()),
-            module_scroll_offset: 4,
+            selected_index: Some(4),
+            module_scroll_offset: 0,
             modules_viewport_height: 2,
             ..App::default()
         };
 
         app.refresh_config();
+        assert_eq!(app.selected_index, Some(4));
         assert_eq!(app.module_scroll_offset, 3);
 
         std::fs::write(&path, "separator = \" | \"\nmodules = [\"m0\"]\n").unwrap();
         app.refresh_config();
         let _ = std::fs::remove_file(&path);
+        assert_eq!(app.selected_index, Some(0));
         assert_eq!(app.module_scroll_offset, 0);
     }
 
     #[test]
-    fn scroll_modules_up_saturates_at_zero() {
+    fn refresh_config_selected_index_resets_to_none_when_list_becomes_empty_then_to_zero_when_repopulated()
+     {
+        let path = unique_temp_path("selected-index-empty-cycle");
+        std::fs::write(
+            &path,
+            "separator = \" | \"\nmodules = [\"cpu\", \"disk\"]\n",
+        )
+        .unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+        app.refresh_config();
+        assert_eq!(app.selected_index, Some(0));
+
+        std::fs::write(&path, "separator = \" | \"\nmodules = []\n").unwrap();
+        app.refresh_config();
+        assert_eq!(app.selected_index, None);
+
+        std::fs::write(&path, "separator = \" | \"\nmodules = [\"cpu\"]\n").unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.selected_index, Some(0));
+    }
+
+    #[test]
+    fn refresh_config_resets_selected_index_to_none_when_whole_file_load_fails() {
+        let path = unique_temp_path("selected-index-whole-file-failure");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+        app.refresh_config();
+        assert_eq!(app.selected_index, Some(0));
+
+        std::fs::write(&path, "this is not valid toml [[[").unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.modules, None);
+        assert_eq!(app.selected_index, None);
+    }
+
+    #[test]
+    fn refresh_config_resets_selected_index_to_none_when_modules_key_becomes_missing() {
+        let path = unique_temp_path("selected-index-modules-key-missing");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+        app.refresh_config();
+        assert_eq!(app.selected_index, Some(0));
+
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.modules, None);
+        assert_eq!(app.selected_index, None);
+    }
+
+    #[test]
+    fn up_key_in_normal_mode_selects_previous_module() {
         let mut app = App {
             modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
-            module_scroll_offset: 0,
-            ..App::default()
-        };
-        app.scroll_modules_up();
-        assert_eq!(app.module_scroll_offset, 0);
-    }
-
-    #[test]
-    fn scroll_modules_down_saturates_at_len_minus_viewport_height() {
-        let mut app = App {
-            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
-            module_scroll_offset: 1,
-            modules_viewport_height: 1,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 1);
-    }
-
-    #[test]
-    fn scroll_modules_down_advances_offset_within_bounds() {
-        let mut app = App {
-            modules: Some(vec![
-                "cpu".to_string(),
-                "disk".to_string(),
-                "battery".to_string(),
-            ]),
-            module_scroll_offset: 0,
-            modules_viewport_height: 1,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 1);
-    }
-
-    #[test]
-    fn scroll_modules_down_is_noop_when_modules_is_none() {
-        let mut app = App {
-            modules: None,
-            module_scroll_offset: 0,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 0);
-    }
-
-    #[test]
-    fn scroll_modules_down_is_noop_when_modules_is_empty() {
-        let mut app = App {
-            modules: Some(vec![]),
-            module_scroll_offset: 0,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 0);
-    }
-
-    #[test]
-    fn scroll_modules_down_is_unclamped_when_viewport_height_is_zero() {
-        let mut app = App {
-            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
-            module_scroll_offset: 0,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 1);
-    }
-
-    #[test]
-    fn scroll_modules_down_does_not_scroll_when_everything_already_fits_in_the_viewport() {
-        let mut app = App {
-            modules: Some(vec![
-                "cpu".to_string(),
-                "disk".to_string(),
-                "battery".to_string(),
-            ]),
-            module_scroll_offset: 0,
-            modules_viewport_height: 10,
-            ..App::default()
-        };
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 0);
-        app.scroll_modules_down();
-        assert_eq!(app.module_scroll_offset, 0);
-    }
-
-    #[test]
-    fn scroll_modules_down_caps_exactly_at_total_minus_viewport_height_for_various_heights() {
-        let modules = vec![
-            "m0".to_string(),
-            "m1".to_string(),
-            "m2".to_string(),
-            "m3".to_string(),
-            "m4".to_string(),
-        ];
-        for viewport_height in [0, 1, 2, 3, 4, 5, 10] {
-            let expected_max = modules.len().saturating_sub(viewport_height);
-            let mut app = App {
-                modules: Some(modules.clone()),
-                module_scroll_offset: 0,
-                modules_viewport_height: viewport_height,
-                ..App::default()
-            };
-            for _ in 0..(modules.len() + 5) {
-                app.scroll_modules_down();
-            }
-            assert_eq!(
-                app.module_scroll_offset, expected_max,
-                "viewport_height={viewport_height}"
-            );
-        }
-    }
-
-    #[test]
-    fn up_key_in_normal_mode_scrolls_modules_up() {
-        let mut app = App {
-            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
-            module_scroll_offset: 1,
+            selected_index: Some(1),
             ..App::default()
         };
         app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(app.module_scroll_offset, 0);
+        assert_eq!(app.selected_index, Some(0));
     }
 
     #[test]
-    fn down_key_in_normal_mode_scrolls_modules_down() {
+    fn down_key_in_normal_mode_selects_next_module() {
         let mut app = App {
             modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
-            module_scroll_offset: 0,
+            selected_index: Some(0),
             ..App::default()
         };
         app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn select_previous_module_is_noop_at_top() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.select_previous_module();
+        assert_eq!(app.selected_index, Some(0));
+    }
+
+    #[test]
+    fn select_next_module_is_noop_at_bottom() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.select_next_module();
+        assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn select_next_module_is_noop_when_modules_is_none() {
+        let mut app = App {
+            modules: None,
+            selected_index: None,
+            ..App::default()
+        };
+        app.select_next_module();
+        assert_eq!(app.selected_index, None);
+    }
+
+    #[test]
+    fn select_next_module_pulls_scroll_offset_down_when_selection_moves_below_viewport() {
+        let mut app = App {
+            modules: Some(vec![
+                "m0".to_string(),
+                "m1".to_string(),
+                "m2".to_string(),
+                "m3".to_string(),
+            ]),
+            selected_index: Some(1),
+            module_scroll_offset: 0,
+            modules_viewport_height: 2,
+            ..App::default()
+        };
+        app.select_next_module();
+        assert_eq!(app.selected_index, Some(2));
         assert_eq!(app.module_scroll_offset, 1);
+    }
+
+    #[test]
+    fn select_previous_module_pulls_scroll_offset_up_when_selection_moves_above_viewport() {
+        let mut app = App {
+            modules: Some(vec![
+                "m0".to_string(),
+                "m1".to_string(),
+                "m2".to_string(),
+                "m3".to_string(),
+            ]),
+            selected_index: Some(2),
+            module_scroll_offset: 2,
+            modules_viewport_height: 2,
+            ..App::default()
+        };
+        app.select_previous_module();
+        assert_eq!(app.selected_index, Some(1));
+        assert_eq!(app.module_scroll_offset, 1);
+    }
+
+    #[test]
+    fn move_module_up_swaps_with_previous_and_persists() {
+        let path = unique_temp_path("move-up");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            app.modules,
+            Some(vec![
+                "disk".to_string(),
+                "cpu".to_string(),
+                "battery".to_string()
+            ])
+        );
+        assert_eq!(app.selected_index, Some(0));
+        assert_eq!(app.action_log, vec!["Moved disk up"]);
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        let names: Vec<&str> = doc["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["disk", "cpu", "battery"]);
+    }
+
+    #[test]
+    fn move_module_down_swaps_with_next_and_persists() {
+        let path = unique_temp_path("move-down");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            app.modules,
+            Some(vec![
+                "cpu".to_string(),
+                "battery".to_string(),
+                "disk".to_string()
+            ])
+        );
+        assert_eq!(app.selected_index, Some(2));
+        assert_eq!(app.action_log, vec!["Moved disk down"]);
+    }
+
+    #[test]
+    fn move_module_up_at_top_is_noop_no_write_no_log() {
+        let path = unique_temp_path("move-up-top-noop");
+        let mut app = App {
+            config_path: Some(path),
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(app.selected_index, Some(0));
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn move_module_down_at_bottom_is_noop_no_write_no_log() {
+        let path = unique_temp_path("move-down-bottom-noop");
+        let mut app = App {
+            config_path: Some(path),
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL));
+        assert_eq!(app.selected_index, Some(1));
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn move_module_without_config_path_logs_failure() {
+        let mut app = App {
+            config_path: None,
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.action_log,
+            vec!["cannot reorder modules: config path unknown"]
+        );
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn move_module_when_write_fails_logs_failure_and_leaves_state_unchanged() {
+        let path = unique_temp_path("move-write-fails");
+        let mut app = App {
+            config_path: Some(path),
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to reorder modules:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk".to_string()])
+        );
+        assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn move_module_is_noop_when_modules_is_none() {
+        let mut app = App {
+            modules: None,
+            selected_index: None,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
+        assert!(app.action_log.is_empty());
     }
 
     #[test]

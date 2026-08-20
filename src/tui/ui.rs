@@ -2,8 +2,10 @@ use std::borrow::Cow;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use super::app::{ACTION_LOG_CAPACITY, App, Mode};
 
@@ -115,10 +117,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
             .border_type(BorderType::Rounded);
         let modules_inner = modules_block.inner(areas.modules);
         frame.render_widget(modules_block, areas.modules);
-        let module_lines: Vec<Line> = visible_module_lines(app, viewport_height)
-            .into_iter()
-            .map(Line::from)
-            .collect();
+        let module_lines = visible_module_lines(app, viewport_height, modules_inner.width);
         frame.render_widget(Paragraph::new(module_lines), modules_inner);
     }
 
@@ -183,7 +182,7 @@ fn separator_cursor_column(area_x: u16, buffer: &str, cursor: usize) -> u16 {
 fn hint_line(mode: &Mode) -> Cow<'static, str> {
     match mode {
         Mode::Normal => Cow::Borrowed(
-            "Quit: q | Start: s | Kill: k | Edit separator: e | Scroll: \u{2191}/\u{2193}",
+            "Quit: q | Start: s | Kill: k | Edit separator: e | Select: \u{2191}/\u{2193} | Move: Ctrl+\u{2191}/\u{2193}",
         ),
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
     }
@@ -215,13 +214,28 @@ fn modules_title(app: &App, viewport_height: usize) -> String {
     boxed_title(&text)
 }
 
-fn visible_module_lines(app: &App, viewport_height: usize) -> Vec<String> {
+fn visible_module_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Line<'static>> {
     let Some(modules) = &app.modules else {
         return Vec::new();
     };
     let (start, end, _total) =
         module_window(modules.len(), app.module_scroll_offset, viewport_height);
-    modules[start..end].to_vec()
+    modules[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            if Some(start + i) == app.selected_index {
+                let display_width = name.width();
+                let padding = " ".repeat((width as usize).saturating_sub(display_width));
+                Line::styled(
+                    format!("{name}{padding}"),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                )
+            } else {
+                Line::from(name.clone())
+            }
+        })
+        .collect()
 }
 
 fn action_log_lines(action_log: &[String]) -> Vec<String> {
@@ -350,8 +364,7 @@ mod tests {
         Buffer::with_lines(rows)
     }
 
-    const NORMAL_HINT: &str =
-        "Quit: q | Start: s | Kill: k | Edit separator: e | Scroll: \u{2191}/\u{2193}";
+    const NORMAL_HINT: &str = "Quit: q | Start: s | Kill: k | Edit separator: e | Select: \u{2191}/\u{2193} | Move: Ctrl+\u{2191}/\u{2193}";
 
     const BASELINE_HEIGHT: u16 = 13;
 
@@ -791,6 +804,92 @@ mod tests {
                 NORMAL_HINT,
             )
         );
+    }
+
+    #[test]
+    fn selected_module_row_is_rendered_with_reversed_style() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: Some(1),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 3;
+        let buffer = render(&app, 70, height);
+
+        for x in 2..68 {
+            assert!(
+                buffer[(x, 6)].modifier.contains(Modifier::REVERSED),
+                "expected selected row (y=6) to be reversed-styled at x={x}"
+            );
+        }
+        for &y in &[5u16, 7u16] {
+            for x in 2..68 {
+                assert!(
+                    !buffer[(x, y)].modifier.contains(Modifier::REVERSED),
+                    "expected unselected row (y={y}) not to be reversed-styled at x={x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_module_row_style_follows_selection_when_scrolled() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec![
+                "m0".to_string(),
+                "m1".to_string(),
+                "m2".to_string(),
+                "m3".to_string(),
+                "m4".to_string(),
+                "m5".to_string(),
+            ]),
+            module_scroll_offset: 2,
+            selected_index: Some(3),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 2;
+        let buffer = render(&app, 70, height);
+
+        for x in 2..68 {
+            assert!(
+                !buffer[(x, 5)].modifier.contains(Modifier::REVERSED),
+                "expected first visible row (y=5, m2) not to be reversed-styled at x={x}"
+            );
+            assert!(
+                buffer[(x, 6)].modifier.contains(Modifier::REVERSED),
+                "expected second visible row (y=6, m3, the selected one) to be reversed-styled at x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_module_row_is_reversed_styled_when_selection_is_none() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            selected_index: None,
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 3;
+        let buffer = render(&app, 70, height);
+        for y in 5..=7u16 {
+            for x in 0..70 {
+                assert!(
+                    !buffer[(x, y)].modifier.contains(Modifier::REVERSED),
+                    "expected no reversed styling at ({x},{y}) when nothing is selected"
+                );
+            }
+        }
     }
 
     #[test]

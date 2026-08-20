@@ -2479,6 +2479,7 @@ dependencies = [
  "serde_json",
  "toml",
  "toml_edit",
+ "unicode-width",
  "ureq",
  "wasmtime",
  "wasmtime-wasi",

@@ -24,15 +24,70 @@ impl BarConfig {
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
         doc["separator"] = toml_edit::value(new_value);
+        atomic_write(path, &doc.to_string())
+    }
 
-        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-        std::fs::write(&tmp_path, doc.to_string())
-            .map_err(|e| format!("cannot write {}: {e}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("cannot replace {}: {e}", path.display())
-        })?;
-        Ok(())
+    pub(crate) fn write_module_order(path: &Path, modules: &[String]) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let array = doc
+            .get_mut("modules")
+            .and_then(|item| item.as_array_mut())
+            .ok_or_else(|| format!("{}: `modules` is not an array", path.display()))?;
+
+        let mut current: Vec<String> = Vec::with_capacity(array.len());
+        for item in array.iter() {
+            match item.as_str() {
+                Some(s) => current.push(s.to_string()),
+                None => {
+                    return Err(
+                        format!("{}: `modules` entries must be strings", path.display()).into(),
+                    );
+                }
+            }
+        }
+        let mut current_sorted = current.clone();
+        current_sorted.sort_unstable();
+        let mut modules_sorted = modules.to_vec();
+        modules_sorted.sort_unstable();
+        if current_sorted != modules_sorted {
+            return Err(format!(
+                "{}: modules list changed on disk since it was last loaded; reload and try again",
+                path.display()
+            )
+            .into());
+        }
+
+        let mut indices_by_name: std::collections::HashMap<&str, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, name) in current.iter().enumerate() {
+            indices_by_name.entry(name.as_str()).or_default().push(i);
+        }
+        let mut originals: Vec<Option<toml_edit::Value>> = Vec::with_capacity(current.len());
+        for _ in 0..current.len() {
+            originals.push(Some(array.remove(0)));
+        }
+        for target_name in modules {
+            let idx = indices_by_name
+                .get_mut(target_name.as_str())
+                .and_then(|indices| {
+                    if indices.is_empty() {
+                        None
+                    } else {
+                        Some(indices.remove(0))
+                    }
+                })
+                .expect("the content-equality check above guarantees a matching original index");
+            let value = originals[idx]
+                .take()
+                .expect("each original index is drained exactly once");
+            array.push_formatted(value);
+        }
+
+        atomic_write(path, &doc.to_string())
     }
 
     pub(crate) fn module_config_json(&self, module_name: &str) -> String {
@@ -80,6 +135,17 @@ impl BarConfig {
     fn from_table(table: toml::Table) -> Self {
         Self(table)
     }
+}
+
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| format!("cannot write {}: {e}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("cannot replace {}: {e}", path.display())
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -200,6 +266,125 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_order_swaps_entries_while_preserving_comments_and_other_keys() {
+        let path = unique_temp_path("module-order-preserve");
+        std::fs::write(
+            &path,
+            "# a helpful comment\nother_key = \"other_value\"\nmodules = [\"cpu\", \"disk\" # keep disk\n, \"battery\"]\n",
+        )
+        .unwrap();
+
+        let result = BarConfig::write_module_order(
+            &path,
+            &["disk".to_string(), "cpu".to_string(), "battery".to_string()],
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(content.contains("# a helpful comment"));
+        assert!(content.contains("other_key = \"other_value\""));
+        assert!(content.contains("# keep disk"));
+
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        let array = doc["modules"].as_array().unwrap();
+        let names: Vec<&str> = array.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(names, vec!["disk", "cpu", "battery"]);
+
+        assert!(content.contains("\"disk\" # keep disk"));
+        assert!(!content.contains("\"cpu\" # keep disk"));
+    }
+
+    #[test]
+    fn write_module_order_errors_when_modules_key_missing() {
+        let path = unique_temp_path("module-order-missing-key");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+
+        let result = BarConfig::write_module_order(&path, &["cpu".to_string()]);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_order_errors_when_modules_is_not_an_array() {
+        let path = unique_temp_path("module-order-not-array");
+        std::fs::write(&path, "modules = \"not-a-list\"\n").unwrap();
+
+        let result = BarConfig::write_module_order(&path, &["cpu".to_string()]);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_order_errors_on_length_mismatch() {
+        let path = unique_temp_path("module-order-length-mismatch");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+
+        let result = BarConfig::write_module_order(&path, &["cpu".to_string()]);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_order_errors_when_an_entry_was_renamed_on_disk() {
+        let path = unique_temp_path("module-order-renamed-entry");
+        std::fs::write(&path, "modules = [\"cpu\", \"ram\"]\n").unwrap();
+
+        let result = BarConfig::write_module_order(&path, &["disk".to_string(), "cpu".to_string()]);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            result.is_err(),
+            "expected an error when the on-disk entry no longer matches the last-loaded list"
+        );
+    }
+
+    #[test]
+    fn write_module_order_errors_when_file_does_not_exist() {
+        let path = unique_temp_path("module-order-missing-file");
+        let result = BarConfig::write_module_order(&path, &["cpu".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_order_cleans_up_temp_file_when_rename_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_temp_path("module-order-rename-fail-dir");
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = BarConfig::write_module_order(&path, &["disk".to_string(), "cpu".to_string()]);
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
+        if result.is_ok() {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+            eprintln!(
+                "skipping assertions in write_module_order_cleans_up_temp_file_when_rename_fails: rename unexpectedly succeeded (likely running as root)"
+            );
+            return;
+        }
+
+        assert!(
+            !tmp_path.exists(),
+            "temp file should have been cleaned up after rename failure"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
