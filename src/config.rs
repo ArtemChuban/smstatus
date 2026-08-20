@@ -38,17 +38,7 @@ impl BarConfig {
             .and_then(|item| item.as_array_mut())
             .ok_or_else(|| format!("{}: `modules` is not an array", path.display()))?;
 
-        let mut current: Vec<String> = Vec::with_capacity(array.len());
-        for item in array.iter() {
-            match item.as_str() {
-                Some(s) => current.push(s.to_string()),
-                None => {
-                    return Err(
-                        format!("{}: `modules` entries must be strings", path.display()).into(),
-                    );
-                }
-            }
-        }
+        let current = extract_module_strings(array, path)?;
         let mut current_sorted = current.clone();
         current_sorted.sort_unstable();
         let mut modules_sorted = modules.to_vec();
@@ -87,6 +77,77 @@ impl BarConfig {
             array.push_formatted(value);
         }
 
+        atomic_write(path, &doc.to_string())
+    }
+
+    pub(crate) fn write_module_add(
+        path: &Path,
+        expected_current: &[String],
+        new_entry: &str,
+    ) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let array = doc
+            .get_mut("modules")
+            .and_then(|item| item.as_array_mut())
+            .ok_or_else(|| format!("{}: `modules` is not an array", path.display()))?;
+
+        let current = extract_module_strings(array, path)?;
+        if current != expected_current {
+            return Err(format!(
+                "{}: modules list changed on disk since it was last loaded; reload and try again",
+                path.display()
+            )
+            .into());
+        }
+        if current.iter().any(|m| m == new_entry) {
+            return Err(format!(
+                "{}: module `{new_entry}` is already present",
+                path.display()
+            )
+            .into());
+        }
+
+        array.push(new_entry);
+        atomic_write(path, &doc.to_string())
+    }
+
+    pub(crate) fn write_module_remove(
+        path: &Path,
+        expected_current: &[String],
+        remove_index: usize,
+    ) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let array = doc
+            .get_mut("modules")
+            .and_then(|item| item.as_array_mut())
+            .ok_or_else(|| format!("{}: `modules` is not an array", path.display()))?;
+
+        let current = extract_module_strings(array, path)?;
+        if current != expected_current {
+            return Err(format!(
+                "{}: modules list changed on disk since it was last loaded; reload and try again",
+                path.display()
+            )
+            .into());
+        }
+        if remove_index >= expected_current.len() {
+            return Err(format!(
+                "{}: remove index {remove_index} out of range for a {}-entry list",
+                path.display(),
+                expected_current.len()
+            )
+            .into());
+        }
+
+        array.remove(remove_index);
         atomic_write(path, &doc.to_string())
     }
 
@@ -135,6 +196,42 @@ impl BarConfig {
     fn from_table(table: toml::Table) -> Self {
         Self(table)
     }
+}
+
+fn extract_module_strings(array: &toml_edit::Array, path: &Path) -> Result<Vec<String>> {
+    let mut current: Vec<String> = Vec::with_capacity(array.len());
+    for item in array.iter() {
+        match item.as_str() {
+            Some(s) => current.push(s.to_string()),
+            None => {
+                return Err(
+                    format!("{}: `modules` entries must be strings", path.display()).into(),
+                );
+            }
+        }
+    }
+    Ok(current)
+}
+
+pub(crate) fn discover_module_kinds(modules_dir: &Path) -> Result<Vec<String>> {
+    if !modules_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut kinds = Vec::new();
+    for entry in std::fs::read_dir(modules_dir)
+        .map_err(|e| format!("cannot read {}: {e}", modules_dir.display()))?
+    {
+        let entry =
+            entry.map_err(|e| format!("cannot read entry in {}: {e}", modules_dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("wasm")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            kinds.push(stem.to_string());
+        }
+    }
+    kinds.sort_unstable();
+    Ok(kinds)
 }
 
 fn atomic_write(path: &Path, content: &str) -> Result<()> {
@@ -385,6 +482,222 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn write_module_add_appends_new_entry_while_preserving_comments_and_other_keys() {
+        let path = unique_temp_path("module-add-preserve");
+        std::fs::write(
+            &path,
+            "# a helpful comment\nother_key = \"other_value\"\nmodules = [\"cpu\", \"disk\"]\n",
+        )
+        .unwrap();
+
+        let result =
+            BarConfig::write_module_add(&path, &["cpu".to_string(), "disk".to_string()], "battery");
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(content.contains("# a helpful comment"));
+        assert!(content.contains("other_key = \"other_value\""));
+
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        let names: Vec<&str> = doc["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["cpu", "disk", "battery"]);
+    }
+
+    #[test]
+    fn write_module_add_errors_when_entry_already_present() {
+        let path = unique_temp_path("module-add-already-present");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+
+        let result =
+            BarConfig::write_module_add(&path, &["cpu".to_string(), "disk".to_string()], "disk");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_add_errors_when_current_list_does_not_match_expected() {
+        let path = unique_temp_path("module-add-mismatch");
+        std::fs::write(&path, "modules = [\"cpu\", \"ram\"]\n").unwrap();
+
+        let result =
+            BarConfig::write_module_add(&path, &["cpu".to_string(), "disk".to_string()], "battery");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_add_errors_when_modules_key_missing() {
+        let path = unique_temp_path("module-add-missing-key");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+
+        let result = BarConfig::write_module_add(&path, &[], "cpu");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_add_errors_when_file_does_not_exist() {
+        let path = unique_temp_path("module-add-missing-file");
+        let result = BarConfig::write_module_add(&path, &[], "cpu");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_remove_removes_entry_while_preserving_neighbor_comments() {
+        let path = unique_temp_path("module-remove-preserve");
+        std::fs::write(
+            &path,
+            "modules = [\"cpu\", \"disk\" # keep disk\n, \"battery\"]\n",
+        )
+        .unwrap();
+
+        let result = BarConfig::write_module_remove(
+            &path,
+            &["cpu".to_string(), "disk".to_string(), "battery".to_string()],
+            0,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(content.contains("# keep disk"));
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        let names: Vec<&str> = doc["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["disk", "battery"]);
+    }
+
+    #[test]
+    fn write_module_remove_errors_when_current_list_does_not_match_expected() {
+        let path = unique_temp_path("module-remove-mismatch");
+        std::fs::write(&path, "modules = [\"cpu\", \"ram\"]\n").unwrap();
+
+        let result =
+            BarConfig::write_module_remove(&path, &["cpu".to_string(), "disk".to_string()], 0);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_remove_errors_when_index_out_of_range() {
+        let path = unique_temp_path("module-remove-out-of-range");
+        std::fs::write(&path, "modules = [\"cpu\", \"disk\"]\n").unwrap();
+
+        let result =
+            BarConfig::write_module_remove(&path, &["cpu".to_string(), "disk".to_string()], 2);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_remove_can_shrink_list_to_empty_array() {
+        let path = unique_temp_path("module-remove-to-empty");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+
+        let result = BarConfig::write_module_remove(&path, &["cpu".to_string()], 0);
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        let names: Vec<&str> = doc["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn discover_module_kinds_lists_wasm_stems_sorted() {
+        let dir = unique_temp_path("discover-sorted-dir");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("ram.wasm"), b"").unwrap();
+        std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
+        std::fs::write(dir.join("battery.wasm"), b"").unwrap();
+
+        let result = discover_module_kinds(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(result, vec!["battery", "cpu", "ram"]);
+    }
+
+    #[test]
+    fn discover_module_kinds_ignores_non_wasm_files() {
+        let dir = unique_temp_path("discover-ignores-non-wasm");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
+        std::fs::write(dir.join("README.md"), b"").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+
+        let result = discover_module_kinds(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(result, vec!["cpu"]);
+    }
+
+    #[test]
+    fn discover_module_kinds_returns_empty_vec_when_directory_missing() {
+        let dir = unique_temp_path("discover-missing-dir");
+        let result = discover_module_kinds(&dir);
+        assert_eq!(result.unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn discover_module_kinds_returns_empty_vec_for_empty_directory() {
+        let dir = unique_temp_path("discover-empty-dir");
+        std::fs::create_dir(&dir).unwrap();
+
+        let result = discover_module_kinds(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(result, Vec::<String>::new());
+    }
+
+    #[test]
+    fn discover_module_kinds_propagates_other_io_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_temp_path("discover-no-read-perm-dir");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = discover_module_kinds(&dir);
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        if result.is_ok() {
+            let _ = std::fs::remove_dir(&dir);
+            eprintln!(
+                "skipping assertions in discover_module_kinds_propagates_other_io_errors: read_dir unexpectedly succeeded (likely running as root)"
+            );
+            return;
+        }
+
+        let _ = std::fs::remove_dir(&dir);
+        assert!(result.is_err());
     }
 
     #[test]
