@@ -23,6 +23,9 @@ pub(super) struct App {
     pub(super) separator: Option<String>,
     pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
     pub(super) last_separator_error: Option<String>,
+    pub(super) modules: Option<Vec<String>>,
+    pub(super) last_modules_error: Option<String>,
+    pub(super) module_scroll_offset: usize,
 }
 
 impl App {
@@ -43,7 +46,7 @@ impl App {
                     }
                 }
                 app.config_path = Some(config_path);
-                app.refresh_separator();
+                app.refresh_config();
             }
             Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
         }
@@ -66,6 +69,8 @@ impl App {
             KeyCode::Char('s') => self.start_daemon(),
             KeyCode::Char('k') => self.stop_daemon(),
             KeyCode::Char('e') => self.begin_edit_separator(),
+            KeyCode::Up => self.scroll_modules_up(),
+            KeyCode::Down => self.scroll_modules_down(),
             _ => {}
         }
     }
@@ -131,11 +136,11 @@ impl App {
             .map(|watcher| watcher.try_reload())
             .unwrap_or(false);
         if reloaded {
-            self.refresh_separator();
+            self.refresh_config();
         }
     }
 
-    fn refresh_separator(&mut self) {
+    fn refresh_config(&mut self) {
         let Some(path) = self.config_path.as_deref() else {
             return;
         };
@@ -143,16 +148,46 @@ impl App {
             Ok(config) => {
                 self.separator = Some(config.separator());
                 self.last_separator_error = None;
+                match config.module_names() {
+                    Ok(names) => {
+                        self.module_scroll_offset =
+                            self.module_scroll_offset.min(names.len().saturating_sub(1));
+                        self.modules = Some(names);
+                        self.last_modules_error = None;
+                    }
+                    Err(err) => {
+                        self.modules = None;
+                        let message = err.to_string();
+                        if self.last_modules_error.as_deref() != Some(message.as_str()) {
+                            self.push_action_message(format!("Failed to read modules: {message}"));
+                            self.last_modules_error = Some(message);
+                        }
+                    }
+                }
             }
             Err(err) => {
                 self.separator = None;
+                self.modules = None;
                 let message = err.to_string();
                 if self.last_separator_error.as_deref() != Some(message.as_str()) {
-                    self.push_action_message(format!("Failed to read separator: {message}"));
+                    self.push_action_message(format!("Failed to read config: {message}"));
                     self.last_separator_error = Some(message);
                 }
             }
         }
+    }
+
+    fn scroll_modules_up(&mut self) {
+        self.module_scroll_offset = self.module_scroll_offset.saturating_sub(1);
+    }
+
+    fn scroll_modules_down(&mut self) {
+        let max = self
+            .modules
+            .as_ref()
+            .map(|m| m.len().saturating_sub(1))
+            .unwrap_or(0);
+        self.module_scroll_offset = (self.module_scroll_offset + 1).min(max);
     }
 
     pub(super) fn refresh_daemon_status(
@@ -647,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_separator_logs_once_for_a_persisting_error() {
+    fn refresh_config_logs_once_for_a_persisting_error() {
         let path = unique_temp_path("invalid-toml");
         std::fs::write(&path, "this is not valid toml [[[").unwrap();
         let mut app = App {
@@ -655,23 +690,23 @@ mod tests {
             ..App::default()
         };
 
-        app.refresh_separator();
+        app.refresh_config();
         assert_eq!(app.separator, None);
         assert_eq!(app.action_log.len(), 1);
         assert!(
-            app.action_log[0].starts_with("Failed to read separator:"),
+            app.action_log[0].starts_with("Failed to read config:"),
             "unexpected message: {}",
             app.action_log[0]
         );
         assert!(app.last_separator_error.is_some());
 
-        app.refresh_separator();
+        app.refresh_config();
         let _ = std::fs::remove_file(&path);
         assert_eq!(app.action_log.len(), 1);
     }
 
     #[test]
-    fn refresh_separator_recovers_and_clears_dedup_state_once_file_is_fixed() {
+    fn refresh_config_recovers_and_clears_dedup_state_once_file_is_fixed() {
         let path = unique_temp_path("recovers");
         std::fs::write(&path, "this is not valid toml [[[").unwrap();
         let mut app = App {
@@ -679,17 +714,191 @@ mod tests {
             ..App::default()
         };
 
-        app.refresh_separator();
+        app.refresh_config();
         assert_eq!(app.action_log.len(), 1);
         assert!(app.last_separator_error.is_some());
 
-        std::fs::write(&path, "separator = \" :: \"\n").unwrap();
-        app.refresh_separator();
+        std::fs::write(&path, "separator = \" :: \"\nmodules = [\"cpu\"]\n").unwrap();
+        app.refresh_config();
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(app.separator, Some(" :: ".to_string()));
         assert!(app.last_separator_error.is_none());
+        assert_eq!(app.modules, Some(vec!["cpu".to_string()]));
         assert_eq!(app.action_log.len(), 1);
+    }
+
+    #[test]
+    fn refresh_config_missing_modules_key_does_not_clobber_working_separator() {
+        let path = unique_temp_path("missing-modules");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.separator, Some(" | ".to_string()));
+        assert_eq!(app.modules, None);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to read modules:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert!(app.last_modules_error.is_some());
+        assert!(app.last_separator_error.is_none());
+    }
+
+    #[test]
+    fn refresh_config_logs_modules_error_once_for_a_persisting_error() {
+        let path = unique_temp_path("modules-persisting-error");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+
+        app.refresh_config();
+        assert_eq!(app.action_log.len(), 1);
+        assert!(app.last_modules_error.is_some());
+
+        app.refresh_config();
+        assert_eq!(app.action_log.len(), 1);
+
+        std::fs::write(
+            &path,
+            "separator = \" | \"\nmodules = [\"cpu\", \"disk#root\"]\n",
+        )
+        .unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            app.modules,
+            Some(vec!["cpu".to_string(), "disk#root".to_string()])
+        );
+        assert!(app.last_modules_error.is_none());
+        assert_eq!(app.action_log.len(), 1);
+    }
+
+    #[test]
+    fn refresh_config_does_not_reflap_a_persisting_modules_error_across_a_whole_file_failure() {
+        let path = unique_temp_path("modules-error-survives-whole-file-failure");
+        let working_separator_malformed_modules = "separator = \" | \"\nmodules = \"not-a-list\"\n";
+        std::fs::write(&path, working_separator_malformed_modules).unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+
+        app.refresh_config();
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to read modules:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert!(app.last_modules_error.is_some());
+        let modules_error = app.last_modules_error.clone();
+
+        std::fs::write(&path, "this is not valid toml [[[").unwrap();
+        app.refresh_config();
+        assert_eq!(app.action_log.len(), 2);
+        assert!(
+            app.action_log[1].starts_with("Failed to read config:"),
+            "unexpected message: {}",
+            app.action_log[1]
+        );
+        assert_eq!(app.last_modules_error, modules_error);
+
+        std::fs::write(&path, working_separator_malformed_modules).unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.action_log.len(), 2);
+    }
+
+    #[test]
+    fn scroll_modules_up_saturates_at_zero() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.scroll_modules_up();
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_modules_down_saturates_at_len_minus_one() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            module_scroll_offset: 1,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 1);
+    }
+
+    #[test]
+    fn scroll_modules_down_advances_offset_within_bounds() {
+        let mut app = App {
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 1);
+    }
+
+    #[test]
+    fn scroll_modules_down_is_noop_when_modules_is_none() {
+        let mut app = App {
+            modules: None,
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_modules_down_is_noop_when_modules_is_empty() {
+        let mut app = App {
+            modules: Some(vec![]),
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
+    fn up_key_in_normal_mode_scrolls_modules_up() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            module_scroll_offset: 1,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
+    fn down_key_in_normal_mode_scrolls_modules_down() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.module_scroll_offset, 1);
     }
 
     #[test]
