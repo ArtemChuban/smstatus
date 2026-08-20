@@ -27,9 +27,7 @@ pub(crate) fn run() -> Result<()> {
     wasm_config.consume_fuel(true);
     let engine = Engine::new(&wasm_config)?;
 
-    let config_dir: PathBuf = dirs::config_dir()
-        .ok_or("could not determine config directory")?
-        .join("smstatus");
+    let config_dir: PathBuf = crate::config::default_config_dir()?;
     let modules_dir = config_dir.join("modules");
     let config_path = config_dir.join("config.toml");
     let mut config = BarConfig::load(&config_path)?;
