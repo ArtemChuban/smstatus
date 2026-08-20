@@ -163,6 +163,31 @@ impl ReloadWatcher {
             }
         }
     }
+
+    pub(crate) fn try_reload(&mut self) -> bool {
+        if !self.alive {
+            return false;
+        }
+        match self.reload_rx.try_recv() {
+            Ok(first) => {
+                let mut config = false;
+                let mut kinds = Vec::new();
+                apply_event(first, &mut config, &mut kinds);
+                while let Ok(event) = self.reload_rx.try_recv() {
+                    apply_event(event, &mut config, &mut kinds);
+                }
+                config
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                eprintln!(
+                    "reload watcher channel disconnected; disabling hot-reload for the rest of this run"
+                );
+                self.alive = false;
+                false
+            }
+        }
+    }
 }
 
 #[cfg(test)]

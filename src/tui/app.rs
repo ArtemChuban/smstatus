@@ -1,6 +1,15 @@
+use std::path::PathBuf;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(super) const ACTION_LOG_CAPACITY: usize = 3;
+
+#[derive(Default, PartialEq, Eq, Debug)]
+pub(super) enum Mode {
+    #[default]
+    Normal,
+    EditingSeparator(String),
+}
 
 #[derive(Default)]
 pub(super) struct App {
@@ -9,10 +18,46 @@ pub(super) struct App {
     pub(super) action_log: Vec<String>,
     pub(super) pending_start: Option<std::process::Child>,
     pub(super) pending_start_confirmed_running: bool,
+    pub(super) mode: Mode,
+    pub(super) config_path: Option<PathBuf>,
+    pub(super) separator: Option<String>,
+    pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
+    pub(super) last_separator_error: Option<String>,
 }
 
 impl App {
+    pub(super) fn new() -> Self {
+        let mut app = Self::default();
+        match crate::config::default_config_dir() {
+            Ok(config_dir) => {
+                let config_path = config_dir.join("config.toml");
+                let modules_dir = config_dir.join("modules");
+                match crate::watcher::ReloadWatcher::new(
+                    &config_dir,
+                    config_path.clone(),
+                    modules_dir,
+                ) {
+                    Ok(watcher) => app.config_watcher = Some(watcher),
+                    Err(err) => {
+                        app.push_action_message(format!("config hot-reload unavailable: {err}"))
+                    }
+                }
+                app.config_path = Some(config_path);
+                app.refresh_separator();
+            }
+            Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
+        }
+        app
+    }
+
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
+        match self.mode {
+            Mode::EditingSeparator(_) => self.handle_key_editing_separator(key),
+            Mode::Normal => self.handle_key_normal(key),
+        }
+    }
+
+    fn handle_key_normal(&mut self, key: KeyEvent) {
         if is_quit(key) {
             self.should_quit = true;
             return;
@@ -20,7 +65,93 @@ impl App {
         match key.code {
             KeyCode::Char('s') => self.start_daemon(),
             KeyCode::Char('k') => self.stop_daemon(),
+            KeyCode::Char('e') => self.begin_edit_separator(),
             _ => {}
+        }
+    }
+
+    fn handle_key_editing_separator(&mut self, key: KeyEvent) {
+        if is_hard_quit(key) {
+            self.should_quit = true;
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.cancel_edit_separator(),
+            KeyCode::Enter => self.commit_edit_separator(),
+            KeyCode::Backspace => {
+                if let Mode::EditingSeparator(buffer) = &mut self.mode {
+                    buffer.pop();
+                }
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                if let Mode::EditingSeparator(buffer) = &mut self.mode {
+                    buffer.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn begin_edit_separator(&mut self) {
+        if self.config_path.is_none() {
+            self.push_action_message("cannot edit separator: config path unknown".to_string());
+            return;
+        }
+        let initial = self.separator.clone().unwrap_or_default();
+        self.mode = Mode::EditingSeparator(initial);
+    }
+
+    fn cancel_edit_separator(&mut self) {
+        self.mode = Mode::Normal;
+    }
+
+    fn commit_edit_separator(&mut self) {
+        let Mode::EditingSeparator(value) = std::mem::take(&mut self.mode) else {
+            return;
+        };
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot save separator: config path unknown".to_string());
+            return;
+        };
+        match crate::config::BarConfig::write_separator(&path, &value) {
+            Ok(()) => {
+                self.separator = Some(value);
+                self.push_action_message("Separator updated".to_string());
+            }
+            Err(err) => self.push_action_message(format!("Failed to update separator: {err}")),
+        }
+    }
+
+    pub(super) fn poll_config_changes(&mut self) {
+        let reloaded = self
+            .config_watcher
+            .as_mut()
+            .map(|watcher| watcher.try_reload())
+            .unwrap_or(false);
+        if reloaded {
+            self.refresh_separator();
+        }
+    }
+
+    fn refresh_separator(&mut self) {
+        let Some(path) = self.config_path.as_deref() else {
+            return;
+        };
+        match crate::config::BarConfig::load(path) {
+            Ok(config) => {
+                self.separator = Some(config.separator());
+                self.last_separator_error = None;
+            }
+            Err(err) => {
+                self.separator = None;
+                let message = err.to_string();
+                if self.last_separator_error.as_deref() != Some(message.as_str()) {
+                    self.push_action_message(format!("Failed to read separator: {message}"));
+                    self.last_separator_error = Some(message);
+                }
+            }
         }
     }
 
@@ -127,18 +258,36 @@ impl App {
     }
 }
 
+fn is_hard_quit(key: KeyEvent) -> bool {
+    (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 fn is_quit(key: KeyEvent) -> bool {
-    matches!(key.code, KeyCode::Char('q'))
-        || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-        || (key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL))
+    matches!(key.code, KeyCode::Char('q')) || is_hard_quit(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
+    }
+
+    static TEST_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_path(purpose: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let counter = TEST_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "smstatus-tui-app-test-{purpose}-{}-{nanos}-{counter}.toml",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -347,5 +496,217 @@ mod tests {
             app.action_log[0]
         );
         assert!(!app.pending_start_confirmed_running);
+    }
+
+    #[test]
+    fn begin_edit_separator_prefills_buffer_with_current_separator() {
+        let mut app = App {
+            config_path: Some(unique_temp_path("prefill")),
+            separator: Some(" | ".to_string()),
+            ..App::default()
+        };
+        app.begin_edit_separator();
+        assert_eq!(app.mode, Mode::EditingSeparator(" | ".to_string()));
+    }
+
+    #[test]
+    fn begin_edit_separator_without_config_path_pushes_message_and_stays_normal() {
+        let mut app = App {
+            config_path: None,
+            ..App::default()
+        };
+        app.begin_edit_separator();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.action_log,
+            vec!["cannot edit separator: config path unknown"]
+        );
+    }
+
+    #[test]
+    fn typing_plain_char_while_editing_appends_to_buffer() {
+        let mut app = App {
+            mode: Mode::EditingSeparator("a".to_string()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::EditingSeparator("ab".to_string()));
+    }
+
+    #[test]
+    fn ctrl_modified_char_while_editing_is_ignored() {
+        let mut app = App {
+            mode: Mode::EditingSeparator("a".to_string()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, Mode::EditingSeparator("a".to_string()));
+    }
+
+    #[test]
+    fn backspace_removes_last_char_while_editing() {
+        let mut app = App {
+            mode: Mode::EditingSeparator("ab".to_string()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::EditingSeparator("a".to_string()));
+    }
+
+    #[test]
+    fn backspace_on_empty_buffer_while_editing_is_noop() {
+        let mut app = App {
+            mode: Mode::EditingSeparator(String::new()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::EditingSeparator(String::new()));
+    }
+
+    #[test]
+    fn q_while_editing_appends_literal_char_rather_than_quitting() {
+        let mut app = App {
+            mode: Mode::EditingSeparator(String::new()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, Mode::EditingSeparator("q".to_string()));
+    }
+
+    #[test]
+    fn ctrl_c_while_editing_still_quits() {
+        let mut app = App {
+            mode: Mode::EditingSeparator("abc".to_string()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn esc_while_editing_returns_to_normal_without_logging() {
+        let mut app = App {
+            mode: Mode::EditingSeparator("abc".to_string()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn enter_while_editing_writes_value_updates_separator_and_logs_success() {
+        let path = unique_temp_path("commit");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+        let mut app = App {
+            mode: Mode::EditingSeparator(" :: ".to_string()),
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.separator, Some(" :: ".to_string()));
+        assert_eq!(app.action_log, vec!["Separator updated"]);
+    }
+
+    #[test]
+    fn enter_with_empty_buffer_writes_empty_separator_successfully() {
+        let path = unique_temp_path("commit-empty");
+        std::fs::write(&path, "separator = \" | \"\n").unwrap();
+        let mut app = App {
+            mode: Mode::EditingSeparator(String::new()),
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.separator, Some(String::new()));
+        assert_eq!(app.action_log, vec!["Separator updated"]);
+        assert!(content.contains("separator = \"\""));
+    }
+
+    #[test]
+    fn enter_without_config_path_logs_failure_and_returns_to_normal() {
+        let mut app = App {
+            mode: Mode::EditingSeparator(" | ".to_string()),
+            config_path: None,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.action_log,
+            vec!["cannot save separator: config path unknown"]
+        );
+    }
+
+    #[test]
+    fn refresh_separator_logs_once_for_a_persisting_error() {
+        let path = unique_temp_path("invalid-toml");
+        std::fs::write(&path, "this is not valid toml [[[").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+
+        app.refresh_separator();
+        assert_eq!(app.separator, None);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to read separator:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
+        assert!(app.last_separator_error.is_some());
+
+        app.refresh_separator();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.action_log.len(), 1);
+    }
+
+    #[test]
+    fn refresh_separator_recovers_and_clears_dedup_state_once_file_is_fixed() {
+        let path = unique_temp_path("recovers");
+        std::fs::write(&path, "this is not valid toml [[[").unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            ..App::default()
+        };
+
+        app.refresh_separator();
+        assert_eq!(app.action_log.len(), 1);
+        assert!(app.last_separator_error.is_some());
+
+        std::fs::write(&path, "separator = \" :: \"\n").unwrap();
+        app.refresh_separator();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.separator, Some(" :: ".to_string()));
+        assert!(app.last_separator_error.is_none());
+        assert_eq!(app.action_log.len(), 1);
+    }
+
+    #[test]
+    fn enter_when_write_fails_logs_failure_and_returns_to_normal() {
+        let path = unique_temp_path("nonexistent");
+        let mut app = App {
+            mode: Mode::EditingSeparator(" | ".to_string()),
+            config_path: Some(path),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.action_log.len(), 1);
+        assert!(
+            app.action_log[0].starts_with("Failed to update separator:"),
+            "unexpected message: {}",
+            app.action_log[0]
+        );
     }
 }
