@@ -1,43 +1,171 @@
+use std::borrow::Cow;
+
 use ratatui::Frame;
-use ratatui::layout::Alignment;
+use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use super::app::{ACTION_LOG_CAPACITY, App, Mode};
 
-const FIXED_INTERIOR_LINES: usize = 5 + ACTION_LOG_CAPACITY;
+const OUTER_BORDER_ROWS: u16 = 2;
+const SETTINGS_BLOCK_HEIGHT: u16 = 3;
+const MODULES_BORDER_ROWS: u16 = 2;
+const HINT_HEIGHT: u16 = 1;
+const LOGS_BLOCK_HEIGHT: u16 = 2 + ACTION_LOG_CAPACITY as u16;
+const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
+
+struct FixedHeights {
+    settings: u16,
+    modules_border: u16,
+    hint: u16,
+    logs: u16,
+    modules_content: u16,
+}
+
+fn take(remaining: &mut u16, want: u16) -> u16 {
+    if *remaining >= want {
+        *remaining -= want;
+        want
+    } else {
+        0
+    }
+}
+
+fn compute_fixed_heights(outer_inner_height: u16) -> FixedHeights {
+    let mut remaining = outer_inner_height;
+    let settings = take(&mut remaining, SETTINGS_BLOCK_HEIGHT);
+    let modules_border = take(&mut remaining, MODULES_BORDER_ROWS);
+    let hint = take(&mut remaining, HINT_HEIGHT);
+    let logs = take(&mut remaining, LOGS_BLOCK_HEIGHT);
+    let modules_content = if modules_border > 0 { remaining } else { 0 };
+    FixedHeights {
+        settings,
+        modules_border,
+        hint,
+        logs,
+        modules_content,
+    }
+}
+
+pub(super) fn modules_viewport_height(frame_height: u16) -> usize {
+    compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS)).modules_content as usize
+}
+
+struct Areas {
+    settings: Rect,
+    modules: Rect,
+    logs: Rect,
+    hint: Rect,
+}
+
+fn layout_areas(outer_inner: Rect, heights: &FixedHeights) -> Areas {
+    let mut y = outer_inner.y;
+
+    let settings = Rect::new(outer_inner.x, y, outer_inner.width, heights.settings);
+    y += heights.settings;
+
+    let modules_height = heights.modules_border + heights.modules_content;
+    let modules = Rect::new(outer_inner.x, y, outer_inner.width, modules_height);
+    y += modules_height;
+
+    let logs = Rect::new(outer_inner.x, y, outer_inner.width, heights.logs);
+    y += heights.logs;
+
+    let hint = Rect::new(outer_inner.x, y, outer_inner.width, heights.hint);
+
+    Areas {
+        settings,
+        modules,
+        logs,
+        hint,
+    }
+}
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
-    let viewport_height = frame
-        .area()
-        .height
-        .saturating_sub(2)
-        .saturating_sub(FIXED_INTERIOR_LINES as u16) as usize;
+    let area = frame.area();
+    let outer_block = Block::default()
+        .title(outer_title(app))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let outer_inner = outer_block.inner(area);
+    frame.render_widget(outer_block, area);
 
-    let block = Block::default().title("smstatus").borders(Borders::ALL);
-    let mut lines = vec![
-        Line::from(format!("smstatus v{}", env!("CARGO_PKG_VERSION"))),
-        Line::from(daemon_status_line(app.daemon_status)),
-        Line::from(separator_line(app)),
-        Line::from(modules_header_line(app, viewport_height)),
-    ];
-    for line in visible_module_lines(app, viewport_height) {
-        lines.push(Line::from(line));
-    }
-    lines.push(Line::from(hint_line(&app.mode)));
-    for line in action_log_lines(&app.action_log) {
-        lines.push(Line::from(line));
-    }
-    let paragraph = Paragraph::new(lines)
-        .alignment(Alignment::Center)
-        .block(block);
+    let heights = compute_fixed_heights(outer_inner.height);
+    let areas = layout_areas(outer_inner, &heights);
 
-    frame.render_widget(paragraph, frame.area());
+    if areas.settings.height > 0 {
+        let settings_block = Block::default()
+            .title(boxed_title("settings"))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let settings_inner = settings_block.inner(areas.settings);
+        frame.render_widget(settings_block, areas.settings);
+        frame.render_widget(Paragraph::new(separator_line(app)), settings_inner);
+        if let Mode::EditingSeparator { buffer, cursor } = &app.mode {
+            let col = separator_cursor_column(settings_inner.x, buffer, *cursor);
+            frame.set_cursor_position((col, settings_inner.y));
+        }
+    }
+
+    if areas.modules.height > 0 {
+        let viewport_height = heights.modules_content as usize;
+        let modules_block = Block::default()
+            .title(modules_title(app, viewport_height))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let modules_inner = modules_block.inner(areas.modules);
+        frame.render_widget(modules_block, areas.modules);
+        let module_lines: Vec<Line> = visible_module_lines(app, viewport_height)
+            .into_iter()
+            .map(Line::from)
+            .collect();
+        frame.render_widget(Paragraph::new(module_lines), modules_inner);
+    }
+
+    if areas.logs.height > 0 {
+        let logs_block = Block::default()
+            .title(boxed_title("logs"))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let logs_inner = logs_block.inner(areas.logs);
+        frame.render_widget(logs_block, areas.logs);
+        let log_lines: Vec<Line> = action_log_lines(&app.action_log)
+            .into_iter()
+            .map(Line::from)
+            .collect();
+        frame.render_widget(Paragraph::new(log_lines), logs_inner);
+    }
+
+    if areas.hint.height > 0 {
+        frame.render_widget(Paragraph::new(hint_line(&app.mode)), areas.hint);
+    }
+}
+
+fn boxed_title(text: &str) -> String {
+    format!("─{text}")
+}
+
+fn outer_title(app: &App) -> String {
+    boxed_title(&format!(
+        "smstatus v{} {}",
+        env!("CARGO_PKG_VERSION"),
+        daemon_status_phrase(app.daemon_status)
+    ))
+}
+
+fn daemon_status_phrase(status: Option<crate::daemon::DaemonStatus>) -> String {
+    use crate::daemon::DaemonStatus;
+    match status {
+        Some(DaemonStatus::Running { pid }) => format!("running (pid {pid})"),
+        Some(DaemonStatus::RunningPidUnknown) => "running (pid unknown)".to_string(),
+        Some(DaemonStatus::Stopped) => "stopped".to_string(),
+        None => "status unknown".to_string(),
+    }
 }
 
 fn separator_line(app: &App) -> String {
     match &app.mode {
-        Mode::EditingSeparator(buffer) => format!("New separator: {buffer:?}_"),
+        Mode::EditingSeparator { buffer, .. } => format!("{SEPARATOR_EDIT_PREFIX}{buffer:?}"),
         Mode::Normal => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -45,12 +173,19 @@ fn separator_line(app: &App) -> String {
     }
 }
 
-fn hint_line(mode: &Mode) -> &'static str {
+fn separator_cursor_column(area_x: u16, buffer: &str, cursor: usize) -> u16 {
+    let byte_idx = super::char_byte_offset(buffer, cursor);
+    let escaped_prefix_quoted = format!("{:?}", &buffer[..byte_idx]);
+    let escaped_prefix = &escaped_prefix_quoted[..escaped_prefix_quoted.len() - 1];
+    area_x + (SEPARATOR_EDIT_PREFIX.chars().count() + escaped_prefix.chars().count()) as u16
+}
+
+fn hint_line(mode: &Mode) -> Cow<'static, str> {
     match mode {
-        Mode::Normal => {
-            "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules"
-        }
-        Mode::EditingSeparator(_) => "Editing separator - Enter to save, Esc to cancel",
+        Mode::Normal => Cow::Borrowed(
+            "Quit: q | Start: s | Kill: k | Edit separator: e | Scroll: \u{2191}/\u{2193}",
+        ),
+        Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
     }
 }
 
@@ -63,20 +198,21 @@ fn module_window(total: usize, offset: usize, viewport_height: usize) -> (usize,
     (offset, end, total)
 }
 
-fn modules_header_line(app: &App, viewport_height: usize) -> String {
-    match &app.modules {
-        None => "modules: unknown".to_string(),
-        Some(modules) if modules.is_empty() => "modules: (none configured)".to_string(),
+fn modules_title(app: &App, viewport_height: usize) -> String {
+    let text = match &app.modules {
+        None => "modules unknown".to_string(),
+        Some(modules) if modules.is_empty() => "modules (none configured)".to_string(),
         Some(modules) => {
             let (start, end, total) =
                 module_window(modules.len(), app.module_scroll_offset, viewport_height);
             if viewport_height == 0 {
-                format!("modules: {total} configured")
+                format!("modules {total} configured")
             } else {
-                format!("modules: {}-{end} of {total}", start + 1)
+                format!("modules {}-{end}/{total}", start + 1)
             }
         }
-    }
+    };
+    boxed_title(&text)
 }
 
 fn visible_module_lines(app: &App, viewport_height: usize) -> Vec<String> {
@@ -96,165 +232,361 @@ fn action_log_lines(action_log: &[String]) -> Vec<String> {
     lines
 }
 
-fn daemon_status_line(status: Option<crate::daemon::DaemonStatus>) -> String {
-    use crate::daemon::DaemonStatus;
-    match status {
-        Some(DaemonStatus::Running { pid }) => format!("smstatus daemon: running (pid {pid})"),
-        Some(DaemonStatus::RunningPidUnknown) => {
-            "smstatus daemon: running (pid unknown)".to_string()
-        }
-        Some(DaemonStatus::Stopped) => "smstatus daemon: stopped".to_string(),
-        None => "smstatus daemon: status unknown".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Position;
 
     use super::*;
     use crate::daemon::DaemonStatus;
     use crate::tui::app::App;
 
-    fn centered(content: &str, width: usize) -> String {
+    fn pad(content: &str, width: usize) -> String {
         let chars: Vec<char> = content.chars().collect();
-        let content_width = chars.len();
-        if content_width <= width {
-            let left = width / 2 - content_width / 2;
-            let right = width - content_width - left;
-            format!("{}{content}{}", " ".repeat(left), " ".repeat(right))
-        } else {
+        if chars.len() > width {
             chars[..width].iter().collect()
+        } else {
+            format!("{content:<width$}")
         }
     }
 
-    fn render(app: &App) -> Buffer {
-        let backend = TestBackend::new(40, 10);
+    fn wrap(content: &str) -> String {
+        format!("│{content}│")
+    }
+
+    fn top_border(title: &str, width: usize) -> String {
+        let available = width.saturating_sub(2);
+        let title_chars: Vec<char> = title.chars().collect();
+        let truncated: String = if title_chars.len() > available {
+            title_chars[..available].iter().collect()
+        } else {
+            title.to_string()
+        };
+        let dashes = available.saturating_sub(truncated.chars().count());
+        format!("╭{truncated}{}╮", "─".repeat(dashes))
+    }
+
+    fn bottom_border(width: usize) -> String {
+        format!("╰{}╯", "─".repeat(width.saturating_sub(2)))
+    }
+
+    fn outer_content_row(content: &str, width: usize) -> String {
+        wrap(&pad(content, width - 2))
+    }
+
+    fn nested_top_row(title: &str, width: usize) -> String {
+        wrap(&top_border(&boxed_title(title), width - 2))
+    }
+
+    fn nested_bottom_row(width: usize) -> String {
+        wrap(&bottom_border(width - 2))
+    }
+
+    fn nested_content_row(content: &str, width: usize) -> String {
+        wrap(&wrap(&pad(content, width - 4)))
+    }
+
+    fn outer_title_str(status: Option<DaemonStatus>) -> String {
+        outer_title(&App {
+            daemon_status: status,
+            ..App::default()
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expected(
+        width: u16,
+        height: u16,
+        status: Option<DaemonStatus>,
+        separator_text: &str,
+        modules_title_text: &str,
+        module_lines: &[&str],
+        action_log: &[&str],
+        hint_text: &str,
+    ) -> Buffer {
+        let w = width as usize;
+        let heights = compute_fixed_heights(height.saturating_sub(OUTER_BORDER_ROWS));
+        let mut rows = vec![top_border(&outer_title_str(status), w)];
+
+        if heights.settings > 0 {
+            rows.push(nested_top_row("settings", w));
+            rows.push(nested_content_row(separator_text, w));
+            rows.push(nested_bottom_row(w));
+        }
+
+        let modules_height = heights.modules_border + heights.modules_content;
+        if modules_height > 0 {
+            rows.push(nested_top_row(modules_title_text, w));
+            let mut padded_module_lines: Vec<String> =
+                module_lines.iter().map(|s| s.to_string()).collect();
+            while padded_module_lines.len() < heights.modules_content as usize {
+                padded_module_lines.push(String::new());
+            }
+            for line in &padded_module_lines {
+                rows.push(nested_content_row(line, w));
+            }
+            rows.push(nested_bottom_row(w));
+        }
+
+        if heights.logs > 0 {
+            rows.push(nested_top_row("logs", w));
+            let mut log_lines: Vec<String> = action_log.iter().map(|s| s.to_string()).collect();
+            while log_lines.len() < ACTION_LOG_CAPACITY {
+                log_lines.push(String::new());
+            }
+            for line in &log_lines {
+                rows.push(nested_content_row(line, w));
+            }
+            rows.push(nested_bottom_row(w));
+        }
+
+        if heights.hint > 0 {
+            rows.push(outer_content_row(hint_text, w));
+        }
+
+        rows.push(bottom_border(w));
+        Buffer::with_lines(rows)
+    }
+
+    const NORMAL_HINT: &str =
+        "Quit: q | Start: s | Kill: k | Edit separator: e | Scroll: \u{2191}/\u{2193}";
+
+    const BASELINE_HEIGHT: u16 = 13;
+
+    fn render_terminal(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(frame, app)).unwrap();
-        terminal.backend().buffer().clone()
+        terminal
     }
 
-    fn expected_for(status_text: &str, separator_text: &str, action_log: &[&str]) -> Buffer {
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered(status_text, 38));
-        let separator_line = format!("│{}│", centered(separator_text, 38));
-        let modules_line = format!("│{}│", centered("modules: unknown", 38));
-        let hint_line = format!(
-            "│{}│",
-            centered(
-                "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules",
-                38
-            )
-        );
-        let mut action_lines: Vec<String> = action_log
-            .iter()
-            .map(|text| format!("│{}│", centered(text, 38)))
-            .collect();
-        while action_lines.len() < ACTION_LOG_CAPACITY {
-            action_lines.push(format!("│{}│", centered("", 38)));
-        }
-        Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_line,
-            hint_line,
-            action_lines[0].clone(),
-            action_lines[1].clone(),
-            action_lines[2].clone(),
-            "└──────────────────────────────────────┘".to_string(),
-        ])
+    fn render(app: &App, width: u16, height: u16) -> Buffer {
+        render_terminal(app, width, height)
+            .backend()
+            .buffer()
+            .clone()
     }
 
     #[test]
-    fn daemon_status_line_running() {
+    fn daemon_status_phrase_running() {
         assert_eq!(
-            daemon_status_line(Some(DaemonStatus::Running { pid: 42 })),
-            "smstatus daemon: running (pid 42)"
+            daemon_status_phrase(Some(DaemonStatus::Running { pid: 42 })),
+            "running (pid 42)"
         );
     }
 
     #[test]
-    fn daemon_status_line_running_pid_unknown() {
+    fn daemon_status_phrase_running_pid_unknown() {
         assert_eq!(
-            daemon_status_line(Some(DaemonStatus::RunningPidUnknown)),
-            "smstatus daemon: running (pid unknown)"
+            daemon_status_phrase(Some(DaemonStatus::RunningPidUnknown)),
+            "running (pid unknown)"
         );
     }
 
     #[test]
-    fn daemon_status_line_stopped() {
-        assert_eq!(
-            daemon_status_line(Some(DaemonStatus::Stopped)),
-            "smstatus daemon: stopped"
-        );
+    fn daemon_status_phrase_stopped() {
+        assert_eq!(daemon_status_phrase(Some(DaemonStatus::Stopped)), "stopped");
     }
 
     #[test]
-    fn daemon_status_line_unknown() {
-        assert_eq!(daemon_status_line(None), "smstatus daemon: status unknown");
+    fn daemon_status_phrase_unknown() {
+        assert_eq!(daemon_status_phrase(None), "status unknown");
     }
 
     #[test]
-    fn draw_renders_stopped_status() {
+    fn draw_renders_stopped_status_in_outer_title() {
         let app = App {
             daemon_status: Some(DaemonStatus::Stopped),
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for("smstatus daemon: stopped", "separator: unknown", &[])
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
         );
     }
 
     #[test]
-    fn draw_renders_running_status() {
+    fn draw_renders_running_status_in_outer_title() {
         let app = App {
             daemon_status: Some(DaemonStatus::Running { pid: 12345 }),
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for(
-                "smstatus daemon: running (pid 12345)",
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Running { pid: 12345 }),
                 "separator: unknown",
-                &[]
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
             )
         );
     }
 
     #[test]
-    fn draw_renders_running_pid_unknown_status() {
+    fn draw_renders_running_pid_unknown_status_in_outer_title() {
         let app = App {
             daemon_status: Some(DaemonStatus::RunningPidUnknown),
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for(
-                "smstatus daemon: running (pid unknown)",
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::RunningPidUnknown),
                 "separator: unknown",
-                &[]
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
             )
         );
     }
 
     #[test]
-    fn draw_renders_unknown_status() {
+    fn draw_renders_unknown_status_in_outer_title() {
         let app = App {
             daemon_status: None,
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for("smstatus daemon: status unknown", "separator: unknown", &[])
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                None,
+                "separator: unknown",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_separator_value() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            separator: Some(" | ".to_string()),
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: \" | \"",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_empty_separator_as_quoted_empty_string() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            separator: Some(String::new()),
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: \"\"",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_editing_prompt_with_buffer_contents() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: "::".to_string(),
+                cursor: 2,
+            },
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "New separator: \"::\"",
+                "modules unknown",
+                &[],
+                &[],
+                "Save: Enter | Cancel: Esc",
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_editing_prompt_with_empty_buffer() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            },
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "New separator: \"\"",
+                "modules unknown",
+                &[],
+                &[],
+                "Save: Enter | Cancel: Esc",
+            )
+        );
+    }
+
+    #[test]
+    fn hint_line_normal_mode() {
+        assert_eq!(hint_line(&Mode::Normal).as_ref(), NORMAL_HINT);
+    }
+
+    #[test]
+    fn hint_line_editing_separator_mode() {
+        assert_eq!(
+            hint_line(&Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            })
+            .as_ref(),
+            "Save: Enter | Cancel: Esc"
         );
     }
 
@@ -266,24 +598,38 @@ mod tests {
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for("smstatus daemon: stopped", "separator: unknown", &[])
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
         );
     }
 
     #[test]
-    fn draw_renders_single_action_message() {
+    fn draw_renders_single_action_message_padded_to_capacity() {
         let app = App {
             daemon_status: Some(DaemonStatus::Running { pid: 42 }),
             action_log: vec!["Starting smstatus...".to_string()],
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for(
-                "smstatus daemon: running (pid 42)",
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Running { pid: 42 }),
                 "separator: unknown",
-                &["Starting smstatus..."]
+                "modules unknown",
+                &[],
+                &["Starting smstatus..."],
+                NORMAL_HINT,
             )
         );
     }
@@ -300,123 +646,69 @@ mod tests {
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for(
-                "smstatus daemon: stopped",
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
                 "separator: unknown",
+                "modules unknown",
+                &[],
                 &[
                     "Starting smstatus...",
                     "smstatus is already running",
                     "Sent stop signal to smstatus (pid 42)",
-                ]
+                ],
+                NORMAL_HINT,
             )
         );
     }
 
     #[test]
-    fn draw_renders_separator_value() {
+    fn draw_renders_empty_module_list_title_with_zero_rows() {
         let app = App {
             daemon_status: Some(DaemonStatus::Stopped),
-            separator: Some(" | ".to_string()),
+            modules: Some(vec![]),
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for("smstatus daemon: stopped", "separator: \" | \"", &[])
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules (none configured)",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
         );
     }
 
     #[test]
-    fn draw_renders_empty_separator_as_quoted_empty_string() {
+    fn draw_renders_degraded_title_when_viewport_height_is_zero_with_modules_present() {
         let app = App {
             daemon_status: Some(DaemonStatus::Stopped),
-            separator: Some(String::new()),
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk#root".to_string(),
+                "battery".to_string(),
+            ]),
             ..App::default()
         };
         assert_eq!(
-            render(&app),
-            expected_for("smstatus daemon: stopped", "separator: \"\"", &[])
-        );
-    }
-
-    #[test]
-    fn draw_renders_editing_prompt_with_buffer_contents() {
-        let app = App {
-            daemon_status: Some(DaemonStatus::Stopped),
-            mode: Mode::EditingSeparator("::".to_string()),
-            ..App::default()
-        };
-        let expected_separator = "New separator: \"::\"_";
-        let expected_hint = "Editing separator - Enter to save, Esc to cancel";
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered(expected_separator, 38));
-        let modules_line = format!("│{}│", centered("modules: unknown", 38));
-        let hint_line = format!("│{}│", centered(expected_hint, 38));
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_line,
-            hint_line,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render(&app), expected);
-    }
-
-    #[test]
-    fn draw_renders_editing_prompt_with_empty_buffer() {
-        let app = App {
-            daemon_status: Some(DaemonStatus::Stopped),
-            mode: Mode::EditingSeparator(String::new()),
-            ..App::default()
-        };
-        let expected_separator = "New separator: \"\"_";
-        let expected_hint = "Editing separator - Enter to save, Esc to cancel";
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered(expected_separator, 38));
-        let modules_line = format!("│{}│", centered("modules: unknown", 38));
-        let hint_line = format!("│{}│", centered(expected_hint, 38));
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_line,
-            hint_line,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render(&app), expected);
-    }
-
-    fn render_with_height(app: &App, height: u16) -> Buffer {
-        let backend = TestBackend::new(40, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| draw(frame, app)).unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    #[test]
-    fn hint_line_normal_mode_includes_scroll_hotkey() {
-        assert_eq!(
-            hint_line(&Mode::Normal),
-            "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules"
+            render(&app, 70, BASELINE_HEIGHT),
+            expected(
+                70,
+                BASELINE_HEIGHT,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 3 configured",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
         );
     }
 
@@ -431,119 +723,20 @@ mod tests {
             ]),
             ..App::default()
         };
-        let height = 13;
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered("separator: unknown", 38));
-        let modules_header = format!("│{}│", centered("modules: 1-3 of 3", 38));
-        let module_cpu = format!("│{}│", centered("cpu", 38));
-        let module_disk = format!("│{}│", centered("disk#root", 38));
-        let module_battery = format!("│{}│", centered("battery", 38));
-        let hint_line_row = format!(
-            "│{}│",
-            centered(
-                "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules",
-                38
+        let height = BASELINE_HEIGHT + 3;
+        assert_eq!(
+            render(&app, 70, height),
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-3/3",
+                &["cpu", "disk#root", "battery"],
+                &[],
+                NORMAL_HINT,
             )
         );
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_header,
-            module_cpu,
-            module_disk,
-            module_battery,
-            hint_line_row,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render_with_height(&app, height), expected);
-    }
-
-    #[test]
-    fn draw_renders_empty_module_list_header_with_zero_rows() {
-        let app = App {
-            daemon_status: Some(DaemonStatus::Stopped),
-            modules: Some(vec![]),
-            ..App::default()
-        };
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered("separator: unknown", 38));
-        let modules_header = format!("│{}│", centered("modules: (none configured)", 38));
-        let hint_line_row = format!(
-            "│{}│",
-            centered(
-                "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules",
-                38
-            )
-        );
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_header,
-            hint_line_row,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render(&app), expected);
-    }
-
-    #[test]
-    fn draw_renders_degraded_header_when_viewport_height_is_zero_with_modules_present() {
-        let app = App {
-            daemon_status: Some(DaemonStatus::Stopped),
-            modules: Some(vec![
-                "cpu".to_string(),
-                "disk#root".to_string(),
-                "battery".to_string(),
-            ]),
-            ..App::default()
-        };
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered("separator: unknown", 38));
-        let modules_header = format!("│{}│", centered("modules: 3 configured", 38));
-        let hint_line_row = format!(
-            "│{}│",
-            centered(
-                "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules",
-                38
-            )
-        );
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_header,
-            hint_line_row,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render(&app), expected);
     }
 
     #[test]
@@ -561,38 +754,257 @@ mod tests {
             module_scroll_offset: 2,
             ..App::default()
         };
-        let height = 12;
-        let version_line = format!(
-            "│{}│",
-            centered(&format!("smstatus v{}", env!("CARGO_PKG_VERSION")), 38)
-        );
-        let status_line = format!("│{}│", centered("smstatus daemon: stopped", 38));
-        let separator_line = format!("│{}│", centered("separator: unknown", 38));
-        let modules_header = format!("│{}│", centered("modules: 3-4 of 6", 38));
-        let module_m2 = format!("│{}│", centered("m2", 38));
-        let module_m3 = format!("│{}│", centered("m3", 38));
-        let hint_line_row = format!(
-            "│{}│",
-            centered(
-                "Press q to quit, s to start, k to stop, e to edit separator, \u{2191}/\u{2193} to scroll modules",
-                38
+        let height = BASELINE_HEIGHT + 2;
+        assert_eq!(
+            render(&app, 70, height),
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 3-4/6",
+                &["m2", "m3"],
+                &[],
+                NORMAL_HINT,
             )
         );
-        let blank = format!("│{}│", centered("", 38));
-        let expected = Buffer::with_lines([
-            "┌smstatus──────────────────────────────┐".to_string(),
-            version_line,
-            status_line,
-            separator_line,
-            modules_header,
-            module_m2,
-            module_m3,
-            hint_line_row,
-            blank.clone(),
-            blank.clone(),
-            blank,
-            "└──────────────────────────────────────┘".to_string(),
-        ]);
-        assert_eq!(render_with_height(&app, height), expected);
+    }
+
+    #[test]
+    fn draw_renders_instance_suffixed_module_entry_verbatim() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["disk#root".to_string()]),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 1;
+        assert_eq!(
+            render(&app, 70, height),
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-1/1",
+                &["disk#root"],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn compute_fixed_heights_settings_collapses_below_its_threshold() {
+        let h = compute_fixed_heights(0);
+        assert_eq!(h.settings, 0);
+        assert_eq!(h.modules_border, 0);
+        assert_eq!(h.hint, 0);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_settings_still_collapses_one_row_below_its_threshold() {
+        let h = compute_fixed_heights(2);
+        assert_eq!(h.settings, 0);
+        assert_eq!(h.modules_border, 2);
+        assert_eq!(h.hint, 0);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_settings_fits_at_its_threshold() {
+        let h = compute_fixed_heights(3);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 0);
+        assert_eq!(h.hint, 0);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_modules_border_collapses_below_its_threshold() {
+        let h = compute_fixed_heights(4);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 0);
+        assert_eq!(h.hint, 1);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_modules_border_fits_at_its_threshold() {
+        let h = compute_fixed_heights(5);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 2);
+        assert_eq!(h.hint, 0);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_hint_collapses_below_its_threshold() {
+        let h = compute_fixed_heights(5);
+        assert_eq!(h.hint, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_hint_fits_at_its_threshold() {
+        let h = compute_fixed_heights(6);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 2);
+        assert_eq!(h.hint, 1);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_logs_collapses_below_its_threshold() {
+        let h = compute_fixed_heights(10);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 2);
+        assert_eq!(h.hint, 1);
+        assert_eq!(h.logs, 0);
+        assert_eq!(h.modules_content, 4);
+    }
+
+    #[test]
+    fn compute_fixed_heights_logs_fits_at_its_threshold_and_modules_content_drops_to_zero() {
+        let h = compute_fixed_heights(11);
+        assert_eq!(h.settings, 3);
+        assert_eq!(h.modules_border, 2);
+        assert_eq!(h.hint, 1);
+        assert_eq!(h.logs, 5);
+        assert_eq!(h.modules_content, 0);
+    }
+
+    #[test]
+    fn compute_fixed_heights_modules_content_grows_linearly_once_everything_else_fits() {
+        assert_eq!(compute_fixed_heights(11).modules_content, 0);
+        assert_eq!(compute_fixed_heights(12).modules_content, 1);
+        assert_eq!(compute_fixed_heights(13).modules_content, 2);
+        assert_eq!(compute_fixed_heights(14).modules_content, 3);
+    }
+
+    #[test]
+    fn modules_viewport_height_matches_compute_fixed_heights_via_frame_height_offset() {
+        for frame_height in [0u16, 1, 2, 5, 7, 13, 14, 20] {
+            let expected = compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS))
+                .modules_content as usize;
+            assert_eq!(modules_viewport_height(frame_height), expected);
+        }
+    }
+
+    #[test]
+    fn draw_at_very_short_height_renders_only_what_fits_without_corrupting_borders() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, 4),
+            expected(
+                70,
+                4,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_at_height_with_only_settings_and_hint_present() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            ..App::default()
+        };
+        assert_eq!(
+            render(&app, 70, 8),
+            expected(
+                70,
+                8,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules unknown",
+                &[],
+                &[],
+                NORMAL_HINT,
+            )
+        );
+    }
+
+    #[test]
+    fn cursor_hidden_in_normal_mode() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(!terminal.backend().cursor_visible());
+    }
+
+    #[test]
+    fn cursor_visible_and_positioned_at_start_of_empty_buffer() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(18, 2));
+    }
+
+    #[test]
+    fn cursor_visible_and_positioned_mid_buffer() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: "ab".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(19, 2));
+    }
+
+    #[test]
+    fn cursor_visible_and_positioned_at_end_of_buffer() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: "ab".to_string(),
+                cursor: 2,
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(20, 2));
+    }
+
+    #[test]
+    fn cursor_column_accounts_for_debug_escaped_characters() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingSeparator {
+                buffer: "a\"b".to_string(),
+                cursor: 2,
+            },
+            ..App::default()
+        };
+        let terminal = render_terminal(&app, 70, BASELINE_HEIGHT);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(21, 2));
     }
 }

@@ -2,6 +2,7 @@ use std::io::{self, IsTerminal, Stdout};
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::cursor::SetCursorStyle;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -24,6 +25,10 @@ impl TerminalGuard {
             let _ = disable_raw_mode();
             return Err(err.into());
         }
+        if let Err(err) = execute!(io::stdout(), SetCursorStyle::SteadyBar) {
+            let _ = restore_terminal();
+            return Err(err.into());
+        }
 
         match Terminal::new(CrosstermBackend::new(io::stdout())) {
             Ok(terminal) => Ok(Self { terminal }),
@@ -42,6 +47,7 @@ impl Drop for TerminalGuard {
 }
 
 fn restore_terminal() -> io::Result<()> {
+    let _ = execute!(io::stdout(), SetCursorStyle::DefaultUserShape);
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     Ok(())

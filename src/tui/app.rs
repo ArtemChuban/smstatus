@@ -8,7 +8,10 @@ pub(super) const ACTION_LOG_CAPACITY: usize = 3;
 pub(super) enum Mode {
     #[default]
     Normal,
-    EditingSeparator(String),
+    EditingSeparator {
+        buffer: String,
+        cursor: usize,
+    },
 }
 
 #[derive(Default)]
@@ -26,6 +29,7 @@ pub(super) struct App {
     pub(super) modules: Option<Vec<String>>,
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
+    pub(super) modules_viewport_height: usize,
 }
 
 impl App {
@@ -55,7 +59,7 @@ impl App {
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
         match self.mode {
-            Mode::EditingSeparator(_) => self.handle_key_editing_separator(key),
+            Mode::EditingSeparator { .. } => self.handle_key_editing_separator(key),
             Mode::Normal => self.handle_key_normal(key),
         }
     }
@@ -83,16 +87,32 @@ impl App {
         match key.code {
             KeyCode::Esc => self.cancel_edit_separator(),
             KeyCode::Enter => self.commit_edit_separator(),
+            KeyCode::Left => {
+                if let Mode::EditingSeparator { cursor, .. } = &mut self.mode {
+                    *cursor = cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Right => {
+                if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode {
+                    *cursor = (*cursor + 1).min(buffer.chars().count());
+                }
+            }
             KeyCode::Backspace => {
-                if let Mode::EditingSeparator(buffer) = &mut self.mode {
-                    buffer.pop();
+                if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode
+                    && *cursor > 0
+                {
+                    let byte_idx = super::char_byte_offset(buffer, *cursor - 1);
+                    buffer.remove(byte_idx);
+                    *cursor -= 1;
                 }
             }
             KeyCode::Char(c)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                if let Mode::EditingSeparator(buffer) = &mut self.mode {
-                    buffer.push(c);
+                if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode {
+                    let byte_idx = super::char_byte_offset(buffer, *cursor);
+                    buffer.insert(byte_idx, c);
+                    *cursor += 1;
                 }
             }
             _ => {}
@@ -105,7 +125,11 @@ impl App {
             return;
         }
         let initial = self.separator.clone().unwrap_or_default();
-        self.mode = Mode::EditingSeparator(initial);
+        let cursor = initial.chars().count();
+        self.mode = Mode::EditingSeparator {
+            buffer: initial,
+            cursor,
+        };
     }
 
     fn cancel_edit_separator(&mut self) {
@@ -113,7 +137,7 @@ impl App {
     }
 
     fn commit_edit_separator(&mut self) {
-        let Mode::EditingSeparator(value) = std::mem::take(&mut self.mode) else {
+        let Mode::EditingSeparator { buffer: value, .. } = std::mem::take(&mut self.mode) else {
             return;
         };
         let Some(path) = self.config_path.clone() else {
@@ -150,8 +174,9 @@ impl App {
                 self.last_separator_error = None;
                 match config.module_names() {
                     Ok(names) => {
-                        self.module_scroll_offset =
-                            self.module_scroll_offset.min(names.len().saturating_sub(1));
+                        self.module_scroll_offset = self
+                            .module_scroll_offset
+                            .min(names.len().saturating_sub(self.modules_viewport_height));
                         self.modules = Some(names);
                         self.last_modules_error = None;
                     }
@@ -182,11 +207,8 @@ impl App {
     }
 
     fn scroll_modules_down(&mut self) {
-        let max = self
-            .modules
-            .as_ref()
-            .map(|m| m.len().saturating_sub(1))
-            .unwrap_or(0);
+        let total = self.modules.as_ref().map(|m| m.len()).unwrap_or(0);
+        let max = total.saturating_sub(self.modules_viewport_height);
         self.module_scroll_offset = (self.module_scroll_offset + 1).min(max);
     }
 
@@ -541,7 +563,13 @@ mod tests {
             ..App::default()
         };
         app.begin_edit_separator();
-        assert_eq!(app.mode, Mode::EditingSeparator(" | ".to_string()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: " | ".to_string(),
+                cursor: 3,
+            }
+        );
     }
 
     #[test]
@@ -561,58 +589,233 @@ mod tests {
     #[test]
     fn typing_plain_char_while_editing_appends_to_buffer() {
         let mut app = App {
-            mode: Mode::EditingSeparator("a".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: "a".to_string(),
+                cursor: 1,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::EditingSeparator("ab".to_string()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "ab".to_string(),
+                cursor: 2,
+            }
+        );
     }
 
     #[test]
     fn ctrl_modified_char_while_editing_is_ignored() {
         let mut app = App {
-            mode: Mode::EditingSeparator("a".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: "a".to_string(),
+                cursor: 1,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
-        assert_eq!(app.mode, Mode::EditingSeparator("a".to_string()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "a".to_string(),
+                cursor: 1,
+            }
+        );
     }
 
     #[test]
     fn backspace_removes_last_char_while_editing() {
         let mut app = App {
-            mode: Mode::EditingSeparator("ab".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: "ab".to_string(),
+                cursor: 2,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::EditingSeparator("a".to_string()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "a".to_string(),
+                cursor: 1,
+            }
+        );
     }
 
     #[test]
     fn backspace_on_empty_buffer_while_editing_is_noop() {
         let mut app = App {
-            mode: Mode::EditingSeparator(String::new()),
+            mode: Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::EditingSeparator(String::new()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn backspace_at_mid_buffer_cursor_removes_char_before_cursor_only() {
+        let mut app = App {
+            mode: Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "bc".to_string(),
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn typing_char_at_mid_buffer_cursor_inserts_at_cursor_not_at_end() {
+        let mut app = App {
+            mode: Mode::EditingSeparator {
+                buffer: "ac".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn left_key_moves_cursor_left_and_saturates_at_zero() {
+        let mut app = App {
+            mode: Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 0,
+            }
+        );
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn right_key_moves_cursor_right_and_saturates_at_buffer_length() {
+        let mut app = App {
+            mode: Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 2,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 3,
+            }
+        );
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn multi_byte_utf8_buffer_uses_char_indices_not_byte_indices() {
+        let mut app = App {
+            mode: Mode::EditingSeparator {
+                buffer: "é".to_string(),
+                cursor: 1,
+            },
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "éx".to_string(),
+                cursor: 2,
+            }
+        );
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "éx".to_string(),
+                cursor: 1,
+            }
+        );
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "x".to_string(),
+                cursor: 0,
+            }
+        );
     }
 
     #[test]
     fn q_while_editing_appends_literal_char_rather_than_quitting() {
         let mut app = App {
-            mode: Mode::EditingSeparator(String::new()),
+            mode: Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
         assert!(!app.should_quit);
-        assert_eq!(app.mode, Mode::EditingSeparator("q".to_string()));
+        assert_eq!(
+            app.mode,
+            Mode::EditingSeparator {
+                buffer: "q".to_string(),
+                cursor: 1,
+            }
+        );
     }
 
     #[test]
     fn ctrl_c_while_editing_still_quits() {
         let mut app = App {
-            mode: Mode::EditingSeparator("abc".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 3,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
@@ -622,7 +825,10 @@ mod tests {
     #[test]
     fn esc_while_editing_returns_to_normal_without_logging() {
         let mut app = App {
-            mode: Mode::EditingSeparator("abc".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: "abc".to_string(),
+                cursor: 3,
+            },
             ..App::default()
         };
         app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
@@ -635,7 +841,10 @@ mod tests {
         let path = unique_temp_path("commit");
         std::fs::write(&path, "separator = \" | \"\n").unwrap();
         let mut app = App {
-            mode: Mode::EditingSeparator(" :: ".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: " :: ".to_string(),
+                cursor: 4,
+            },
             config_path: Some(path.clone()),
             ..App::default()
         };
@@ -652,7 +861,10 @@ mod tests {
         let path = unique_temp_path("commit-empty");
         std::fs::write(&path, "separator = \" | \"\n").unwrap();
         let mut app = App {
-            mode: Mode::EditingSeparator(String::new()),
+            mode: Mode::EditingSeparator {
+                buffer: String::new(),
+                cursor: 0,
+            },
             config_path: Some(path.clone()),
             ..App::default()
         };
@@ -669,7 +881,10 @@ mod tests {
     #[test]
     fn enter_without_config_path_logs_failure_and_returns_to_normal() {
         let mut app = App {
-            mode: Mode::EditingSeparator(" | ".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: " | ".to_string(),
+                cursor: 3,
+            },
             config_path: None,
             ..App::default()
         };
@@ -821,6 +1036,30 @@ mod tests {
     }
 
     #[test]
+    fn refresh_config_reload_clamps_scroll_offset_using_viewport_height() {
+        let path = unique_temp_path("reload-clamp-viewport");
+        std::fs::write(
+            &path,
+            "separator = \" | \"\nmodules = [\"m0\", \"m1\", \"m2\", \"m3\", \"m4\"]\n",
+        )
+        .unwrap();
+        let mut app = App {
+            config_path: Some(path.clone()),
+            module_scroll_offset: 4,
+            modules_viewport_height: 2,
+            ..App::default()
+        };
+
+        app.refresh_config();
+        assert_eq!(app.module_scroll_offset, 3);
+
+        std::fs::write(&path, "separator = \" | \"\nmodules = [\"m0\"]\n").unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
     fn scroll_modules_up_saturates_at_zero() {
         let mut app = App {
             modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
@@ -832,10 +1071,11 @@ mod tests {
     }
 
     #[test]
-    fn scroll_modules_down_saturates_at_len_minus_one() {
+    fn scroll_modules_down_saturates_at_len_minus_viewport_height() {
         let mut app = App {
             modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
             module_scroll_offset: 1,
+            modules_viewport_height: 1,
             ..App::default()
         };
         app.scroll_modules_down();
@@ -851,6 +1091,7 @@ mod tests {
                 "battery".to_string(),
             ]),
             module_scroll_offset: 0,
+            modules_viewport_height: 1,
             ..App::default()
         };
         app.scroll_modules_down();
@@ -880,6 +1121,62 @@ mod tests {
     }
 
     #[test]
+    fn scroll_modules_down_is_unclamped_when_viewport_height_is_zero() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
+            module_scroll_offset: 0,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 1);
+    }
+
+    #[test]
+    fn scroll_modules_down_does_not_scroll_when_everything_already_fits_in_the_viewport() {
+        let mut app = App {
+            modules: Some(vec![
+                "cpu".to_string(),
+                "disk".to_string(),
+                "battery".to_string(),
+            ]),
+            module_scroll_offset: 0,
+            modules_viewport_height: 10,
+            ..App::default()
+        };
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 0);
+        app.scroll_modules_down();
+        assert_eq!(app.module_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_modules_down_caps_exactly_at_total_minus_viewport_height_for_various_heights() {
+        let modules = vec![
+            "m0".to_string(),
+            "m1".to_string(),
+            "m2".to_string(),
+            "m3".to_string(),
+            "m4".to_string(),
+        ];
+        for viewport_height in [0, 1, 2, 3, 4, 5, 10] {
+            let expected_max = modules.len().saturating_sub(viewport_height);
+            let mut app = App {
+                modules: Some(modules.clone()),
+                module_scroll_offset: 0,
+                modules_viewport_height: viewport_height,
+                ..App::default()
+            };
+            for _ in 0..(modules.len() + 5) {
+                app.scroll_modules_down();
+            }
+            assert_eq!(
+                app.module_scroll_offset, expected_max,
+                "viewport_height={viewport_height}"
+            );
+        }
+    }
+
+    #[test]
     fn up_key_in_normal_mode_scrolls_modules_up() {
         let mut app = App {
             modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
@@ -905,7 +1202,10 @@ mod tests {
     fn enter_when_write_fails_logs_failure_and_returns_to_normal() {
         let path = unique_temp_path("nonexistent");
         let mut app = App {
-            mode: Mode::EditingSeparator(" | ".to_string()),
+            mode: Mode::EditingSeparator {
+                buffer: " | ".to_string(),
+                cursor: 3,
+            },
             config_path: Some(path),
             ..App::default()
         };
