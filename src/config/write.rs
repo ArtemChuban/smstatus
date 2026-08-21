@@ -59,10 +59,18 @@ impl BarConfig {
                         Some(indices.remove(0))
                     }
                 })
-                .expect("the content-equality check above guarantees a matching original index");
-            let value = originals[idx]
-                .take()
-                .expect("each original index is drained exactly once");
+                .ok_or_else(|| {
+                    format!(
+                        "{}: no remaining original position for module `{target_name}`",
+                        path.display()
+                    )
+                })?;
+            let value = originals[idx].take().ok_or_else(|| {
+                format!(
+                    "{}: original entry for module `{target_name}` already consumed",
+                    path.display()
+                )
+            })?;
             array.push_formatted(value);
         }
 
