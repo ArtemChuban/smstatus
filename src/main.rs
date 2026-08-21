@@ -7,6 +7,7 @@ mod error;
 mod host;
 mod lock;
 mod module;
+mod schema;
 mod sysinfo;
 mod tui;
 mod version;

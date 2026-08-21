@@ -80,6 +80,19 @@ fn apply_pad(value: &str, pad: Option<Pad>) -> String {
     padded
 }
 
+#[macro_export]
+macro_rules! config_schema {
+    ($ty:ident $(, ($name:expr, $default:expr))* $(,)?) => {
+        vec![$(
+            $ty {
+                name: $name.to_string(),
+                param_type: "string".to_string(),
+                default: $default.to_string(),
+            }
+        ),*]
+    };
+}
+
 pub fn format_usage(format: &str, total_bytes: u64, used_bytes: u64, free_bytes: u64) -> String {
     let total = human_bytes(total_bytes);
     let used = human_bytes(used_bytes);
@@ -232,6 +245,52 @@ mod tests {
         assert_eq!(
             format_template("{usage:65}", &[("usage", "5")]),
             "{usage:65}"
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct ConfigParam {
+        name: String,
+        param_type: String,
+        default: String,
+    }
+
+    #[test]
+    fn config_schema_builds_multiple_entries() {
+        let schema = config_schema![ConfigParam, ("path", "/p"), ("format", "{}")];
+        assert_eq!(
+            schema,
+            vec![
+                ConfigParam {
+                    name: "path".to_string(),
+                    param_type: "string".to_string(),
+                    default: "/p".to_string(),
+                },
+                ConfigParam {
+                    name: "format".to_string(),
+                    param_type: "string".to_string(),
+                    default: "{}".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn config_schema_empty_invocation_yields_empty_vec() {
+        let schema: Vec<ConfigParam> = config_schema![ConfigParam];
+        assert!(schema.is_empty());
+    }
+
+    #[test]
+    fn config_schema_accepts_non_str_default() {
+        let schema = config_schema![ConfigParam, ("interval_ms", 300_000u32)];
+        assert_eq!(
+            schema,
+            vec![ConfigParam {
+                name: "interval_ms".to_string(),
+                param_type: "string".to_string(),
+                default: "300000".to_string(),
+            }]
         );
     }
 }
