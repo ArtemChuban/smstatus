@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use wasmtime::component::{Component, Linker};
@@ -43,6 +44,18 @@ pub(crate) struct ModuleRuntime {
     http_agent: ureq::Agent,
 }
 
+fn wait_wasm_stable(path: &Path) {
+    let mut last_size = None;
+    for _ in 0..3 {
+        let size = std::fs::metadata(path).ok().map(|m| m.len());
+        if size.is_some() && size == last_size {
+            return;
+        }
+        last_size = size;
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 impl ModuleRuntime {
     pub(crate) fn new(
         engine: Engine,
@@ -62,6 +75,15 @@ impl ModuleRuntime {
         }
     }
 
+    fn wasm_path(&self, kind: &str) -> PathBuf {
+        self.modules_dir.join(format!("{kind}.wasm"))
+    }
+
+    fn start_after_stable(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
+        wait_wasm_stable(&self.wasm_path(kind));
+        self.start(kind, name, config)
+    }
+
     fn instantiate(&self, component: &Component) -> Result<(Store<HostState>, GuestModule)> {
         let state = HostState::new(Arc::clone(&self.connection), self.http_agent.clone());
         let mut store = Store::new(&self.engine, state);
@@ -72,8 +94,7 @@ impl ModuleRuntime {
     }
 
     pub(crate) fn start(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
-        let component =
-            Component::from_file(&self.engine, self.modules_dir.join(format!("{kind}.wasm")))?;
+        let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
         let (mut store, module) = self.instantiate(&component)?;
 
         let required = module
@@ -144,10 +165,15 @@ impl ModuleRuntime {
         Ok(())
     }
 
+    fn kind_forced(force_wasm_kinds: &[String], kind: &str) -> bool {
+        force_wasm_kinds.iter().any(|k| k == kind)
+    }
+
     pub(crate) fn reload(
         &self,
         old_modules: Vec<ModuleState>,
         new_config: &BarConfig,
+        force_wasm_kinds: &[String],
     ) -> Vec<ModuleState> {
         let new_names = match new_config.module_names() {
             Ok(names) => names,
@@ -175,8 +201,21 @@ impl ModuleRuntime {
                 .map(|v| v.remove(0));
 
             match reused {
-                Some(existing) if existing.config == config => {
+                Some(existing)
+                    if existing.config == config && !Self::kind_forced(force_wasm_kinds, kind) =>
+                {
                     new_modules.push(existing);
+                }
+                Some(existing) if Self::kind_forced(force_wasm_kinds, kind) => {
+                    match self.start_after_stable(kind, name, &config) {
+                        Ok(state) => new_modules.push(state),
+                        Err(err) => {
+                            eprintln!(
+                                "failed to reload wasm for `{name}` (kind `{kind}`), keeping previous instance: {err}"
+                            );
+                            new_modules.push(existing);
+                        }
+                    }
                 }
                 Some(mut existing) => {
                     let reinit_result = existing
@@ -210,5 +249,62 @@ impl ModuleRuntime {
             }
         }
         new_modules
+    }
+
+    pub(crate) fn reload_wasm(
+        &self,
+        modules: Vec<ModuleState>,
+        kinds: &[String],
+        config: &BarConfig,
+    ) -> Vec<ModuleState> {
+        let mut kept = Vec::with_capacity(modules.len());
+        for existing in modules {
+            if !kinds.iter().any(|k| k == &existing.kind) {
+                kept.push(existing);
+                continue;
+            }
+
+            let path = self.wasm_path(&existing.kind);
+            if !path.exists() {
+                eprintln!(
+                    "wasm for `{}` (kind `{}`) missing on disk; dropping instance",
+                    existing.name, existing.kind
+                );
+                continue;
+            }
+
+            match self.start_after_stable(&existing.kind, &existing.name, &existing.config) {
+                Ok(restarted) => kept.push(restarted),
+                Err(err) => {
+                    eprintln!(
+                        "failed to reload wasm for `{}` (kind `{}`), keeping previous instance: {err}",
+                        existing.name, existing.kind
+                    );
+                    kept.push(existing);
+                }
+            }
+        }
+
+        let live_names: HashSet<String> = kept.iter().map(|m| m.name.clone()).collect();
+        let Ok(entries) = config.module_names() else {
+            return kept;
+        };
+        for entry in entries {
+            let (kind, name) = BarConfig::split_module_entry(&entry);
+            if !kinds.iter().any(|k| k == kind) || live_names.contains(name) {
+                continue;
+            }
+            let path = self.wasm_path(kind);
+            if !path.exists() {
+                continue;
+            }
+            let module_config = config.module_config_json(name);
+            match self.start_after_stable(kind, name, &module_config) {
+                Ok(state) => kept.push(state),
+                Err(err) => eprintln!("failed to start module `{name}` after wasm create: {err}"),
+            }
+        }
+
+        kept
     }
 }

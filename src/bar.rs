@@ -14,7 +14,7 @@ use crate::config::BarConfig;
 use crate::error::Result;
 use crate::host::HostState;
 use crate::module::{ModuleRuntime, ModuleState};
-use crate::watcher::ConfigWatcher;
+use crate::watcher::ReloadWatcher;
 use crate::x11::X11Bar;
 
 const FUEL_PER_TICK: u64 = 10_000_000;
@@ -32,7 +32,7 @@ pub(crate) fn run() -> Result<()> {
         .join("smstatus");
     let modules_dir = config_dir.join("modules");
     let config_path = config_dir.join("config.toml");
-    let config = BarConfig::load(&config_path)?;
+    let mut config = BarConfig::load(&config_path)?;
     let mut separator = config.separator();
 
     let mut linker = Linker::new(&engine);
@@ -54,7 +54,7 @@ pub(crate) fn run() -> Result<()> {
     let runtime = ModuleRuntime::new(
         engine,
         linker,
-        modules_dir,
+        modules_dir.clone(),
         FUEL_PER_TICK,
         Arc::clone(x11_bar.connection()),
         http_agent,
@@ -70,7 +70,7 @@ pub(crate) fn run() -> Result<()> {
         }
     }
 
-    let mut watcher = ConfigWatcher::new(&config_dir, config_path.clone())?;
+    let mut watcher = ReloadWatcher::new(&config_dir, config_path.clone(), modules_dir)?;
     let mut last_logged = String::new();
 
     loop {
@@ -101,17 +101,22 @@ pub(crate) fn run() -> Result<()> {
             .min()
             .unwrap_or(DEFAULT_TICK_INTERVAL);
 
-        if watcher.wait_for_reload_or_timeout(sleep_for) {
-            match BarConfig::load(&config_path) {
-                Ok(new_config) => {
-                    separator = new_config.separator();
-                    modules = runtime.reload(modules, &new_config);
+        if let Some(batch) = watcher.wait_for_reload_or_timeout(sleep_for) {
+            if batch.config {
+                match BarConfig::load(&config_path) {
+                    Ok(new_config) => {
+                        separator = new_config.separator();
+                        modules = runtime.reload(modules, &new_config, &batch.wasm_kinds);
+                        config = new_config;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "config reload failed ({err}); keeping previous configuration running"
+                        )
+                    }
                 }
-                Err(err) => {
-                    eprintln!(
-                        "config reload failed ({err}); keeping previous configuration running"
-                    )
-                }
+            } else if !batch.wasm_kinds.is_empty() {
+                modules = runtime.reload_wasm(modules, &batch.wasm_kinds, &config);
             }
         }
     }
