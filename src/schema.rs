@@ -3,7 +3,7 @@ use crate::error::Result;
 
 const SUPPORTED_TYPE: &str = "string";
 
-fn is_valid_name(name: &str) -> bool {
+pub(crate) fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
