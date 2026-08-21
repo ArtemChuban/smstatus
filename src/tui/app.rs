@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::config::{BarConfig, ModuleParamValue, ModuleSectionView};
+
 pub(super) const ACTION_LOG_CAPACITY: usize = 3;
 
 #[derive(Default, PartialEq, Eq, Debug)]
@@ -29,6 +31,28 @@ pub(super) enum Mode {
     Help,
 }
 
+#[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
+pub(super) enum PanelFocus {
+    #[default]
+    Modules,
+    Params,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ModuleParamsStatus {
+    Missing { section: String },
+    Empty,
+    Entries,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ModuleParamsState {
+    pub(super) status: ModuleParamsStatus,
+    pub(super) entries: Vec<(String, ModuleParamValue)>,
+    pub(super) selected_index: Option<usize>,
+    pub(super) scroll_offset: usize,
+}
+
 #[derive(Default)]
 pub(super) struct App {
     pub(super) should_quit: bool,
@@ -47,6 +71,10 @@ pub(super) struct App {
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,
     pub(super) selected_index: Option<usize>,
+    pub(super) panel_focus: PanelFocus,
+    pub(super) module_params: Option<ModuleParamsState>,
+    pub(super) help_scroll_offset: usize,
+    pub(super) config_cache: Option<BarConfig>,
 }
 
 impl App {
@@ -96,8 +124,29 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Char('s') => self.start_daemon(),
-            KeyCode::Char('k') => self.stop_daemon(),
+            KeyCode::Char('s') => {
+                self.start_daemon();
+                return;
+            }
+            KeyCode::Char('k') => {
+                self.stop_daemon();
+                return;
+            }
+            KeyCode::Char('?') => {
+                self.help_scroll_offset = 0;
+                self.mode = Mode::Help;
+                return;
+            }
+            _ => {}
+        }
+        match self.panel_focus {
+            PanelFocus::Modules => self.handle_key_normal_modules(key),
+            PanelFocus::Params => self.handle_key_normal_params(key),
+        }
+    }
+
+    fn handle_key_normal_modules(&mut self, key: KeyEvent) {
+        match key.code {
             KeyCode::Char('e') => self.begin_edit_separator(),
             KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => self.move_module_up(),
             KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -107,8 +156,24 @@ impl App {
             KeyCode::Down => self.select_next_module(),
             KeyCode::Char('a') => self.begin_add_module(),
             KeyCode::Char('d') => self.begin_remove_module(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Enter | KeyCode::Right => self.focus_params(),
             _ => {}
+        }
+    }
+
+    fn handle_key_normal_params(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('a') | KeyCode::Char('d') | KeyCode::Char('e') => {}
+            KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
+            KeyCode::Up => self.select_previous_param(),
+            KeyCode::Down => self.select_next_param(),
+            _ => {}
+        }
+    }
+
+    fn focus_params(&mut self) {
+        if self.selected_index.is_some() {
+            self.panel_focus = PanelFocus::Params;
         }
     }
 
@@ -197,7 +262,7 @@ impl App {
         let Some(path) = self.config_path.as_deref() else {
             return;
         };
-        match crate::config::BarConfig::load(path) {
+        match BarConfig::load(path) {
             Ok(config) => {
                 self.separator = Some(config.separator());
                 self.last_separator_error = None;
@@ -206,6 +271,9 @@ impl App {
                         self.module_scroll_offset = self
                             .module_scroll_offset
                             .min(names.len().saturating_sub(self.modules_viewport_height));
+                        let previous_entry = self
+                            .selected_index
+                            .and_then(|i| self.modules.as_ref().and_then(|m| m.get(i).cloned()));
                         self.selected_index = if names.is_empty() {
                             None
                         } else {
@@ -214,10 +282,20 @@ impl App {
                         self.modules = Some(names);
                         self.last_modules_error = None;
                         self.ensure_selected_visible();
+                        let new_entry = self
+                            .selected_index
+                            .and_then(|i| self.modules.as_ref().and_then(|m| m.get(i).cloned()));
+                        let selection_changed = previous_entry != new_entry;
+                        self.rebuild_module_params_from(&config, selection_changed);
+                        if self.selected_index.is_none() {
+                            self.panel_focus = PanelFocus::Modules;
+                        }
                     }
                     Err(err) => {
                         self.modules = None;
                         self.selected_index = None;
+                        self.module_params = None;
+                        self.panel_focus = PanelFocus::Modules;
                         let message = err.to_string();
                         if self.last_modules_error.as_deref() != Some(message.as_str()) {
                             self.push_action_message(format!("Failed to read modules: {message}"));
@@ -225,11 +303,15 @@ impl App {
                         }
                     }
                 }
+                self.config_cache = Some(config);
             }
             Err(err) => {
                 self.separator = None;
                 self.modules = None;
                 self.selected_index = None;
+                self.module_params = None;
+                self.config_cache = None;
+                self.panel_focus = PanelFocus::Modules;
                 let message = err.to_string();
                 if self.last_separator_error.as_deref() != Some(message.as_str()) {
                     self.push_action_message(format!("Failed to read config: {message}"));
@@ -238,6 +320,69 @@ impl App {
             }
         }
         self.drop_stale_confirming_remove_mode();
+    }
+
+    fn rebuild_module_params_from(&mut self, config: &BarConfig, reset_selection: bool) {
+        let Some(idx) = self.selected_index else {
+            self.module_params = None;
+            return;
+        };
+        let Some(entry) = self.modules.as_ref().and_then(|m| m.get(idx)) else {
+            self.module_params = None;
+            return;
+        };
+        let section_name = BarConfig::split_module_entry(entry).1.to_string();
+        let view = config.module_section_string_entries(&section_name);
+        let (status, entries) = match view {
+            ModuleSectionView::Missing => (
+                ModuleParamsStatus::Missing {
+                    section: section_name,
+                },
+                Vec::new(),
+            ),
+            ModuleSectionView::Empty => (ModuleParamsStatus::Empty, Vec::new()),
+            ModuleSectionView::Entries(raw) => (ModuleParamsStatus::Entries, raw),
+        };
+        let selected_index = if entries.is_empty() {
+            None
+        } else if reset_selection {
+            Some(0)
+        } else {
+            let prev = self
+                .module_params
+                .as_ref()
+                .and_then(|p| p.selected_index)
+                .unwrap_or(0);
+            Some(prev.min(entries.len() - 1))
+        };
+        let scroll_offset = if reset_selection {
+            0
+        } else {
+            self.module_params
+                .as_ref()
+                .map(|p| p.scroll_offset)
+                .unwrap_or(0)
+        };
+        let mut state = ModuleParamsState {
+            status,
+            entries,
+            selected_index,
+            scroll_offset,
+        };
+        if let Some(sel) = state.selected_index {
+            state.scroll_offset =
+                clamped_scroll_offset(state.scroll_offset, sel, self.modules_viewport_height);
+        }
+        self.module_params = Some(state);
+    }
+
+    fn rebuild_module_params(&mut self, reset_selection: bool) {
+        let Some(config) = self.config_cache.take() else {
+            self.module_params = None;
+            return;
+        };
+        self.rebuild_module_params_from(&config, reset_selection);
+        self.config_cache = Some(config);
     }
 
     fn drop_stale_confirming_remove_mode(&mut self) {
@@ -272,6 +417,7 @@ impl App {
         if !modules.is_empty() && idx > 0 {
             self.selected_index = Some(idx - 1);
             self.ensure_selected_visible();
+            self.rebuild_module_params(true);
         }
     }
 
@@ -285,6 +431,45 @@ impl App {
         if idx + 1 < modules.len() {
             self.selected_index = Some(idx + 1);
             self.ensure_selected_visible();
+            self.rebuild_module_params(true);
+        }
+    }
+
+    fn ensure_selected_param_visible(&mut self) {
+        let Some(params) = self.module_params.as_mut() else {
+            return;
+        };
+        let Some(idx) = params.selected_index else {
+            return;
+        };
+        params.scroll_offset =
+            clamped_scroll_offset(params.scroll_offset, idx, self.modules_viewport_height);
+    }
+
+    fn select_previous_param(&mut self) {
+        let Some(params) = self.module_params.as_mut() else {
+            return;
+        };
+        let Some(idx) = params.selected_index else {
+            return;
+        };
+        if idx > 0 {
+            params.selected_index = Some(idx - 1);
+            self.ensure_selected_param_visible();
+        }
+    }
+
+    fn select_next_param(&mut self) {
+        let Some(params) = self.module_params.as_ref() else {
+            return;
+        };
+        let Some(idx) = params.selected_index else {
+            return;
+        };
+        if idx + 1 < params.entries.len() {
+            let params = self.module_params.as_mut().unwrap();
+            params.selected_index = Some(idx + 1);
+            self.ensure_selected_param_visible();
         }
     }
 
@@ -318,6 +503,7 @@ impl App {
                 self.modules = Some(new_order);
                 self.selected_index = Some(target);
                 self.ensure_selected_visible();
+                self.rebuild_module_params(true);
                 let direction = if delta < 0 { "up" } else { "down" };
                 self.push_action_message(format!("Moved {name} {direction}"));
             }
@@ -448,6 +634,7 @@ impl App {
                 self.selected_index = Some(new_modules.len() - 1);
                 self.modules = Some(new_modules);
                 self.ensure_selected_visible();
+                self.rebuild_module_params(true);
                 self.push_action_message(format!("Added {new_entry}"));
             }
             Err(err) => self.push_action_message(format!("Failed to add module: {err}")),
@@ -498,6 +685,10 @@ impl App {
                 };
                 self.modules = Some(new_modules);
                 self.ensure_selected_visible();
+                if self.selected_index.is_none() {
+                    self.panel_focus = PanelFocus::Modules;
+                }
+                self.rebuild_module_params(true);
                 self.push_action_message(format!("Removed {name}"));
             }
             Err(err) => self.push_action_message(format!("Failed to remove module: {err}")),
@@ -505,8 +696,26 @@ impl App {
     }
 
     fn handle_key_help(&mut self, key: KeyEvent) {
+        if is_quit(key) {
+            self.should_quit = true;
+            return;
+        }
         match key.code {
-            KeyCode::Char('?') | KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Char('?') | KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.help_scroll_offset = 0;
+            }
+            KeyCode::Char('s') => self.start_daemon(),
+            KeyCode::Char('k') => self.stop_daemon(),
+            KeyCode::Up => {
+                self.help_scroll_offset = self.help_scroll_offset.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                let total = super::ui::help_lines(self).len();
+                let max_offset = total.saturating_sub(self.modules_viewport_height);
+                self.help_scroll_offset =
+                    (self.help_scroll_offset.saturating_add(1)).min(max_offset);
+            }
             _ => {}
         }
     }
@@ -2229,5 +2438,140 @@ mod tests {
         assert_eq!(app.mode, Mode::Help);
         app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn question_mark_preserves_panel_focus() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+    }
+
+    #[test]
+    fn help_scroll_down_is_noop_when_lines_fit_in_viewport() {
+        let mut app = App {
+            modules_viewport_height: 64,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Help);
+        assert_eq!(app.help_scroll_offset, 0);
+        let line_count = super::super::ui::help_lines(&app).len();
+        assert!(
+            line_count <= app.modules_viewport_height,
+            "precondition: help lines ({line_count}) must fit in viewport"
+        );
+
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.help_scroll_offset, 0,
+            "Down must be a no-op when every help line already fits"
+        );
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.help_scroll_offset, 0);
+    }
+
+    #[test]
+    fn enter_and_right_focus_params_when_module_selected() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+        app.panel_focus = PanelFocus::Modules;
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+    }
+
+    #[test]
+    fn enter_ignored_when_no_module_selected() {
+        let mut app = App {
+            modules: Some(vec![]),
+            selected_index: None,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.panel_focus, PanelFocus::Modules);
+    }
+
+    #[test]
+    fn esc_and_left_return_focus_to_modules() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.panel_focus, PanelFocus::Modules);
+        app.panel_focus = PanelFocus::Params;
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.panel_focus, PanelFocus::Modules);
+    }
+
+    #[test]
+    fn a_d_e_ignored_when_params_focused() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            separator: Some(" | ".to_string()),
+            config_path: Some(unique_temp_path("params-focus-ignore")),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn q_quits_even_with_params_focus() {
+        let mut app = App {
+            panel_focus: PanelFocus::Params,
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn params_up_down_move_selection() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            modules_viewport_height: 10,
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![
+                    ("a".to_string(), ModuleParamValue::String("1".to_string())),
+                    ("b".to_string(), ModuleParamValue::String("2".to_string())),
+                    ("c".to_string(), ModuleParamValue::String("3".to_string())),
+                ],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.module_params.as_ref().unwrap().selected_index, Some(1));
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.module_params.as_ref().unwrap().selected_index, Some(0));
     }
 }
