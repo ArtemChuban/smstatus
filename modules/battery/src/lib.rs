@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/sys/class/power_supply/BAT0/capacity";
-const DEFAULT_FORMAT: &str = "BAT {}%";
+const DEFAULT_FORMAT: &str = "BAT {:3}%";
 const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
@@ -31,7 +31,7 @@ mod logic {
     }
 
     pub fn format_battery(format: &str, raw_content: &str) -> String {
-        format.replace("{}", raw_content.trim())
+        fmt_common::format_template(format, &[("", raw_content.trim())])
     }
 
     pub fn format_error(err: &str) -> String {
@@ -169,6 +169,16 @@ mod tests {
     #[test]
     fn no_placeholder_returns_format_unchanged() {
         assert_eq!(format_battery("static text", "87"), "static text");
+    }
+
+    #[test]
+    fn zero_pads_capacity() {
+        assert_eq!(format_battery("BAT {:03}%", "9"), "BAT 009%");
+    }
+
+    #[test]
+    fn space_pads_capacity() {
+        assert_eq!(format_battery("BAT {:3}%", "9"), "BAT   9%");
     }
 
     #[test]

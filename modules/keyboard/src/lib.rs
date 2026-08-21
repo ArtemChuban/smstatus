@@ -51,7 +51,7 @@ mod logic {
     }
 
     pub fn format_layout(format: &str, layout: &str) -> String {
-        format.replace("{}", layout)
+        fmt_common::format_template(format, &[("", layout)])
     }
 
     pub fn format_error(err: &str) -> String {
