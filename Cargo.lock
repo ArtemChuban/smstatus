@@ -704,6 +704,7 @@ dependencies = [
 name = "datetime"
 version = "0.1.0"
 dependencies = [
+ "fmt-common",
  "serde",
  "serde_json",
  "time",

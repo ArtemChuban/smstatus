@@ -1,10 +1,11 @@
 wit_bindgen::generate!({
     path: "../../wit",
     world: "module",
+    additional_derives: [PartialEq],
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
@@ -78,6 +79,14 @@ impl Guest for Component {
             patch,
         }
     }
+
+    fn config_schema() -> Vec<ConfigParam> {
+        fmt_common::config_schema![
+            ConfigParam,
+            ("device", DEFAULT_DEVICE),
+            ("format", DEFAULT_FORMAT),
+        ]
+    }
 }
 
 export!(Component);
@@ -85,6 +94,7 @@ export!(Component);
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use super::Guest;
     use super::logic::*;
     use fmt_common::human_bytes;
 
@@ -201,5 +211,24 @@ mod tests {
     #[test]
     fn formats_empty_error_message() {
         assert_eq!(format_error(""), "disk error: ");
+    }
+
+    #[test]
+    fn config_schema_declares_device_and_format() {
+        assert_eq!(
+            super::Component::config_schema(),
+            vec![
+                super::ConfigParam {
+                    name: "device".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_DEVICE.to_string(),
+                },
+                super::ConfigParam {
+                    name: "format".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_FORMAT.to_string(),
+                },
+            ]
+        );
     }
 }

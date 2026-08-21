@@ -1,10 +1,11 @@
 wit_bindgen::generate!({
     path: "../../wit",
     world: "module",
+    additional_derives: [PartialEq],
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
@@ -104,6 +105,16 @@ impl Guest for Component {
             patch,
         }
     }
+
+    fn config_schema() -> Vec<ConfigParam> {
+        fmt_common::config_schema![
+            ConfigParam,
+            ("process", ""),
+            ("format", DEFAULT_FORMAT),
+            ("active_label", DEFAULT_ACTIVE_LABEL),
+            ("inactive_label", DEFAULT_INACTIVE_LABEL),
+        ]
+    }
 }
 
 export!(Component);
@@ -111,6 +122,7 @@ export!(Component);
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use super::Guest;
     use super::logic::*;
 
     #[test]
@@ -243,6 +255,35 @@ mod tests {
         assert_eq!(
             format_error("err\nwith\nnewlines"),
             "process error: err\nwith\nnewlines"
+        );
+    }
+
+    #[test]
+    fn config_schema_declares_all_params() {
+        assert_eq!(
+            super::Component::config_schema(),
+            vec![
+                super::ConfigParam {
+                    name: "process".to_string(),
+                    param_type: "string".to_string(),
+                    default: "".to_string(),
+                },
+                super::ConfigParam {
+                    name: "format".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_FORMAT.to_string(),
+                },
+                super::ConfigParam {
+                    name: "active_label".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_ACTIVE_LABEL.to_string(),
+                },
+                super::ConfigParam {
+                    name: "inactive_label".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_INACTIVE_LABEL.to_string(),
+                },
+            ]
         );
     }
 }
