@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,6 +43,7 @@ pub(crate) struct ModuleRuntime {
     fuel_per_tick: u64,
     connection: Arc<RustConnection>,
     http_agent: ureq::Agent,
+    validated_kinds: RefCell<HashSet<String>>,
 }
 
 fn wait_wasm_stable(path: &Path) {
@@ -72,6 +74,7 @@ impl ModuleRuntime {
             fuel_per_tick,
             connection,
             http_agent,
+            validated_kinds: RefCell::new(HashSet::new()),
         }
     }
 
@@ -81,6 +84,7 @@ impl ModuleRuntime {
 
     fn start_after_stable(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
         wait_wasm_stable(&self.wasm_path(kind));
+        self.validated_kinds.borrow_mut().remove(kind);
         self.start(kind, name, config)
     }
 
@@ -101,6 +105,13 @@ impl ModuleRuntime {
             .smstatus_module_guest()
             .call_required_host_api_version(&mut store)?;
         version::check_compatible(kind, (required.major, required.minor, required.patch))?;
+
+        if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
+            let schema = module
+                .smstatus_module_guest()
+                .call_config_schema(&mut store)?;
+            crate::schema::validate_schema(kind, name, &schema)?;
+        }
 
         module
             .smstatus_module_guest()

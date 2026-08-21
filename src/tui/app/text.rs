@@ -21,10 +21,7 @@ pub(super) fn is_quit(key: KeyEvent) -> bool {
 }
 
 pub(super) fn is_valid_param_key(key: &str) -> bool {
-    !key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    crate::schema::is_valid_name(key)
 }
 
 pub(super) fn apply_text_edit(buffer: &mut String, cursor: &mut usize, key: KeyEvent) {
