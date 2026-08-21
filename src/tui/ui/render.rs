@@ -174,7 +174,9 @@ pub(super) fn styled_list_lines(
     width: u16,
 ) -> Vec<Line<'static>> {
     let (start, end, _total) = module_window(entries.len(), offset, viewport_height);
-    entries[start..end]
+    entries
+        .get(start..end)
+        .unwrap_or(&[])
         .iter()
         .enumerate()
         .map(|(i, name)| {
