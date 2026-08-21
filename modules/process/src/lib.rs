@@ -46,7 +46,7 @@ mod logic {
         } else {
             inactive_label
         };
-        format.replace("{}", label)
+        fmt_common::format_template(format, &[("", label)])
     }
 
     pub fn format_error(err: &str) -> String {

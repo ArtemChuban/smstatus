@@ -77,12 +77,17 @@ test-process:
 test-claude:
     cargo test -p claude
 
+test-fmt-common:
+    cargo test -p fmt-common
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
+
+test-packages: test-fmt-common
 
 test-app:
     cargo test -p smstatus
 
-test-all: test-modules test-app
+test-all: test-packages test-modules test-app
 
 fmt:
     cargo fmt --all
@@ -91,5 +96,6 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
+    cargo clippy -p fmt-common -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
     cargo clippy -p smstatus -- -D warnings
