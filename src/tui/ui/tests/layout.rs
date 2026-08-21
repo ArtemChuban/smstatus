@@ -102,3 +102,27 @@ fn modules_viewport_height_matches_compute_fixed_heights_via_frame_height_offset
         assert_eq!(modules_viewport_height(frame_height), expected);
     }
 }
+
+#[test]
+fn overlay_viewport_height_matches_overlay_inner_geometry() {
+    for frame_height in [0u16, 1, 2, 5, 7, 13, 14, 20, 24, 40] {
+        let heights = compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS));
+        let region = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: heights
+                .modules_border
+                .saturating_add(heights.modules_content),
+        };
+        let expected = Block::default()
+            .borders(Borders::ALL)
+            .inner(overlay_rect(region))
+            .height as usize;
+        assert_eq!(
+            overlay_viewport_height(frame_height),
+            expected,
+            "frame_height={frame_height}"
+        );
+    }
+}

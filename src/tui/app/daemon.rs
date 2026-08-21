@@ -65,7 +65,12 @@ impl App {
             _ if self.pending_start.is_some() => {
                 self.push_action_message("smstatus is already starting".to_string());
             }
-            _ => match crate::daemon::spawn_daemon() {
+            None => {
+                self.push_action_message(
+                    "cannot start smstatus: daemon status unknown".to_string(),
+                );
+            }
+            Some(crate::daemon::DaemonStatus::Stopped) => match crate::daemon::spawn_daemon() {
                 Ok(child) => {
                     self.pending_start = Some(child);
                     self.pending_start_confirmed_running = false;
