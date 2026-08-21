@@ -1,0 +1,60 @@
+name: Rust Doctor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: rust-doctor-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install rust-doctor
+        run: npm install -g rust-doctor@0.5.0
+
+      - name: Inspect the workspace
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_REF:-}" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            scope_arguments=(--scope baseline --base "origin/$BASE_REF")
+          else
+            scope_arguments=(--scope full)
+          fi
+
+          set +e
+          rust-doctor . --yes --verbose "${scope_arguments[@]}" > scan.txt 2>&1
+          scan_status=$?
+          set -e
+
+          {
+            echo '## Rust Doctor'
+            echo
+            echo '```'
+            cat scan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$scan_status"
