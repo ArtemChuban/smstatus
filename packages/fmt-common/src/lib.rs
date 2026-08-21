@@ -6,10 +6,11 @@ pub fn human_bytes(bytes: u64) -> String {
         value /= 1024.0;
         unit += 1;
     }
+    let unit_label = UNITS.get(unit).copied().unwrap_or("");
     if unit == 0 {
-        format!("{value:.0}{}", UNITS[unit])
+        format!("{value:.0}{unit_label}")
     } else {
-        format!("{value:.1}{}", UNITS[unit])
+        format!("{value:.1}{unit_label}")
     }
 }
 

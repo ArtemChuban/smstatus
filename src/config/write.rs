@@ -12,7 +12,7 @@ impl BarConfig {
         let mut doc = content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-        doc["separator"] = toml_edit::value(new_value);
+        doc.insert("separator", toml_edit::value(new_value));
         atomic_write(path, &doc.to_string())
     }
 
@@ -65,12 +65,15 @@ impl BarConfig {
                         path.display()
                     )
                 })?;
-            let value = originals[idx].take().ok_or_else(|| {
-                format!(
-                    "{}: original entry for module `{target_name}` already consumed",
-                    path.display()
-                )
-            })?;
+            let value = originals
+                .get_mut(idx)
+                .and_then(Option::take)
+                .ok_or_else(|| {
+                    format!(
+                        "{}: original entry for module `{target_name}` already consumed",
+                        path.display()
+                    )
+                })?;
             array.push_formatted(value);
         }
 
