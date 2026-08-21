@@ -179,27 +179,17 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 buffer,
                 cursor,
             } => draw_naming_overlay(frame, region, kind, buffer, *cursor),
-            Mode::AddingParamKey { buffer, cursor, .. } => draw_param_text_overlay(
-                frame,
-                region,
-                "add param key",
-                PARAM_KEY_PREFIX,
-                buffer,
-                *cursor,
-            ),
+            Mode::AddingParamKey { buffer, cursor, .. } => {
+                draw_param_text_overlay(frame, region, "add param key", buffer, *cursor)
+            }
             Mode::EditingParamValue {
                 key,
                 buffer,
                 cursor,
                 ..
-            } => draw_param_text_overlay(
-                frame,
-                region,
-                &format!("value for {key}"),
-                PARAM_VALUE_PREFIX,
-                buffer,
-                *cursor,
-            ),
+            } => {
+                draw_param_text_overlay(frame, region, &format!("value for {key}"), buffer, *cursor)
+            }
             Mode::RenamingParamKey {
                 old_key,
                 buffer,
@@ -209,7 +199,6 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 frame,
                 region,
                 &format!("rename {old_key}"),
-                PARAM_RENAME_PREFIX,
                 buffer,
                 *cursor,
             ),
@@ -310,19 +299,27 @@ fn draw_naming_overlay(frame: &mut Frame, region: Rect, kind: &str, buffer: &str
     frame.set_cursor_position((col, inner.y));
 }
 
-const PARAM_KEY_PREFIX: &str = "param key: ";
-const PARAM_VALUE_PREFIX: &str = "param value: ";
-const PARAM_RENAME_PREFIX: &str = "new key: ";
+const PARAM_TEXT_OVERLAY_HEIGHT: u16 = 3;
+
+fn param_text_overlay_rect(region: Rect) -> Rect {
+    let full = overlay_rect(region);
+    let height = PARAM_TEXT_OVERLAY_HEIGHT.min(full.height);
+    Rect {
+        x: full.x,
+        y: full.y + full.height.saturating_sub(height) / 2,
+        width: full.width,
+        height,
+    }
+}
 
 fn draw_param_text_overlay(
     frame: &mut Frame,
     region: Rect,
     title: &str,
-    prefix: &str,
     buffer: &str,
     cursor: usize,
 ) {
-    let area = overlay_rect(region);
+    let area = param_text_overlay_rect(region);
     let block = Block::default()
         .title(boxed_title(title))
         .borders(Borders::ALL)
@@ -330,8 +327,8 @@ fn draw_param_text_overlay(
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(format!("{prefix}{buffer:?}")), inner);
-    let col = inner.x + text_edit_cursor_column(prefix, buffer, cursor);
+    frame.render_widget(Paragraph::new(format!("{buffer:?}")), inner);
+    let col = inner.x + text_edit_cursor_column("", buffer, cursor);
     frame.set_cursor_position((col, inner.y));
 }
 
@@ -596,7 +593,7 @@ mod tests {
     use ratatui::layout::Position;
 
     use super::*;
-    use crate::config::ModuleParamValue;
+    use crate::config::{ModuleParamValue, ParamWriteExpect};
     use crate::daemon::DaemonStatus;
     use crate::tui::app::{App, ModuleParamsState, ModuleParamsStatus, PanelFocus};
 
@@ -793,6 +790,57 @@ mod tests {
         let heights = compute_fixed_heights(outer_inner.height);
         let areas = layout_areas(outer_inner, &heights);
         overlay_rect(modules_region(&areas))
+    }
+
+    fn param_text_overlay_area_for_frame(width: u16, height: u16) -> Rect {
+        let outer_inner = Rect::new(1, 1, width.saturating_sub(2), height.saturating_sub(2));
+        let heights = compute_fixed_heights(outer_inner.height);
+        let areas = layout_areas(outer_inner, &heights);
+        param_text_overlay_rect(modules_region(&areas))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expected_param_text_overlay(
+        width: u16,
+        height: u16,
+        status: Option<DaemonStatus>,
+        separator_text: &str,
+        overlay_title_text: &str,
+        overlay_line: &str,
+        action_log: &[&str],
+        hint_text: &str,
+    ) -> Buffer {
+        use ratatui::widgets::Widget;
+
+        let mut buf = expected(
+            width,
+            height,
+            status,
+            separator_text,
+            "modules unknown",
+            &[],
+            "config",
+            &[],
+            action_log,
+            hint_text,
+        );
+
+        let outer_inner = Rect::new(1, 1, width.saturating_sub(2), height.saturating_sub(2));
+        let heights = compute_fixed_heights(outer_inner.height);
+        let areas = layout_areas(outer_inner, &heights);
+        if areas.modules.height == 0 {
+            return buf;
+        }
+        let area = param_text_overlay_rect(modules_region(&areas));
+        Clear.render(area, &mut buf);
+        let block = Block::default()
+            .title(boxed_title(overlay_title_text))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let inner = block.inner(area);
+        block.render(area, &mut buf);
+        Paragraph::new(Line::from(overlay_line.to_string())).render(inner, &mut buf);
+        buf
     }
 
     const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?";
@@ -1996,6 +2044,45 @@ mod tests {
         let inner = Block::default().borders(Borders::ALL).inner(overlay);
         let prefix = instance_name_prefix("disk");
         let col = inner.x + text_edit_cursor_column(&prefix, "root", 4);
+        assert_eq!(
+            terminal.backend().cursor_position(),
+            Position::new(col, inner.y)
+        );
+    }
+
+    #[test]
+    fn draw_renders_compact_param_value_overlay_without_prefix() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            mode: Mode::EditingParamValue {
+                section: "cpu".to_string(),
+                key: "format".to_string(),
+                buffer: "hi".to_string(),
+                cursor: 2,
+                expect: ParamWriteExpect::ExistingString("old".to_string()),
+            },
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 4;
+        let terminal = render_terminal(&app, 70, height);
+        assert_eq!(
+            terminal.backend().buffer().clone(),
+            expected_param_text_overlay(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "value for format",
+                "\"hi\"",
+                &[],
+                "Confirm: Enter | Cancel: Esc",
+            )
+        );
+        let overlay = param_text_overlay_area_for_frame(70, height);
+        assert_eq!(overlay.height, PARAM_TEXT_OVERLAY_HEIGHT);
+        assert!(terminal.backend().cursor_visible());
+        let inner = Block::default().borders(Borders::ALL).inner(overlay);
+        let col = inner.x + text_edit_cursor_column("", "hi", 2);
         assert_eq!(
             terminal.backend().cursor_position(),
             Position::new(col, inner.y)
