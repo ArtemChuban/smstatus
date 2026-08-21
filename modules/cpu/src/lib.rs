@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/proc/stat";
-const DEFAULT_FORMAT: &str = "CPU {usage}%";
+const DEFAULT_FORMAT: &str = "CPU {usage:3}%";
 const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
@@ -87,7 +87,8 @@ mod logic {
     }
 
     pub fn format_cpu(format: &str, percent: f64) -> String {
-        format.replace("{usage}", &format!("{percent:.0}"))
+        let usage = format!("{percent:.0}");
+        fmt_common::format_template(format, &[("usage", &usage)])
     }
 
     pub fn format_error(err: &str) -> String {
@@ -286,6 +287,16 @@ mod tests {
     #[test]
     fn format_cpu_no_placeholder_returns_unchanged() {
         assert_eq!(format_cpu("static text", 50.0), "static text");
+    }
+
+    #[test]
+    fn format_cpu_space_pads_usage() {
+        assert_eq!(format_cpu("CPU {usage:3}%", 5.0), "CPU   5%");
+    }
+
+    #[test]
+    fn format_cpu_zero_pads_usage() {
+        assert_eq!(format_cpu("CPU {usage:03}%", 5.0), "CPU 005%");
     }
 
     #[test]

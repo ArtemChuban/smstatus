@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 wit-bindgen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+fmt-common = { path = "../../packages/fmt-common" }

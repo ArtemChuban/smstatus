@@ -133,11 +133,19 @@ mod logic {
         session_reset_secs: Option<i64>,
         week_reset_secs: Option<i64>,
     ) -> String {
-        format
-            .replace("{session}", &format!("{session_pct:.0}"))
-            .replace("{week}", &format!("{week_pct:.0}"))
-            .replace("{session_reset}", &format_duration(session_reset_secs))
-            .replace("{week_reset}", &format_duration(week_reset_secs))
+        let session = format!("{session_pct:.0}");
+        let week = format!("{week_pct:.0}");
+        let session_reset = format_duration(session_reset_secs);
+        let week_reset = format_duration(week_reset_secs);
+        fmt_common::format_template(
+            format,
+            &[
+                ("session", &session),
+                ("week", &week),
+                ("session_reset", &session_reset),
+                ("week_reset", &week_reset),
+            ],
+        )
     }
 
     pub fn format_error(err: &str) -> String {
@@ -446,6 +454,14 @@ mod tests {
         assert_eq!(
             format_usage("{session}/{session}", 14.0, 26.0, None, None),
             "14/14"
+        );
+    }
+
+    #[test]
+    fn format_usage_zero_pads_percentages() {
+        assert_eq!(
+            format_usage("{session:03}%/{week:03}%", 5.0, 9.0, None, None),
+            "005%/009%"
         );
     }
 
