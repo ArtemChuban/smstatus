@@ -1,10 +1,11 @@
 wit_bindgen::generate!({
     path: "../../wit",
     world: "module",
+    additional_derives: [PartialEq],
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Output};
 use logic::CpuTimes;
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -139,6 +140,14 @@ impl Guest for Component {
             patch,
         }
     }
+
+    fn config_schema() -> Vec<ConfigParam> {
+        fmt_common::config_schema![
+            ConfigParam,
+            ("path", DEFAULT_PATH),
+            ("format", DEFAULT_FORMAT),
+        ]
+    }
 }
 
 export!(Component);
@@ -146,6 +155,7 @@ export!(Component);
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use super::Guest;
     use super::logic::*;
 
     fn times(user: u64, nice: u64, system: u64, idle: u64, iowait: u64) -> CpuTimes {
@@ -310,5 +320,24 @@ mod tests {
     #[test]
     fn formats_empty_error_message() {
         assert_eq!(format_error(""), "cpu error: ");
+    }
+
+    #[test]
+    fn config_schema_declares_path_and_format() {
+        assert_eq!(
+            super::Component::config_schema(),
+            vec![
+                super::ConfigParam {
+                    name: "path".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_PATH.to_string(),
+                },
+                super::ConfigParam {
+                    name: "format".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_FORMAT.to_string(),
+                },
+            ]
+        );
     }
 }

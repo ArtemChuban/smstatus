@@ -44,6 +44,14 @@ interface guest {
   update: func() -> output;
 
   required-host-api-version: func() -> host-api-version;
+
+  record config-param {
+    name: string,
+    param-type: string,
+    default: string,
+  }
+
+  config-schema: func() -> list<config-param>;
 }
 
 world module {

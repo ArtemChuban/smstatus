@@ -1,10 +1,11 @@
 wit_bindgen::generate!({
     path: "../../wit",
     world: "module",
+    additional_derives: [PartialEq],
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{Guest, HostApiVersion, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
@@ -216,6 +217,16 @@ impl Guest for Component {
             patch,
         }
     }
+
+    fn config_schema() -> Vec<ConfigParam> {
+        fmt_common::config_schema![
+            ConfigParam,
+            ("credentials_path", DEFAULT_CREDENTIALS_PATH),
+            ("url", DEFAULT_URL),
+            ("format", DEFAULT_FORMAT),
+            ("interval_ms", DEFAULT_INTERVAL_MS),
+        ]
+    }
 }
 
 export!(Component);
@@ -223,6 +234,7 @@ export!(Component);
 #[cfg(test)]
 mod tests {
     use super::Config;
+    use super::Guest;
     use super::logic::*;
     use time::OffsetDateTime;
 
@@ -589,5 +601,34 @@ mod tests {
     #[test]
     fn formats_empty_error_message() {
         assert_eq!(format_error(""), "claude error: ");
+    }
+
+    #[test]
+    fn config_schema_declares_all_params() {
+        assert_eq!(
+            super::Component::config_schema(),
+            vec![
+                super::ConfigParam {
+                    name: "credentials_path".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_CREDENTIALS_PATH.to_string(),
+                },
+                super::ConfigParam {
+                    name: "url".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_URL.to_string(),
+                },
+                super::ConfigParam {
+                    name: "format".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_FORMAT.to_string(),
+                },
+                super::ConfigParam {
+                    name: "interval_ms".to_string(),
+                    param_type: "string".to_string(),
+                    default: super::DEFAULT_INTERVAL_MS.to_string(),
+                },
+            ]
+        );
     }
 }
