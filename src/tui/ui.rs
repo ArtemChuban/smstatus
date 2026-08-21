@@ -4,10 +4,14 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{ACTION_LOG_CAPACITY, App, Mode};
+use crate::config::ModuleParamValue;
+
+use super::app::{
+    ACTION_LOG_CAPACITY, App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
+};
 
 const OUTER_BORDER_ROWS: u16 = 2;
 const SETTINGS_BLOCK_HEIGHT: u16 = 3;
@@ -15,6 +19,8 @@ const MODULES_BORDER_ROWS: u16 = 2;
 const HINT_HEIGHT: u16 = 1;
 const LOGS_BLOCK_HEIGHT: u16 = 2 + ACTION_LOG_CAPACITY as u16;
 const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
+const OVERLAY_MARGIN_X: u16 = 4;
+const OVERLAY_MARGIN_Y: u16 = 1;
 
 struct FixedHeights {
     settings: u16,
@@ -56,6 +62,7 @@ pub(super) fn modules_viewport_height(frame_height: u16) -> usize {
 struct Areas {
     settings: Rect,
     modules: Rect,
+    params: Rect,
     logs: Rect,
     hint: Rect,
 }
@@ -67,7 +74,10 @@ fn layout_areas(outer_inner: Rect, heights: &FixedHeights) -> Areas {
     y += heights.settings;
 
     let modules_height = heights.modules_border + heights.modules_content;
-    let modules = Rect::new(outer_inner.x, y, outer_inner.width, modules_height);
+    let left_w = outer_inner.width / 2;
+    let right_w = outer_inner.width.saturating_sub(left_w);
+    let modules = Rect::new(outer_inner.x, y, left_w, modules_height);
+    let params = Rect::new(outer_inner.x + left_w, y, right_w, modules_height);
     y += modules_height;
 
     let logs = Rect::new(outer_inner.x, y, outer_inner.width, heights.logs);
@@ -78,8 +88,29 @@ fn layout_areas(outer_inner: Rect, heights: &FixedHeights) -> Areas {
     Areas {
         settings,
         modules,
+        params,
         logs,
         hint,
+    }
+}
+
+fn modules_region(areas: &Areas) -> Rect {
+    Rect::new(
+        areas.modules.x,
+        areas.modules.y,
+        areas.modules.width.saturating_add(areas.params.width),
+        areas.modules.height,
+    )
+}
+
+fn overlay_rect(region: Rect) -> Rect {
+    let margin_x = OVERLAY_MARGIN_X.min(region.width.saturating_sub(2) / 2);
+    let margin_y = OVERLAY_MARGIN_Y.min(region.height.saturating_sub(2) / 2);
+    Rect {
+        x: region.x.saturating_add(margin_x),
+        y: region.y.saturating_add(margin_y),
+        width: region.width.saturating_sub(margin_x.saturating_mul(2)),
+        height: region.height.saturating_sub(margin_y.saturating_mul(2)),
     }
 }
 
@@ -94,6 +125,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
 
     let heights = compute_fixed_heights(outer_inner.height);
     let areas = layout_areas(outer_inner, &heights);
+    let viewport_height = heights.modules_content as usize;
 
     if areas.settings.height > 0 {
         let settings_block = Block::default()
@@ -111,48 +143,8 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
 
     if areas.modules.height > 0 {
-        let viewport_height = heights.modules_content as usize;
-        let modules_block = Block::default()
-            .title(modules_title(app, viewport_height))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
-        let modules_inner = modules_block.inner(areas.modules);
-        frame.render_widget(modules_block, areas.modules);
-        match &app.mode {
-            Mode::NamingModuleInstance {
-                kind,
-                buffer,
-                cursor,
-            } => {
-                let prefix = instance_name_prefix(kind);
-                frame.render_widget(Paragraph::new(format!("{prefix}{buffer:?}")), modules_inner);
-                let col = modules_inner.x + text_edit_cursor_column(&prefix, buffer, *cursor);
-                frame.set_cursor_position((col, modules_inner.y));
-            }
-            Mode::AddingModule {
-                available,
-                selected,
-                scroll_offset,
-            } => {
-                let lines = styled_list_lines(
-                    available,
-                    Some(*selected),
-                    *scroll_offset,
-                    viewport_height,
-                    modules_inner.width,
-                );
-                frame.render_widget(Paragraph::new(lines), modules_inner);
-            }
-            Mode::Help => {
-                let lines =
-                    styled_list_lines(&help_lines(), None, 0, viewport_height, modules_inner.width);
-                frame.render_widget(Paragraph::new(lines), modules_inner);
-            }
-            Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {
-                let module_lines = visible_module_lines(app, viewport_height, modules_inner.width);
-                frame.render_widget(Paragraph::new(module_lines), modules_inner);
-            }
-        }
+        draw_modules_column(frame, app, areas.modules, viewport_height);
+        draw_params_column(frame, app, areas.params, viewport_height);
     }
 
     if areas.logs.height > 0 {
@@ -170,8 +162,115 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
 
     if areas.hint.height > 0 {
-        frame.render_widget(Paragraph::new(hint_line(&app.mode)), areas.hint);
+        frame.render_widget(Paragraph::new(hint_line(app)), areas.hint);
     }
+
+    if areas.modules.height > 0 {
+        let region = modules_region(&areas);
+        match &app.mode {
+            Mode::Help => draw_help_overlay(frame, app, region),
+            Mode::AddingModule {
+                available,
+                selected,
+                scroll_offset,
+            } => draw_add_overlay(frame, region, available, *selected, *scroll_offset),
+            Mode::NamingModuleInstance {
+                kind,
+                buffer,
+                cursor,
+            } => draw_naming_overlay(frame, region, kind, buffer, *cursor),
+            Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {}
+        }
+    }
+}
+
+fn draw_modules_column(frame: &mut Frame, app: &App, area: Rect, viewport_height: usize) {
+    let modules_block = Block::default()
+        .title(modules_title(app, viewport_height))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let modules_inner = modules_block.inner(area);
+    frame.render_widget(modules_block, area);
+    let module_lines = visible_module_lines(app, viewport_height, modules_inner.width);
+    frame.render_widget(Paragraph::new(module_lines), modules_inner);
+}
+
+fn draw_params_column(frame: &mut Frame, app: &App, area: Rect, viewport_height: usize) {
+    let params_block = Block::default()
+        .title(params_title(app))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let params_inner = params_block.inner(area);
+    frame.render_widget(params_block, area);
+    let lines = visible_params_lines(app, viewport_height, params_inner.width);
+    frame.render_widget(Paragraph::new(lines), params_inner);
+}
+
+fn draw_help_overlay(frame: &mut Frame, app: &App, region: Rect) {
+    let area = overlay_rect(region);
+    let block = Block::default()
+        .title(boxed_title("help"))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let viewport_height = inner.height as usize;
+    let lines = styled_list_lines(
+        &help_lines(app),
+        None,
+        app.help_scroll_offset,
+        viewport_height,
+        inner.width,
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_add_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    available: &[String],
+    selected: usize,
+    scroll_offset: usize,
+) {
+    let area = overlay_rect(region);
+    let viewport_height = Block::default().borders(Borders::ALL).inner(area).height as usize;
+    let (start, end, total) = module_window(available.len(), scroll_offset, viewport_height);
+    let title = if viewport_height == 0 || total == 0 {
+        format!("add module {total} available")
+    } else {
+        format!("add module {}-{end}/{total}", start + 1)
+    };
+    let block = Block::default()
+        .title(boxed_title(&title))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let lines = styled_list_lines(
+        available,
+        Some(selected),
+        scroll_offset,
+        viewport_height,
+        inner.width,
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_naming_overlay(frame: &mut Frame, region: Rect, kind: &str, buffer: &str, cursor: usize) {
+    let area = overlay_rect(region);
+    let block = Block::default()
+        .title(boxed_title(&format!("name instance of {kind}")))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let prefix = instance_name_prefix(kind);
+    frame.render_widget(Paragraph::new(format!("{prefix}{buffer:?}")), inner);
+    let col = inner.x + text_edit_cursor_column(&prefix, buffer, cursor);
+    frame.set_cursor_position((col, inner.y));
 }
 
 fn boxed_title(text: &str) -> String {
@@ -217,9 +316,16 @@ fn text_edit_cursor_column(prefix: &str, buffer: &str, cursor: usize) -> u16 {
     (prefix.chars().count() + escaped_prefix.chars().count()) as u16
 }
 
-fn hint_line(mode: &Mode) -> Cow<'static, str> {
-    match mode {
-        Mode::Normal => Cow::Borrowed("Quit: q | Start: s | Kill: k | Help: ?"),
+fn hint_line(app: &App) -> Cow<'static, str> {
+    match &app.mode {
+        Mode::Normal => match app.panel_focus {
+            PanelFocus::Modules => Cow::Borrowed(
+                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?",
+            ),
+            PanelFocus::Params => Cow::Borrowed(
+                "Select: \u{2191}/\u{2193} | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
+            ),
+        },
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
         Mode::AddingModule { .. } => {
             Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
@@ -228,7 +334,9 @@ fn hint_line(mode: &Mode) -> Cow<'static, str> {
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
         }
-        Mode::Help => Cow::Borrowed("Close: ? or Esc"),
+        Mode::Help => {
+            Cow::Borrowed("Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k")
+        }
     }
 }
 
@@ -240,45 +348,39 @@ fn module_window(total: usize, offset: usize, viewport_height: usize) -> (usize,
     if total == 0 {
         return (0, 0, 0);
     }
-    let offset = offset.min(total - 1);
+    let offset = offset.min(total.saturating_sub(viewport_height));
     let end = (offset + viewport_height).min(total);
     (offset, end, total)
 }
 
 fn modules_title(app: &App, viewport_height: usize) -> String {
-    let text = match &app.mode {
-        Mode::AddingModule {
-            available,
-            scroll_offset,
-            ..
-        } => {
+    let text = match &app.modules {
+        None => "modules unknown".to_string(),
+        Some(modules) if modules.is_empty() => "modules (none configured)".to_string(),
+        Some(modules) => {
             let (start, end, total) =
-                module_window(available.len(), *scroll_offset, viewport_height);
+                module_window(modules.len(), app.module_scroll_offset, viewport_height);
             if viewport_height == 0 {
-                format!("add module {total} available")
+                format!("modules {total} configured")
             } else {
-                format!("add module {}-{end}/{total}", start + 1)
-            }
-        }
-        Mode::NamingModuleInstance { kind, .. } => format!("name instance of {kind}"),
-        Mode::Help => "help".to_string(),
-        Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {
-            match &app.modules {
-                None => "modules unknown".to_string(),
-                Some(modules) if modules.is_empty() => "modules (none configured)".to_string(),
-                Some(modules) => {
-                    let (start, end, total) =
-                        module_window(modules.len(), app.module_scroll_offset, viewport_height);
-                    if viewport_height == 0 {
-                        format!("modules {total} configured")
-                    } else {
-                        format!("modules {}-{end}/{total}", start + 1)
-                    }
-                }
+                format!("modules {}-{end}/{total}", start + 1)
             }
         }
     };
     boxed_title(&text)
+}
+
+fn params_title(app: &App) -> String {
+    let text = match selected_module_entry(app) {
+        Some(entry) => format!("config {entry}"),
+        None => "config".to_string(),
+    };
+    boxed_title(&text)
+}
+
+fn selected_module_entry(app: &App) -> Option<&str> {
+    let idx = app.selected_index?;
+    app.modules.as_ref()?.get(idx).map(String::as_str)
 }
 
 fn styled_list_lines(
@@ -311,42 +413,95 @@ fn visible_module_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Li
     let Some(modules) = &app.modules else {
         return Vec::new();
     };
+    let selected = if app.panel_focus == PanelFocus::Modules {
+        app.selected_index
+    } else {
+        None
+    };
     styled_list_lines(
         modules,
-        app.selected_index,
+        selected,
         app.module_scroll_offset,
         viewport_height,
         width,
     )
 }
 
-fn help_lines() -> Vec<String> {
-    [
-        "Quit: q",
-        "Hard quit: Ctrl+c or Ctrl+d",
-        "Start daemon: s",
-        "Kill daemon: k",
-        "Edit separator: e",
-        "Select module: \u{2191}/\u{2193}",
-        "Move module: Ctrl+\u{2191}/\u{2193}",
-        "Add module: a",
-        "Remove module: d",
-        "Help: ?",
-        "Save separator: Enter",
-        "Cancel separator edit: Esc",
-        "Separator cursor: \u{2190}/\u{2192}",
-        "Separator backspace: Backspace",
-        "Select add-picker entry: \u{2191}/\u{2193}",
-        "Confirm add-picker selection: Enter",
-        "Cancel add picker: Esc",
-        "Confirm instance name: Enter",
-        "Cancel instance naming: Esc",
-        "Confirm remove: d",
-        "Cancel remove: any other key",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+fn param_display_lines(state: &ModuleParamsState) -> Vec<String> {
+    match &state.status {
+        ModuleParamsStatus::Missing { section } => {
+            vec![format!("(no [{section}] section)")]
+        }
+        ModuleParamsStatus::Empty => vec!["(empty)".to_string()],
+        ModuleParamsStatus::Entries => state
+            .entries
+            .iter()
+            .map(|(key, value)| match value {
+                ModuleParamValue::String(s) => format!("{key} = {s:?}"),
+                ModuleParamValue::NonString => format!("{key} = <non-string>"),
+            })
+            .collect(),
+    }
+}
+
+fn visible_params_lines(app: &App, viewport_height: usize, width: u16) -> Vec<Line<'static>> {
+    let Some(state) = &app.module_params else {
+        return Vec::new();
+    };
+    let lines = param_display_lines(state);
+    let selected = if app.panel_focus == PanelFocus::Params
+        && matches!(state.status, ModuleParamsStatus::Entries)
+    {
+        state.selected_index
+    } else {
+        None
+    };
+    let offset = if matches!(state.status, ModuleParamsStatus::Entries) {
+        state.scroll_offset
+    } else {
+        0
+    };
+    styled_list_lines(&lines, selected, offset, viewport_height, width)
+}
+
+pub(super) fn help_lines(app: &App) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("--- Local ---".to_string());
+    match &app.mode {
+        Mode::Normal => match app.panel_focus {
+            PanelFocus::Modules => {
+                lines.push("Select module: \u{2191}/\u{2193}".to_string());
+                lines.push("Move module: Ctrl+\u{2191}/\u{2193}".to_string());
+                lines.push("Add module: a".to_string());
+                lines.push("Remove module: d".to_string());
+                lines.push("Edit separator: e".to_string());
+                lines.push("Focus params: Enter/\u{2192}".to_string());
+            }
+            PanelFocus::Params => {
+                lines.push("Select param: \u{2191}/\u{2193}".to_string());
+                lines.push("Back to modules: Esc/\u{2190}".to_string());
+            }
+        },
+        Mode::Help => {
+            lines.push("Close help: ? or Esc".to_string());
+            lines.push("Scroll help: \u{2191}/\u{2193}".to_string());
+        }
+        _ => {}
+    }
+    lines.push("--- Global ---".to_string());
+    match &app.mode {
+        Mode::Normal | Mode::Help => {
+            lines.push("Quit: q".to_string());
+            lines.push("Hard quit: Ctrl+c or Ctrl+d".to_string());
+            lines.push("Start daemon: s".to_string());
+            lines.push("Kill daemon: k".to_string());
+            if matches!(app.mode, Mode::Normal) {
+                lines.push("Help: ?".to_string());
+            }
+        }
+        _ => {}
+    }
+    lines
 }
 
 fn action_log_lines(action_log: &[String]) -> Vec<String> {
@@ -365,8 +520,9 @@ mod tests {
     use ratatui::layout::Position;
 
     use super::*;
+    use crate::config::ModuleParamValue;
     use crate::daemon::DaemonStatus;
-    use crate::tui::app::App;
+    use crate::tui::app::{App, ModuleParamsState, ModuleParamsStatus, PanelFocus};
 
     fn pad(content: &str, width: usize) -> String {
         let chars: Vec<char> = content.chars().collect();
@@ -413,6 +569,33 @@ mod tests {
         wrap(&wrap(&pad(content, width - 4)))
     }
 
+    fn split_widths(frame_width: usize) -> (usize, usize) {
+        let inner = frame_width - 2;
+        let left = inner / 2;
+        let right = inner - left;
+        (left, right)
+    }
+
+    fn two_col_top_row(left_title: &str, right_title: &str, width: usize) -> String {
+        let (lw, rw) = split_widths(width);
+        wrap(
+            &(top_border(&boxed_title(left_title), lw)
+                + &top_border(&boxed_title(right_title), rw)),
+        )
+    }
+
+    fn two_col_bottom_row(width: usize) -> String {
+        let (lw, rw) = split_widths(width);
+        wrap(&(bottom_border(lw) + &bottom_border(rw)))
+    }
+
+    fn two_col_content_row(left: &str, right: &str, width: usize) -> String {
+        let (lw, rw) = split_widths(width);
+        let left_inner = wrap(&pad(left, lw.saturating_sub(2)));
+        let right_inner = wrap(&pad(right, rw.saturating_sub(2)));
+        wrap(&(left_inner + &right_inner))
+    }
+
     fn outer_title_str(status: Option<DaemonStatus>) -> String {
         outer_title(&App {
             daemon_status: status,
@@ -428,6 +611,8 @@ mod tests {
         separator_text: &str,
         modules_title_text: &str,
         module_lines: &[&str],
+        params_title_text: &str,
+        params_lines: &[&str],
         action_log: &[&str],
         hint_text: &str,
     ) -> Buffer {
@@ -443,16 +628,20 @@ mod tests {
 
         let modules_height = heights.modules_border + heights.modules_content;
         if modules_height > 0 {
-            rows.push(nested_top_row(modules_title_text, w));
-            let mut padded_module_lines: Vec<String> =
-                module_lines.iter().map(|s| s.to_string()).collect();
-            while padded_module_lines.len() < heights.modules_content as usize {
-                padded_module_lines.push(String::new());
+            rows.push(two_col_top_row(modules_title_text, params_title_text, w));
+            let vh = heights.modules_content as usize;
+            let mut left: Vec<String> = module_lines.iter().map(|s| s.to_string()).collect();
+            let mut right: Vec<String> = params_lines.iter().map(|s| s.to_string()).collect();
+            while left.len() < vh {
+                left.push(String::new());
             }
-            for line in &padded_module_lines {
-                rows.push(nested_content_row(line, w));
+            while right.len() < vh {
+                right.push(String::new());
             }
-            rows.push(nested_bottom_row(w));
+            for i in 0..vh {
+                rows.push(two_col_content_row(&left[i], &right[i], w));
+            }
+            rows.push(two_col_bottom_row(w));
         }
 
         if heights.logs > 0 {
@@ -475,7 +664,66 @@ mod tests {
         Buffer::with_lines(rows)
     }
 
-    const NORMAL_HINT: &str = "Quit: q | Start: s | Kill: k | Help: ?";
+    #[allow(clippy::too_many_arguments)]
+    fn expected_overlay(
+        width: u16,
+        height: u16,
+        status: Option<DaemonStatus>,
+        separator_text: &str,
+        overlay_title_text: &str,
+        overlay_lines: &[&str],
+        action_log: &[&str],
+        hint_text: &str,
+    ) -> Buffer {
+        use ratatui::widgets::Widget;
+
+        let mut buf = expected(
+            width,
+            height,
+            status,
+            separator_text,
+            "modules unknown",
+            &[],
+            "config",
+            &[],
+            action_log,
+            hint_text,
+        );
+
+        let outer_inner = Rect::new(1, 1, width.saturating_sub(2), height.saturating_sub(2));
+        let heights = compute_fixed_heights(outer_inner.height);
+        let areas = layout_areas(outer_inner, &heights);
+        if areas.modules.height == 0 {
+            return buf;
+        }
+        let area = overlay_rect(modules_region(&areas));
+        Clear.render(area, &mut buf);
+        let block = Block::default()
+            .title(boxed_title(overlay_title_text))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let inner = block.inner(area);
+        block.render(area, &mut buf);
+        let lines: Vec<Line> = overlay_lines
+            .iter()
+            .map(|s| Line::from((*s).to_string()))
+            .collect();
+        Paragraph::new(lines).render(inner, &mut buf);
+        buf
+    }
+
+    fn overlay_area_for_frame(width: u16, height: u16) -> Rect {
+        let outer_inner = Rect::new(1, 1, width.saturating_sub(2), height.saturating_sub(2));
+        let heights = compute_fixed_heights(outer_inner.height);
+        let areas = layout_areas(outer_inner, &heights);
+        overlay_rect(modules_region(&areas))
+    }
+
+    const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?";
+    const NORMAL_HINT_PARAMS: &str =
+        "Select: \u{2191}/\u{2193} | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+    const HELP_HINT: &str =
+        "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";
 
     const BASELINE_HEIGHT: u16 = 13;
 
@@ -493,9 +741,37 @@ mod tests {
             .clone()
     }
 
-    fn with_reversed_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+    fn with_reversed_modules_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+        let (lw, _) = split_widths(width as usize);
+        let content_w = (lw as u16).saturating_sub(2);
         buffer.set_style(
-            Rect::new(2, y, width - 4, 1),
+            Rect::new(2, y, content_w, 1),
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+        buffer
+    }
+
+    fn with_reversed_params_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+        let (lw, rw) = split_widths(width as usize);
+        let x = 1 + lw as u16 + 1;
+        let content_w = (rw as u16).saturating_sub(2);
+        buffer.set_style(
+            Rect::new(x, y, content_w, 1),
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+        buffer
+    }
+
+    fn with_reversed_overlay_row(
+        mut buffer: Buffer,
+        y: u16,
+        frame_width: u16,
+        frame_height: u16,
+    ) -> Buffer {
+        let area = overlay_area_for_frame(frame_width, frame_height);
+        let inner = Block::default().borders(Borders::ALL).inner(area);
+        buffer.set_style(
+            Rect::new(inner.x, y, inner.width, 1),
             Style::default().add_modifier(Modifier::REVERSED),
         );
         buffer
@@ -542,8 +818,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -563,8 +841,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -584,8 +864,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -605,8 +887,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -627,8 +911,10 @@ mod tests {
                 "separator: \" | \"",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -649,8 +935,10 @@ mod tests {
                 "separator: \"\"",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -673,6 +961,8 @@ mod tests {
                 Some(DaemonStatus::Stopped),
                 "New separator: \"::\"",
                 "modules unknown",
+                &[],
+                "config",
                 &[],
                 &[],
                 "Save: Enter | Cancel: Esc",
@@ -699,6 +989,8 @@ mod tests {
                 "New separator: \"\"",
                 "modules unknown",
                 &[],
+                "config",
+                &[],
                 &[],
                 "Save: Enter | Cancel: Esc",
             )
@@ -706,63 +998,83 @@ mod tests {
     }
 
     #[test]
-    fn hint_line_normal_mode() {
-        assert_eq!(hint_line(&Mode::Normal).as_ref(), NORMAL_HINT);
+    fn hint_line_normal_mode_modules_focus() {
+        let app = App::default();
+        assert_eq!(hint_line(&app).as_ref(), NORMAL_HINT_MODULES);
+    }
+
+    #[test]
+    fn hint_line_normal_mode_params_focus() {
+        let app = App {
+            panel_focus: PanelFocus::Params,
+            ..App::default()
+        };
+        assert_eq!(hint_line(&app).as_ref(), NORMAL_HINT_PARAMS);
     }
 
     #[test]
     fn hint_line_editing_separator_mode() {
-        assert_eq!(
-            hint_line(&Mode::EditingSeparator {
+        let app = App {
+            mode: Mode::EditingSeparator {
                 buffer: String::new(),
                 cursor: 0,
-            })
-            .as_ref(),
-            "Save: Enter | Cancel: Esc"
-        );
+            },
+            ..App::default()
+        };
+        assert_eq!(hint_line(&app).as_ref(), "Save: Enter | Cancel: Esc");
     }
 
     #[test]
     fn hint_line_adding_module_mode() {
-        assert_eq!(
-            hint_line(&Mode::AddingModule {
+        let app = App {
+            mode: Mode::AddingModule {
                 available: vec![],
                 selected: 0,
                 scroll_offset: 0,
-            })
-            .as_ref(),
+            },
+            ..App::default()
+        };
+        assert_eq!(
+            hint_line(&app).as_ref(),
             "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc"
         );
     }
 
     #[test]
     fn hint_line_naming_module_instance_mode() {
-        assert_eq!(
-            hint_line(&Mode::NamingModuleInstance {
+        let app = App {
+            mode: Mode::NamingModuleInstance {
                 kind: "cpu".to_string(),
                 buffer: String::new(),
                 cursor: 0,
-            })
-            .as_ref(),
-            "Confirm: Enter | Cancel: Esc"
-        );
+            },
+            ..App::default()
+        };
+        assert_eq!(hint_line(&app).as_ref(), "Confirm: Enter | Cancel: Esc");
     }
 
     #[test]
     fn hint_line_confirming_remove_mode_includes_module_name() {
-        assert_eq!(
-            hint_line(&Mode::ConfirmingRemove {
+        let app = App {
+            mode: Mode::ConfirmingRemove {
                 index: 0,
                 name: "cpu".to_string(),
-            })
-            .as_ref(),
+            },
+            ..App::default()
+        };
+        assert_eq!(
+            hint_line(&app).as_ref(),
             "Remove cpu? Confirm: d | Cancel: any key"
         );
     }
 
     #[test]
     fn hint_line_help_mode() {
-        assert_eq!(hint_line(&Mode::Help).as_ref(), "Close: ? or Esc");
+        let app = App {
+            mode: Mode::Help,
+            ..App::default()
+        };
+        assert_eq!(hint_line(&app).as_ref(), HELP_HINT);
     }
 
     #[test]
@@ -781,8 +1093,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -803,8 +1117,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
+                &[],
                 &["Starting smstatus..."],
-                NORMAL_HINT,
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -829,12 +1145,14 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
+                &[],
                 &[
                     "Starting smstatus...",
                     "smstatus is already running",
                     "Sent stop signal to smstatus (pid 42)",
                 ],
-                NORMAL_HINT,
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -855,8 +1173,10 @@ mod tests {
                 "separator: unknown",
                 "modules (none configured)",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -881,8 +1201,10 @@ mod tests {
                 "separator: unknown",
                 "modules 3 configured",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -908,8 +1230,10 @@ mod tests {
                 "separator: unknown",
                 "modules 1-3/3",
                 &["cpu", "disk#root", "battery"],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -939,8 +1263,10 @@ mod tests {
                 "separator: unknown",
                 "modules 3-4/6",
                 &["m2", "m3"],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -962,8 +1288,139 @@ mod tests {
                 "separator: unknown",
                 "modules 1-1/1",
                 &["disk#root"],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
+            )
+        );
+    }
+
+    fn params_missing(section: &str) -> ModuleParamsState {
+        ModuleParamsState {
+            status: ModuleParamsStatus::Missing {
+                section: section.to_string(),
+            },
+            entries: vec![],
+            selected_index: None,
+            scroll_offset: 0,
+        }
+    }
+
+    fn params_empty() -> ModuleParamsState {
+        ModuleParamsState {
+            status: ModuleParamsStatus::Empty,
+            entries: vec![],
+            selected_index: None,
+            scroll_offset: 0,
+        }
+    }
+
+    fn params_entries(entries: Vec<(String, ModuleParamValue)>) -> ModuleParamsState {
+        let selected_index = if entries.is_empty() { None } else { Some(0) };
+        ModuleParamsState {
+            status: ModuleParamsStatus::Entries,
+            entries,
+            selected_index,
+            scroll_offset: 0,
+        }
+    }
+
+    #[test]
+    fn draw_renders_missing_params_section_message() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            module_params: Some(params_missing("cpu")),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 1;
+        assert_eq!(
+            render(&app, 70, height),
+            with_reversed_modules_row(
+                expected(
+                    70,
+                    height,
+                    Some(DaemonStatus::Stopped),
+                    "separator: unknown",
+                    "modules 1-1/1",
+                    &["cpu"],
+                    "config cpu",
+                    &["(no [cpu] section)"],
+                    &[],
+                    NORMAL_HINT_MODULES,
+                ),
+                5,
+                70,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_empty_params_section_message() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            module_params: Some(params_empty()),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 1;
+        assert_eq!(
+            render(&app, 70, height),
+            with_reversed_modules_row(
+                expected(
+                    70,
+                    height,
+                    Some(DaemonStatus::Stopped),
+                    "separator: unknown",
+                    "modules 1-1/1",
+                    &["cpu"],
+                    "config cpu",
+                    &["(empty)"],
+                    &[],
+                    NORMAL_HINT_MODULES,
+                ),
+                5,
+                70,
+            )
+        );
+    }
+
+    #[test]
+    fn draw_renders_string_and_non_string_param_entries() {
+        let app = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["disk#root".to_string()]),
+            selected_index: Some(0),
+            module_params: Some(params_entries(vec![
+                (
+                    "path".to_string(),
+                    ModuleParamValue::String("/".to_string()),
+                ),
+                ("interval".to_string(), ModuleParamValue::NonString),
+            ])),
+            ..App::default()
+        };
+        let height = BASELINE_HEIGHT + 2;
+        assert_eq!(
+            render(&app, 70, height),
+            with_reversed_modules_row(
+                expected(
+                    70,
+                    height,
+                    Some(DaemonStatus::Stopped),
+                    "separator: unknown",
+                    "modules 1-1/1",
+                    &["disk#root"],
+                    "config disk#root",
+                    &["path = \"/\"", "interval = <non-string>"],
+                    &[],
+                    NORMAL_HINT_MODULES,
+                ),
+                5,
+                70,
             )
         );
     }
@@ -978,25 +1435,93 @@ mod tests {
                 "battery".to_string(),
             ]),
             selected_index: Some(1),
+            module_params: Some(params_missing("disk")),
             ..App::default()
         };
         let height = BASELINE_HEIGHT + 3;
         let buffer = render(&app, 70, height);
+        let expected_buf = with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-3/3",
+                &["cpu", "disk", "battery"],
+                "config disk",
+                &["(no [disk] section)"],
+                &[],
+                NORMAL_HINT_MODULES,
+            ),
+            6,
+            70,
+        );
+        assert_eq!(buffer, expected_buf);
+    }
 
-        for x in 2..68 {
-            assert!(
-                buffer[(x, 6)].modifier.contains(Modifier::REVERSED),
-                "expected selected row (y=6) to be reversed-styled at x={x}"
-            );
-        }
-        for &y in &[5u16, 7u16] {
-            for x in 2..68 {
-                assert!(
-                    !buffer[(x, y)].modifier.contains(Modifier::REVERSED),
-                    "expected unselected row (y={y}) not to be reversed-styled at x={x}"
-                );
-            }
-        }
+    #[test]
+    fn selected_param_row_reversed_only_when_params_focused() {
+        let height = BASELINE_HEIGHT + 2;
+
+        let modules_focus = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Modules,
+            module_params: Some(params_entries(vec![
+                ("a".to_string(), ModuleParamValue::String("1".to_string())),
+                ("b".to_string(), ModuleParamValue::String("2".to_string())),
+            ])),
+            ..App::default()
+        };
+        let buf = render(&modules_focus, 70, height);
+        let exp = with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-1/1",
+                &["cpu"],
+                "config cpu",
+                &["a = \"1\"", "b = \"2\""],
+                &[],
+                NORMAL_HINT_MODULES,
+            ),
+            5,
+            70,
+        );
+        assert_eq!(buf, exp);
+
+        let params_focus = App {
+            daemon_status: Some(DaemonStatus::Stopped),
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            module_params: Some(params_entries(vec![
+                ("a".to_string(), ModuleParamValue::String("1".to_string())),
+                ("b".to_string(), ModuleParamValue::String("2".to_string())),
+            ])),
+            ..App::default()
+        };
+        let buf = render(&params_focus, 70, height);
+        let exp = with_reversed_params_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-1/1",
+                &["cpu"],
+                "config cpu",
+                &["a = \"1\"", "b = \"2\""],
+                &[],
+                NORMAL_HINT_PARAMS,
+            ),
+            5,
+            70,
+        );
+        assert_eq!(buf, exp);
     }
 
     #[test]
@@ -1013,21 +1538,28 @@ mod tests {
             ]),
             module_scroll_offset: 2,
             selected_index: Some(3),
+            module_params: Some(params_missing("m3")),
             ..App::default()
         };
         let height = BASELINE_HEIGHT + 2;
         let buffer = render(&app, 70, height);
-
-        for x in 2..68 {
-            assert!(
-                !buffer[(x, 5)].modifier.contains(Modifier::REVERSED),
-                "expected first visible row (y=5, m2) not to be reversed-styled at x={x}"
-            );
-            assert!(
-                buffer[(x, 6)].modifier.contains(Modifier::REVERSED),
-                "expected second visible row (y=6, m3, the selected one) to be reversed-styled at x={x}"
-            );
-        }
+        let expected_buf = with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 3-4/6",
+                &["m2", "m3"],
+                "config m3",
+                &["(no [m3] section)"],
+                &[],
+                NORMAL_HINT_MODULES,
+            ),
+            6,
+            70,
+        );
+        assert_eq!(buffer, expected_buf);
     }
 
     #[test]
@@ -1052,6 +1584,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn help_lines_modules_focus_lists_local_module_bindings() {
+        let app = App {
+            panel_focus: PanelFocus::Modules,
+            ..App::default()
+        };
+        let lines = help_lines(&app);
+        assert_eq!(lines[0], "--- Local ---");
+        assert!(lines.iter().any(|l| l.contains("Add module: a")));
+        assert!(lines.iter().any(|l| l.contains("Focus params")));
+        assert!(lines.iter().any(|l| l == "--- Global ---"));
+        assert!(lines.iter().any(|l| l == "Quit: q"));
+    }
+
+    #[test]
+    fn help_lines_params_focus_omits_a_d_e() {
+        let app = App {
+            panel_focus: PanelFocus::Params,
+            ..App::default()
+        };
+        let lines = help_lines(&app);
+        assert!(lines.iter().any(|l| l.contains("Select param")));
+        assert!(lines.iter().any(|l| l.contains("Back to modules")));
+        assert!(!lines.iter().any(|l| l.contains("Add module")));
+        assert!(!lines.iter().any(|l| l.contains("Remove module")));
+        assert!(!lines.iter().any(|l| l.contains("Edit separator")));
     }
 
     #[test]
@@ -1172,8 +1732,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -1193,8 +1755,10 @@ mod tests {
                 "separator: unknown",
                 "modules unknown",
                 &[],
+                "config",
                 &[],
-                NORMAL_HINT,
+                &[],
+                NORMAL_HINT_MODULES,
             )
         );
     }
@@ -1280,8 +1844,8 @@ mod tests {
             },
             ..App::default()
         };
-        let height = BASELINE_HEIGHT + 3;
-        let expected_buf = expected(
+        let height = BASELINE_HEIGHT + 5;
+        let expected_buf = expected_overlay(
             70,
             height,
             Some(DaemonStatus::Stopped),
@@ -1291,7 +1855,9 @@ mod tests {
             &[],
             "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc",
         );
-        let expected_buf = with_reversed_row(expected_buf, 5, 70);
+        let overlay = overlay_area_for_frame(70, height);
+        let inner_y = Block::default().borders(Borders::ALL).inner(overlay).y;
+        let expected_buf = with_reversed_overlay_row(expected_buf, inner_y, 70, height);
         assert_eq!(render(&app, 70, height), expected_buf);
     }
 
@@ -1308,7 +1874,7 @@ mod tests {
         };
         assert_eq!(
             render(&app, 70, BASELINE_HEIGHT),
-            expected(
+            expected_overlay(
                 70,
                 BASELINE_HEIGHT,
                 Some(DaemonStatus::Stopped),
@@ -1336,7 +1902,7 @@ mod tests {
         let terminal = render_terminal(&app, 70, height);
         assert_eq!(
             terminal.backend().buffer().clone(),
-            expected(
+            expected_overlay(
                 70,
                 height,
                 Some(DaemonStatus::Stopped),
@@ -1348,7 +1914,14 @@ mod tests {
             )
         );
         assert!(terminal.backend().cursor_visible());
-        assert_eq!(terminal.backend().cursor_position(), Position::new(31, 5));
+        let overlay = overlay_area_for_frame(70, height);
+        let inner = Block::default().borders(Borders::ALL).inner(overlay);
+        let prefix = instance_name_prefix("disk");
+        let col = inner.x + text_edit_cursor_column(&prefix, "root", 4);
+        assert_eq!(
+            terminal.backend().cursor_position(),
+            Position::new(col, inner.y)
+        );
     }
 
     #[test]
@@ -1361,6 +1934,7 @@ mod tests {
                 "battery".to_string(),
             ]),
             selected_index: Some(1),
+            module_params: Some(params_missing("disk")),
             mode: Mode::ConfirmingRemove {
                 index: 1,
                 name: "disk".to_string(),
@@ -1368,17 +1942,22 @@ mod tests {
             ..App::default()
         };
         let height = BASELINE_HEIGHT + 3;
-        let expected_buf = expected(
+        let expected_buf = with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-3/3",
+                &["cpu", "disk", "battery"],
+                "config disk",
+                &["(no [disk] section)"],
+                &[],
+                "Remove disk? Confirm: d | Cancel: any key",
+            ),
+            6,
             70,
-            height,
-            Some(DaemonStatus::Stopped),
-            "separator: unknown",
-            "modules 1-3/3",
-            &["cpu", "disk", "battery"],
-            &[],
-            "Remove disk? Confirm: d | Cancel: any key",
         );
-        let expected_buf = with_reversed_row(expected_buf, 6, 70);
         assert_eq!(render(&app, 70, height), expected_buf);
     }
 
@@ -1389,12 +1968,12 @@ mod tests {
             mode: Mode::Help,
             ..App::default()
         };
-        let lines = help_lines();
-        let height = BASELINE_HEIGHT + lines.len() as u16;
+        let lines = help_lines(&app);
+        let height = BASELINE_HEIGHT + lines.len() as u16 + 2;
         let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         assert_eq!(
             render(&app, 70, height),
-            expected(
+            expected_overlay(
                 70,
                 height,
                 Some(DaemonStatus::Stopped),
@@ -1402,7 +1981,7 @@ mod tests {
                 "help",
                 &line_refs,
                 &[],
-                "Close: ? or Esc",
+                HELP_HINT,
             )
         );
     }
