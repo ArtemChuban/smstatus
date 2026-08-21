@@ -15,15 +15,12 @@ pub(crate) struct Cli {
     version: (),
 
     #[command(subcommand)]
-    pub(crate) command: Commands,
+    pub(crate) command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Start smstatus as a background daemon.
     Start,
-    /// Stop the running smstatus daemon.
     Stop,
-    /// Run smstatus in the foreground (for debugging).
     Run,
 }
