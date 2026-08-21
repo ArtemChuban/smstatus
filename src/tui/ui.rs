@@ -179,7 +179,44 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 buffer,
                 cursor,
             } => draw_naming_overlay(frame, region, kind, buffer, *cursor),
-            Mode::Normal | Mode::EditingSeparator { .. } | Mode::ConfirmingRemove { .. } => {}
+            Mode::AddingParamKey { buffer, cursor, .. } => draw_param_text_overlay(
+                frame,
+                region,
+                "add param key",
+                PARAM_KEY_PREFIX,
+                buffer,
+                *cursor,
+            ),
+            Mode::EditingParamValue {
+                key,
+                buffer,
+                cursor,
+                ..
+            } => draw_param_text_overlay(
+                frame,
+                region,
+                &format!("value for {key}"),
+                PARAM_VALUE_PREFIX,
+                buffer,
+                *cursor,
+            ),
+            Mode::RenamingParamKey {
+                old_key,
+                buffer,
+                cursor,
+                ..
+            } => draw_param_text_overlay(
+                frame,
+                region,
+                &format!("rename {old_key}"),
+                PARAM_RENAME_PREFIX,
+                buffer,
+                *cursor,
+            ),
+            Mode::Normal
+            | Mode::EditingSeparator { .. }
+            | Mode::ConfirmingRemove { .. }
+            | Mode::ConfirmingRemoveParam { .. } => {}
         }
     }
 }
@@ -273,6 +310,31 @@ fn draw_naming_overlay(frame: &mut Frame, region: Rect, kind: &str, buffer: &str
     frame.set_cursor_position((col, inner.y));
 }
 
+const PARAM_KEY_PREFIX: &str = "param key: ";
+const PARAM_VALUE_PREFIX: &str = "param value: ";
+const PARAM_RENAME_PREFIX: &str = "new key: ";
+
+fn draw_param_text_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    title: &str,
+    prefix: &str,
+    buffer: &str,
+    cursor: usize,
+) {
+    let area = overlay_rect(region);
+    let block = Block::default()
+        .title(boxed_title(title))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(format!("{prefix}{buffer:?}")), inner);
+    let col = inner.x + text_edit_cursor_column(prefix, buffer, cursor);
+    frame.set_cursor_position((col, inner.y));
+}
+
 fn boxed_title(text: &str) -> String {
     format!("─{text}")
 }
@@ -302,6 +364,10 @@ fn separator_line(app: &App) -> String {
         | Mode::AddingModule { .. }
         | Mode::NamingModuleInstance { .. }
         | Mode::ConfirmingRemove { .. }
+        | Mode::AddingParamKey { .. }
+        | Mode::EditingParamValue { .. }
+        | Mode::ConfirmingRemoveParam { .. }
+        | Mode::RenamingParamKey { .. }
         | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -323,7 +389,7 @@ fn hint_line(app: &App) -> Cow<'static, str> {
                 "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Params => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
             ),
         },
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
@@ -333,6 +399,12 @@ fn hint_line(app: &App) -> Cow<'static, str> {
         Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
+        }
+        Mode::AddingParamKey { .. }
+        | Mode::EditingParamValue { .. }
+        | Mode::RenamingParamKey { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
+        Mode::ConfirmingRemoveParam { key, .. } => {
+            Cow::Owned(format!("Remove {key}? Confirm: d | Cancel: any key"))
         }
         Mode::Help => {
             Cow::Borrowed("Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k")
@@ -479,6 +551,10 @@ pub(super) fn help_lines(app: &App) -> Vec<String> {
             }
             PanelFocus::Params => {
                 lines.push("Select param: \u{2191}/\u{2193}".to_string());
+                lines.push("Edit value: e/Enter".to_string());
+                lines.push("Add param: a".to_string());
+                lines.push("Remove param: d".to_string());
+                lines.push("Rename key: r".to_string());
                 lines.push("Back to modules: Esc/\u{2190}".to_string());
             }
         },
@@ -720,8 +796,7 @@ mod tests {
     }
 
     const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?";
-    const NORMAL_HINT_PARAMS: &str =
-        "Select: \u{2191}/\u{2193} | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+    const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
     const HELP_HINT: &str =
         "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";
 
@@ -1601,16 +1676,19 @@ mod tests {
     }
 
     #[test]
-    fn help_lines_params_focus_omits_a_d_e() {
+    fn help_lines_params_focus_lists_edit_add_del_rename() {
         let app = App {
             panel_focus: PanelFocus::Params,
             ..App::default()
         };
         let lines = help_lines(&app);
         assert!(lines.iter().any(|l| l.contains("Select param")));
+        assert!(lines.iter().any(|l| l.contains("Edit value")));
+        assert!(lines.iter().any(|l| l.contains("Add param")));
+        assert!(lines.iter().any(|l| l.contains("Remove param")));
+        assert!(lines.iter().any(|l| l.contains("Rename key")));
         assert!(lines.iter().any(|l| l.contains("Back to modules")));
         assert!(!lines.iter().any(|l| l.contains("Add module")));
-        assert!(!lines.iter().any(|l| l.contains("Remove module")));
         assert!(!lines.iter().any(|l| l.contains("Edit separator")));
     }
 
