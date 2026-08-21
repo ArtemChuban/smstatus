@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::config::{BarConfig, ModuleParamValue, ModuleSectionView};
+use crate::config::{BarConfig, ModuleParamValue, ModuleSectionView, ParamWriteExpect};
 
 pub(super) const ACTION_LOG_CAPACITY: usize = 3;
 
@@ -27,6 +27,28 @@ pub(super) enum Mode {
     ConfirmingRemove {
         index: usize,
         name: String,
+    },
+    AddingParamKey {
+        section: String,
+        buffer: String,
+        cursor: usize,
+    },
+    EditingParamValue {
+        section: String,
+        key: String,
+        buffer: String,
+        cursor: usize,
+        expect: ParamWriteExpect,
+    },
+    ConfirmingRemoveParam {
+        section: String,
+        key: String,
+    },
+    RenamingParamKey {
+        section: String,
+        old_key: String,
+        buffer: String,
+        cursor: usize,
     },
     Help,
 }
@@ -114,6 +136,10 @@ impl App {
             Mode::AddingModule { .. } => self.handle_key_adding_module(key),
             Mode::NamingModuleInstance { .. } => self.handle_key_naming_module_instance(key),
             Mode::ConfirmingRemove { .. } => self.handle_key_confirming_remove(key),
+            Mode::AddingParamKey { .. } => self.handle_key_adding_param_key(key),
+            Mode::EditingParamValue { .. } => self.handle_key_editing_param_value(key),
+            Mode::ConfirmingRemoveParam { .. } => self.handle_key_confirming_remove_param(key),
+            Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
             Mode::Help => self.handle_key_help(key),
         }
     }
@@ -163,7 +189,10 @@ impl App {
 
     fn handle_key_normal_params(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('a') | KeyCode::Char('d') | KeyCode::Char('e') => {}
+            KeyCode::Char('a') => self.begin_add_param(),
+            KeyCode::Char('d') => self.begin_remove_param(),
+            KeyCode::Char('e') | KeyCode::Enter => self.begin_edit_param_value(),
+            KeyCode::Char('r') => self.begin_rename_param(),
             KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
             KeyCode::Up => self.select_previous_param(),
             KeyCode::Down => self.select_next_param(),
@@ -320,6 +349,7 @@ impl App {
             }
         }
         self.drop_stale_confirming_remove_mode();
+        self.drop_stale_param_modes();
     }
 
     fn rebuild_module_params_from(&mut self, config: &BarConfig, reset_selection: bool) {
@@ -399,6 +429,44 @@ impl App {
         }
     }
 
+    fn drop_stale_param_modes(&mut self) {
+        let current_section = self.selected_section_name();
+        let key_still_present = |key: &str| {
+            self.module_params
+                .as_ref()
+                .is_some_and(|p| p.entries.iter().any(|(k, _)| k == key))
+        };
+        let should_drop = match &self.mode {
+            Mode::AddingParamKey { section, .. } => {
+                current_section.as_deref() != Some(section.as_str())
+            }
+            Mode::EditingParamValue {
+                section,
+                key,
+                expect,
+                ..
+            } => {
+                if current_section.as_deref() != Some(section.as_str()) {
+                    true
+                } else if matches!(expect, ParamWriteExpect::KeyAbsent) {
+                    key_still_present(key)
+                } else {
+                    !key_still_present(key)
+                }
+            }
+            Mode::ConfirmingRemoveParam { section, key }
+            | Mode::RenamingParamKey {
+                section,
+                old_key: key,
+                ..
+            } => current_section.as_deref() != Some(section.as_str()) || !key_still_present(key),
+            _ => false,
+        };
+        if should_drop {
+            self.mode = Mode::Normal;
+        }
+    }
+
     fn ensure_selected_visible(&mut self) {
         let Some(idx) = self.selected_index else {
             return;
@@ -469,6 +537,338 @@ impl App {
         if idx + 1 < params.entries.len() {
             let params = self.module_params.as_mut().unwrap();
             params.selected_index = Some(idx + 1);
+            self.ensure_selected_param_visible();
+        }
+    }
+
+    fn selected_section_name(&self) -> Option<String> {
+        let idx = self.selected_index?;
+        let entry = self.modules.as_ref()?.get(idx)?;
+        Some(BarConfig::split_module_entry(entry).1.to_string())
+    }
+
+    fn selected_param_entry(&self) -> Option<&(String, ModuleParamValue)> {
+        let params = self.module_params.as_ref()?;
+        let idx = params.selected_index?;
+        params.entries.get(idx)
+    }
+
+    fn begin_add_param(&mut self) {
+        let Some(section) = self.selected_section_name() else {
+            return;
+        };
+        if self.config_path.is_none() {
+            self.push_action_message("cannot add param: config path unknown".to_string());
+            return;
+        }
+        self.mode = Mode::AddingParamKey {
+            section,
+            buffer: String::new(),
+            cursor: 0,
+        };
+    }
+
+    fn begin_edit_param_value(&mut self) {
+        let Some(section) = self.selected_section_name() else {
+            return;
+        };
+        let Some((key, value)) = self.selected_param_entry().cloned() else {
+            return;
+        };
+        if self.config_path.is_none() {
+            self.push_action_message("cannot edit param: config path unknown".to_string());
+            return;
+        }
+        let (buffer, expect) = match value {
+            ModuleParamValue::String(s) => {
+                let expect = ParamWriteExpect::ExistingString(s.clone());
+                (s, expect)
+            }
+            ModuleParamValue::NonString => (String::new(), ParamWriteExpect::ExistingNonString),
+        };
+        let cursor = buffer.chars().count();
+        self.mode = Mode::EditingParamValue {
+            section,
+            key,
+            buffer,
+            cursor,
+            expect,
+        };
+    }
+
+    fn begin_remove_param(&mut self) {
+        let Some(section) = self.selected_section_name() else {
+            return;
+        };
+        let Some((key, _)) = self.selected_param_entry().cloned() else {
+            return;
+        };
+        if self.config_path.is_none() {
+            self.push_action_message("cannot remove param: config path unknown".to_string());
+            return;
+        }
+        self.mode = Mode::ConfirmingRemoveParam { section, key };
+    }
+
+    fn begin_rename_param(&mut self) {
+        let Some(section) = self.selected_section_name() else {
+            return;
+        };
+        let Some((old_key, _)) = self.selected_param_entry().cloned() else {
+            return;
+        };
+        if self.config_path.is_none() {
+            self.push_action_message("cannot rename param: config path unknown".to_string());
+            return;
+        }
+        let buffer = old_key.clone();
+        let cursor = buffer.chars().count();
+        self.mode = Mode::RenamingParamKey {
+            section,
+            old_key,
+            buffer,
+            cursor,
+        };
+    }
+
+    fn handle_key_adding_param_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => self.commit_adding_param_key(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
+                if let Mode::AddingParamKey { buffer, cursor, .. } = &mut self.mode {
+                    apply_text_edit(buffer, cursor, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_adding_param_key(&mut self) {
+        let Mode::AddingParamKey {
+            section,
+            buffer,
+            cursor: _,
+        } = &self.mode
+        else {
+            return;
+        };
+        if buffer.is_empty() {
+            self.push_action_message("Param key cannot be empty".to_string());
+            return;
+        }
+        if !is_valid_param_key(buffer) {
+            self.push_action_message(format!(
+                "Invalid param key `{buffer}`: use only A-Z, a-z, 0-9, _, -"
+            ));
+            return;
+        }
+        if self
+            .module_params
+            .as_ref()
+            .is_some_and(|p| p.entries.iter().any(|(k, _)| k == buffer))
+        {
+            self.push_action_message(format!("Param key `{buffer}` already exists"));
+            return;
+        }
+        let section = section.clone();
+        let key = buffer.clone();
+        self.mode = Mode::EditingParamValue {
+            section,
+            key,
+            buffer: String::new(),
+            cursor: 0,
+            expect: ParamWriteExpect::KeyAbsent,
+        };
+    }
+
+    fn handle_key_editing_param_value(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.cancel_editing_param_value(),
+            KeyCode::Enter => self.commit_editing_param_value(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
+                if let Mode::EditingParamValue { buffer, cursor, .. } = &mut self.mode {
+                    apply_text_edit(buffer, cursor, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cancel_editing_param_value(&mut self) {
+        let Mode::EditingParamValue {
+            section,
+            key,
+            expect,
+            ..
+        } = std::mem::take(&mut self.mode)
+        else {
+            return;
+        };
+        if matches!(expect, ParamWriteExpect::KeyAbsent) {
+            let cursor = key.chars().count();
+            self.mode = Mode::AddingParamKey {
+                section,
+                buffer: key,
+                cursor,
+            };
+        } else {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    fn commit_editing_param_value(&mut self) {
+        let Mode::EditingParamValue {
+            section,
+            key,
+            buffer,
+            expect,
+            ..
+        } = std::mem::take(&mut self.mode)
+        else {
+            return;
+        };
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot save param: config path unknown".to_string());
+            return;
+        };
+        let is_add = matches!(expect, ParamWriteExpect::KeyAbsent);
+        let keep_key = if is_add {
+            self.selected_param_entry().map(|(k, _)| k.clone())
+        } else {
+            Some(key.clone())
+        };
+        match BarConfig::write_module_param_set(&path, &section, &key, &buffer, &expect) {
+            Ok(()) => {
+                let log = if is_add {
+                    format!("Added {key}")
+                } else {
+                    format!("Updated {key}")
+                };
+                self.reload_params_after_write();
+                if let Some(prefer) = keep_key {
+                    self.select_param_by_key(&prefer);
+                } else {
+                    self.select_param_by_key(&key);
+                }
+                self.push_action_message(log);
+            }
+            Err(err) => {
+                let verb = if is_add { "add" } else { "update" };
+                self.push_action_message(format!("Failed to {verb} {key}: {err}"));
+            }
+        }
+    }
+
+    fn handle_key_confirming_remove_param(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('d') => self.commit_remove_param(),
+            _ => self.mode = Mode::Normal,
+        }
+    }
+
+    fn commit_remove_param(&mut self) {
+        let Mode::ConfirmingRemoveParam { section, key } = std::mem::take(&mut self.mode) else {
+            return;
+        };
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot remove param: config path unknown".to_string());
+            return;
+        };
+        match BarConfig::write_module_param_remove(&path, &section, &key) {
+            Ok(()) => {
+                self.reload_params_after_write();
+                self.push_action_message(format!("Removed {key}"));
+            }
+            Err(err) => self.push_action_message(format!("Failed to remove {key}: {err}")),
+        }
+    }
+
+    fn handle_key_renaming_param_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => self.commit_rename_param(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
+                if let Mode::RenamingParamKey { buffer, cursor, .. } = &mut self.mode {
+                    apply_text_edit(buffer, cursor, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_rename_param(&mut self) {
+        let (section, old_key, new_key) = match &self.mode {
+            Mode::RenamingParamKey {
+                section,
+                old_key,
+                buffer,
+                ..
+            } => (section.clone(), old_key.clone(), buffer.clone()),
+            _ => return,
+        };
+        if new_key.is_empty() {
+            self.push_action_message("Param key cannot be empty".to_string());
+            return;
+        }
+        if !is_valid_param_key(&new_key) {
+            self.push_action_message(format!(
+                "Invalid param key `{new_key}`: use only A-Z, a-z, 0-9, _, -"
+            ));
+            return;
+        }
+        if new_key == old_key {
+            self.mode = Mode::Normal;
+            return;
+        }
+        if self
+            .module_params
+            .as_ref()
+            .is_some_and(|p| p.entries.iter().any(|(k, _)| k == &new_key))
+        {
+            self.push_action_message(format!("Param key `{new_key}` already exists"));
+            return;
+        }
+        self.mode = Mode::Normal;
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot rename param: config path unknown".to_string());
+            return;
+        };
+        match BarConfig::write_module_param_rename(&path, &section, &old_key, &new_key) {
+            Ok(()) => {
+                self.reload_params_after_write();
+                self.select_param_by_key(&new_key);
+                self.push_action_message(format!("Renamed {old_key} → {new_key}"));
+            }
+            Err(err) => self.push_action_message(format!("Failed to rename {old_key}: {err}")),
+        }
+    }
+
+    fn reload_params_after_write(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        match BarConfig::load(&path) {
+            Ok(config) => {
+                self.rebuild_module_params_from(&config, false);
+                self.config_cache = Some(config);
+            }
+            Err(err) => {
+                self.push_action_message(format!("Failed to reload config: {err}"));
+            }
+        }
+    }
+
+    fn select_param_by_key(&mut self, key: &str) {
+        let Some(params) = self.module_params.as_mut() else {
+            return;
+        };
+        if let Some(i) = params.entries.iter().position(|(k, _)| k == key) {
+            params.selected_index = Some(i);
             self.ensure_selected_param_visible();
         }
     }
@@ -841,6 +1241,37 @@ fn is_hard_quit(key: KeyEvent) -> bool {
 
 fn is_quit(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('q')) || is_hard_quit(key)
+}
+
+fn is_valid_param_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn apply_text_edit(buffer: &mut String, cursor: &mut usize, key: KeyEvent) {
+    match key.code {
+        KeyCode::Left => {
+            *cursor = cursor.saturating_sub(1);
+        }
+        KeyCode::Right => {
+            *cursor = (*cursor + 1).min(buffer.chars().count());
+        }
+        KeyCode::Backspace => {
+            if *cursor > 0 {
+                let byte = super::char_byte_offset(buffer, *cursor - 1);
+                buffer.remove(byte);
+                *cursor -= 1;
+            }
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            let byte = super::char_byte_offset(buffer, *cursor);
+            buffer.insert(byte, c);
+            *cursor += 1;
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -2521,23 +2952,242 @@ mod tests {
     }
 
     #[test]
-    fn a_d_e_ignored_when_params_focused() {
+    fn a_enters_adding_param_key_when_params_focused() {
+        let path = unique_temp_path("params-add-key");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
         let mut app = App {
             modules: Some(vec!["cpu".to_string()]),
             selected_index: Some(0),
             panel_focus: PanelFocus::Params,
             separator: Some(" | ".to_string()),
-            config_path: Some(unique_temp_path("params-focus-ignore")),
+            config_path: Some(path),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Missing {
+                    section: "cpu".to_string(),
+                },
+                entries: vec![],
+                selected_index: None,
+                scroll_offset: 0,
+            }),
             ..App::default()
         };
         app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::Normal);
+        assert!(matches!(
+            app.mode,
+            Mode::AddingParamKey {
+                section,
+                ..
+            } if section == "cpu"
+        ));
         assert_eq!(app.panel_focus, PanelFocus::Params);
-        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::Normal);
+        let _ = std::fs::remove_file(app.config_path.as_ref().unwrap());
+    }
+
+    #[test]
+    fn e_and_enter_edit_selected_param_value() {
+        let path = unique_temp_path("params-edit-value");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"old\"\n").unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![(
+                    "format".to_string(),
+                    ModuleParamValue::String("old".to_string()),
+                )],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        match &app.mode {
+            Mode::EditingParamValue {
+                key,
+                buffer,
+                expect,
+                ..
+            } => {
+                assert_eq!(key, "format");
+                assert_eq!(buffer, "old");
+                assert_eq!(expect, &ParamWriteExpect::ExistingString("old".to_string()));
+            }
+            other => panic!("expected EditingParamValue, got {other:?}"),
+        }
+        app.mode = Mode::Normal;
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::EditingParamValue { .. }));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn e_d_r_noop_on_missing_params_but_a_works() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(unique_temp_path("params-missing-noop")),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Missing {
+                    section: "cpu".to_string(),
+                },
+                entries: vec![],
+                selected_index: None,
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
         app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Normal);
-        assert!(matches!(app.mode, Mode::Normal));
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        app.handle_key(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::AddingParamKey { .. }));
+    }
+
+    #[test]
+    fn double_d_removes_param_and_esc_cancel_edit_stays_params() {
+        let path = unique_temp_path("params-remove-edit");
+        std::fs::write(
+            &path,
+            "modules = [\"cpu\"]\n\n[cpu]\nformat = \"x\"\nother = \"y\"\n",
+        )
+        .unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![
+                    (
+                        "format".to_string(),
+                        ModuleParamValue::String("x".to_string()),
+                    ),
+                    (
+                        "other".to_string(),
+                        ModuleParamValue::String("y".to_string()),
+                    ),
+                ],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.panel_focus, PanelFocus::Params);
+        assert!(app.action_log.is_empty());
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::ConfirmingRemoveParam { .. }));
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.iter().any(|m| m == "Removed format"));
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_ne!(before, after);
+        assert!(!after.contains("format"));
+        assert!(after.contains("other"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn add_param_flow_writes_and_esc_on_value_returns_to_key() {
+        let path = unique_temp_path("params-add-flow");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Missing {
+                    section: "cpu".to_string(),
+                },
+                entries: vec![],
+                selected_index: None,
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "format".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            app.mode,
+            Mode::EditingParamValue {
+                expect: ParamWriteExpect::KeyAbsent,
+                ..
+            }
+        ));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        match &app.mode {
+            Mode::AddingParamKey { buffer, .. } => assert_eq!(buffer, "format"),
+            other => panic!("expected AddingParamKey, got {other:?}"),
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        for c in "ok".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.iter().any(|m| m == "Added format"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[cpu]"));
+        assert!(content.contains("format"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rename_param_via_r() {
+        let path = unique_temp_path("params-rename");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nold = \"v\"\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![("old".to_string(), ModuleParamValue::String("v".to_string()))],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        }
+        for c in "new".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.iter().any(|m| m == "Renamed old → new"));
+        let sel = &app.module_params.as_ref().unwrap().entries
+            [app.module_params.as_ref().unwrap().selected_index.unwrap()];
+        assert_eq!(sel.0, "new");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("new"));
+        assert!(!content.contains("old ="));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -2573,5 +3223,236 @@ mod tests {
         assert_eq!(app.module_params.as_ref().unwrap().selected_index, Some(1));
         app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.module_params.as_ref().unwrap().selected_index, Some(0));
+    }
+
+    #[test]
+    fn refresh_config_drops_key_absent_edit_when_key_appears_on_disk() {
+        let path = unique_temp_path("params-key-absent-appears");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nother = \"y\"\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![(
+                    "other".to_string(),
+                    ModuleParamValue::String("y".to_string()),
+                )],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            mode: Mode::EditingParamValue {
+                section: "cpu".to_string(),
+                key: "format".to_string(),
+                buffer: "x".to_string(),
+                cursor: 1,
+                expect: ParamWriteExpect::KeyAbsent,
+            },
+            ..App::default()
+        };
+
+        std::fs::write(
+            &path,
+            "modules = [\"cpu\"]\n\n[cpu]\nother = \"y\"\nformat = \"disk\"\n",
+        )
+        .unwrap();
+        app.refresh_config();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.is_empty());
+    }
+
+    #[test]
+    fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
+        let path = unique_temp_path("params-add-keep-selection");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nkeep = \"me\"\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![(
+                    "keep".to_string(),
+                    ModuleParamValue::String("me".to_string()),
+                )],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "newbie".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        for c in "val".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.iter().any(|m| m == "Added newbie"));
+        let params = app.module_params.as_ref().unwrap();
+        let sel = params.selected_index.unwrap();
+        assert_eq!(params.entries[sel].0, "keep");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn empty_value_commit_succeeds() {
+        let path = unique_temp_path("params-empty-value");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"old\"\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![(
+                    "format".to_string(),
+                    ModuleParamValue::String("old".to_string()),
+                )],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.action_log.iter().any(|m| m == "Updated format"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(doc["cpu"]["format"].as_str(), Some(""));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_charset_on_add_and_rename_refuses_and_logs() {
+        let path = unique_temp_path("params-invalid-charset");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nold = \"v\"\n").unwrap();
+        let config = BarConfig::load(&path).unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            config_cache: Some(config),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![("old".to_string(), ModuleParamValue::String("v".to_string()))],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE));
+        for c in "bad.key".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::AddingParamKey { .. }));
+        assert!(
+            app.action_log
+                .iter()
+                .any(|m| m.contains("Invalid param key"))
+        );
+
+        app.mode = Mode::Normal;
+        app.action_log.clear();
+        app.handle_key(key(KeyCode::Char('r'), KeyModifiers::NONE));
+        for _ in 0..3 {
+            app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        }
+        for c in "also.bad".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(app.mode, Mode::RenamingParamKey { .. }));
+        assert!(
+            app.action_log
+                .iter()
+                .any(|m| m.contains("Invalid param key"))
+        );
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(before.contains("old ="));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn non_string_edit_begins_with_empty_buffer() {
+        let path = unique_temp_path("params-non-string-edit");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\ncount = 42\n").unwrap();
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: Some(path.clone()),
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![("count".to_string(), ModuleParamValue::NonString)],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE));
+        match &app.mode {
+            Mode::EditingParamValue {
+                key,
+                buffer,
+                cursor,
+                expect,
+                ..
+            } => {
+                assert_eq!(key, "count");
+                assert_eq!(buffer, "");
+                assert_eq!(*cursor, 0);
+                assert_eq!(expect, &ParamWriteExpect::ExistingNonString);
+            }
+            other => panic!("expected EditingParamValue, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn begin_remove_param_without_config_path_pushes_message_and_stays_normal() {
+        let mut app = App {
+            modules: Some(vec!["cpu".to_string()]),
+            selected_index: Some(0),
+            panel_focus: PanelFocus::Params,
+            config_path: None,
+            module_params: Some(ModuleParamsState {
+                status: ModuleParamsStatus::Entries,
+                entries: vec![(
+                    "format".to_string(),
+                    ModuleParamValue::String("x".to_string()),
+                )],
+                selected_index: Some(0),
+                scroll_offset: 0,
+            }),
+            ..App::default()
+        };
+        app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(
+            app.action_log,
+            vec!["cannot remove param: config path unknown"]
+        );
     }
 }

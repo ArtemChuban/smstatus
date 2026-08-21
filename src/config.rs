@@ -23,6 +23,13 @@ pub(crate) enum ModuleParamValue {
     NonString,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ParamWriteExpect {
+    ExistingString(String),
+    ExistingNonString,
+    KeyAbsent,
+}
+
 impl BarConfig {
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
@@ -164,6 +171,147 @@ impl BarConfig {
         atomic_write(path, &doc.to_string())
     }
 
+    pub(crate) fn write_module_param_set(
+        path: &Path,
+        section: &str,
+        key: &str,
+        new_value: &str,
+        expected: &ParamWriteExpect,
+    ) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let table = module_section_table_mut(
+            &mut doc,
+            section,
+            path,
+            /*create_if_missing*/ matches!(expected, ParamWriteExpect::KeyAbsent),
+        )?;
+        match expected {
+            ParamWriteExpect::KeyAbsent => {
+                if table.contains_key(key) {
+                    return Err(format!(
+                        "{}: key `{key}` already present in [{section}]",
+                        path.display()
+                    )
+                    .into());
+                }
+            }
+            ParamWriteExpect::ExistingString(want) => match table.get(key) {
+                None => {
+                    return Err(format!(
+                        "{}: key `{key}` missing or not a string in [{section}]",
+                        path.display()
+                    )
+                    .into());
+                }
+                Some(item) => match item.as_str() {
+                    Some(got) if got == want => {}
+                    Some(_) | None => {
+                        return Err(format!(
+                            "{}: [{section}].{key} changed on disk since it was last loaded; reload and try again",
+                            path.display()
+                        )
+                        .into());
+                    }
+                },
+            },
+            ParamWriteExpect::ExistingNonString => {
+                let Some(item) = table.get(key) else {
+                    return Err(
+                        format!("{}: key `{key}` missing in [{section}]", path.display()).into(),
+                    );
+                };
+                if item.as_str().is_some() {
+                    return Err(format!(
+                        "{}: [{section}].{key} changed on disk since it was last loaded; reload and try again",
+                        path.display()
+                    )
+                    .into());
+                }
+            }
+        }
+        match table.get_mut(key) {
+            Some(item) => {
+                if let Some(existing) = item.as_value_mut() {
+                    let decor = existing.decor().clone();
+                    *existing = new_value.into();
+                    *existing.decor_mut() = decor;
+                } else {
+                    *item = toml_edit::value(new_value);
+                }
+            }
+            None => {
+                table.insert(key, toml_edit::value(new_value));
+            }
+        }
+        atomic_write(path, &doc.to_string())
+    }
+
+    pub(crate) fn write_module_param_remove(path: &Path, section: &str, key: &str) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let table =
+            module_section_table_mut(&mut doc, section, path, /*create_if_missing*/ false)?;
+        if !table.contains_key(key) {
+            return Err(format!("{}: key `{key}` missing in [{section}]", path.display()).into());
+        }
+        table.remove(key);
+        atomic_write(path, &doc.to_string())
+    }
+
+    pub(crate) fn write_module_param_rename(
+        path: &Path,
+        section: &str,
+        old_key: &str,
+        new_key: &str,
+    ) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+        let table =
+            module_section_table_mut(&mut doc, section, path, /*create_if_missing*/ false)?;
+        if !table.contains_key(old_key) {
+            return Err(
+                format!("{}: key `{old_key}` missing in [{section}]", path.display()).into(),
+            );
+        }
+        if table.contains_key(new_key) {
+            return Err(format!(
+                "{}: key `{new_key}` already present in [{section}]",
+                path.display()
+            )
+            .into());
+        }
+        let order: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+        let pos = order
+            .iter()
+            .position(|k| k == old_key)
+            .expect("contains_key just verified old_key");
+        let (old_fmt_key, item) = table
+            .remove_entry(old_key)
+            .expect("contains_key just verified old_key");
+        let mut new_fmt_key = toml_edit::Key::new(new_key);
+        *new_fmt_key.leaf_decor_mut() = old_fmt_key.leaf_decor().clone();
+        *new_fmt_key.dotted_decor_mut() = old_fmt_key.dotted_decor().clone();
+        let trailing: Vec<(toml_edit::Key, toml_edit::Item)> = order[pos + 1..]
+            .iter()
+            .filter_map(|k| table.remove_entry(k))
+            .collect();
+        table.insert_formatted(&new_fmt_key, item);
+        for (k, v) in trailing {
+            table.insert_formatted(&k, v);
+        }
+        atomic_write(path, &doc.to_string())
+    }
+
     pub(crate) fn module_config_json(&self, module_name: &str) -> String {
         match self.0.get(module_name) {
             Some(section) => serde_json::to_string(section).unwrap_or_else(|err| {
@@ -234,6 +382,33 @@ impl BarConfig {
     fn from_table(table: toml::Table) -> Self {
         Self(table)
     }
+}
+
+fn module_section_table_mut<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    section: &str,
+    path: &Path,
+    create_if_missing: bool,
+) -> Result<&'a mut toml_edit::Table> {
+    match doc.get(section) {
+        None => {
+            if !create_if_missing {
+                return Err(format!("{}: section [{section}] is missing", path.display()).into());
+            }
+            doc[section] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        Some(item) if item.as_table().is_some() => {}
+        Some(_) => {
+            return Err(format!(
+                "{}: top-level key `{section}` exists but is not a table; refusing to overwrite",
+                path.display()
+            )
+            .into());
+        }
+    }
+    doc.get_mut(section)
+        .and_then(|item| item.as_table_mut())
+        .ok_or_else(|| format!("{}: section [{section}] is not a table", path.display()).into())
 }
 
 fn extract_module_strings(array: &toml_edit::Array, path: &Path) -> Result<Vec<String>> {
@@ -960,5 +1135,220 @@ mod tests {
         assert_ne!(configs[0].2, configs[1].2);
         assert_eq!(configs[0].2, r#"{"path":"/"}"#);
         assert_eq!(configs[1].2, r#"{"path":"/home"}"#);
+    }
+
+    #[test]
+    fn write_module_param_set_updates_string_preserving_comments_and_other_keys() {
+        let path = unique_temp_path("param-set-string");
+        std::fs::write(
+            &path,
+            "# keep me\nmodules = [\"cpu\"]\n\n[cpu]\n# before format\nformat = \"old\" # trail\nother = 1\n",
+        )
+        .unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "new",
+            &ParamWriteExpect::ExistingString("old".to_string()),
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(content.contains("# keep me"));
+        assert!(content.contains("# before format"));
+        assert!(content.contains("# trail"));
+        assert!(content.contains("other = 1"));
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(doc["cpu"]["format"].as_str(), Some("new"));
+    }
+
+    #[test]
+    fn write_module_param_set_errors_when_string_value_drifted() {
+        let path = unique_temp_path("param-set-drift");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"disk\"\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "new",
+            &ParamWriteExpect::ExistingString("old".to_string()),
+        );
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("changed on disk"),
+            "expected drift message, got {err}"
+        );
+    }
+
+    #[test]
+    fn write_module_param_set_errors_when_expected_string_became_non_string() {
+        let path = unique_temp_path("param-set-string-became-int");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = 42\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "new",
+            &ParamWriteExpect::ExistingString("old".to_string()),
+        );
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("changed on disk"),
+            "non-string drift must use changed-on-disk message, got {err}"
+        );
+        assert!(
+            !err.contains("missing or not a string"),
+            "must not use missing message for present non-string, got {err}"
+        );
+    }
+
+    #[test]
+    fn write_module_param_set_converts_non_string_to_string() {
+        let path = unique_temp_path("param-set-non-string");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\ncount = 42\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "count",
+            "forty-two",
+            &ParamWriteExpect::ExistingNonString,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(doc["cpu"]["count"].as_str(), Some("forty-two"));
+    }
+
+    #[test]
+    fn write_module_param_set_add_creates_missing_section() {
+        let path = unique_temp_path("param-set-create-section");
+        std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "hi",
+            &ParamWriteExpect::KeyAbsent,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(doc["cpu"]["format"].as_str(), Some("hi"));
+    }
+
+    #[test]
+    fn write_module_param_set_add_errors_when_key_already_present() {
+        let path = unique_temp_path("param-set-add-dup");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"x\"\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "y",
+            &ParamWriteExpect::KeyAbsent,
+        );
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_param_set_errors_on_non_table_top_level_key() {
+        let path = unique_temp_path("param-set-non-table");
+        std::fs::write(&path, "modules = [\"cpu\"]\ncpu = \"not-a-table\"\n").unwrap();
+
+        let result = BarConfig::write_module_param_set(
+            &path,
+            "cpu",
+            "format",
+            "x",
+            &ParamWriteExpect::KeyAbsent,
+        );
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_param_remove_leaves_empty_table_when_last_key_gone() {
+        let path = unique_temp_path("param-remove-last");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"x\"\n").unwrap();
+
+        let result = BarConfig::write_module_param_remove(&path, "cpu", "format");
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(content.contains("[cpu]"));
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(doc["cpu"].as_table().unwrap().is_empty());
+    }
+
+    #[test]
+    fn write_module_param_remove_errors_when_key_missing() {
+        let path = unique_temp_path("param-remove-missing");
+        std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"x\"\n").unwrap();
+
+        let result = BarConfig::write_module_param_remove(&path, "cpu", "nope");
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn write_module_param_rename_moves_item_preserving_value_and_neighbor_keys() {
+        let path = unique_temp_path("param-rename");
+        std::fs::write(
+            &path,
+            "modules = [\"cpu\"]\n\n[cpu]\nbefore = 0\nold = \"keep\" # trail\nafter = 1\n",
+        )
+        .unwrap();
+
+        let result = BarConfig::write_module_param_rename(&path, "cpu", "old", "new");
+        assert!(result.is_ok(), "{result:?}");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(content.contains("before = 0"));
+        assert!(content.contains("after = 1"));
+        assert!(content.contains("# trail"));
+        let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(doc["cpu"].get("old").is_none());
+        assert_eq!(doc["cpu"]["new"].as_str(), Some("keep"));
+        let keys: Vec<&str> = doc["cpu"]
+            .as_table()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(keys, vec!["before", "new", "after"]);
+    }
+
+    #[test]
+    fn write_module_param_rename_errors_when_new_key_present() {
+        let path = unique_temp_path("param-rename-dup");
+        std::fs::write(
+            &path,
+            "modules = [\"cpu\"]\n\n[cpu]\na = \"1\"\nb = \"2\"\n",
+        )
+        .unwrap();
+
+        let result = BarConfig::write_module_param_rename(&path, "cpu", "a", "b");
+        let _ = std::fs::remove_file(&path);
+        assert!(result.is_err());
     }
 }
