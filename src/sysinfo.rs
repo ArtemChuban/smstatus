@@ -123,7 +123,7 @@ pub(crate) fn process_name_matches(comm_contents: &str, target_name: &str) -> bo
     while !target_name.is_char_boundary(boundary) {
         boundary -= 1;
     }
-    comm == &target_name[..boundary]
+    Some(comm) == target_name.get(..boundary)
 }
 
 pub(crate) fn process_running(name: &str) -> Result<bool> {

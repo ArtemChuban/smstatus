@@ -84,8 +84,11 @@ pub(super) fn separator_line(app: &App) -> String {
 
 pub(super) fn text_edit_cursor_column(prefix: &str, buffer: &str, cursor: usize) -> u16 {
     let byte_idx = super::super::util::char_byte_offset(buffer, cursor);
-    let escaped_prefix_quoted = format!("{:?}", &buffer[..byte_idx]);
-    let escaped_prefix = &escaped_prefix_quoted[..escaped_prefix_quoted.len() - 1];
+    let visible = buffer.get(..byte_idx).unwrap_or_default();
+    let escaped_prefix_quoted = format!("{visible:?}");
+    let escaped_prefix = escaped_prefix_quoted
+        .get(..escaped_prefix_quoted.len() - 1)
+        .unwrap_or_default();
     (prefix.chars().count() + escaped_prefix.chars().count()) as u16
 }
 

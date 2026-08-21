@@ -20,14 +20,25 @@ pub fn format_template(template: &str, values: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let after_open = &rest[open + 1..];
+        let Some(before) = rest.get(..open) else {
+            break;
+        };
+        out.push_str(before);
+        let Some(after_open) = rest.get(open + 1..) else {
+            break;
+        };
         let Some(close) = after_open.find('}') else {
-            out.push_str(&rest[open..]);
+            if let Some(remainder) = rest.get(open..) {
+                out.push_str(remainder);
+            }
             return out;
         };
-        let body = &after_open[..close];
-        let placeholder = &rest[open..open + 1 + close + 1];
+        let Some(body) = after_open.get(..close) else {
+            break;
+        };
+        let Some(placeholder) = rest.get(open..open + 1 + close + 1) else {
+            break;
+        };
         match parse_placeholder(body) {
             Some((name, pad)) => match values.iter().find(|(k, _)| *k == name) {
                 Some((_, value)) => out.push_str(&apply_pad(value, pad)),
@@ -35,7 +46,10 @@ pub fn format_template(template: &str, values: &[(&str, &str)]) -> String {
             },
             None => out.push_str(placeholder),
         }
-        rest = &after_open[close + 1..];
+        let Some(next_rest) = after_open.get(close + 1..) else {
+            break;
+        };
+        rest = next_rest;
     }
     out.push_str(rest);
     out
