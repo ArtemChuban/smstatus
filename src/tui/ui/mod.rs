@@ -8,7 +8,7 @@ mod layout;
 mod overlay;
 mod render;
 
-pub(in crate::tui) use layout::modules_viewport_height;
+pub(in crate::tui) use layout::{modules_viewport_height, overlay_viewport_height};
 pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};

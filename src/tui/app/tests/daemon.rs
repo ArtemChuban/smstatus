@@ -29,6 +29,20 @@ fn stop_daemon_when_stopped_is_a_noop_with_message() {
 }
 
 #[test]
+fn start_daemon_when_status_unknown_is_a_noop_with_message() {
+    let mut app = App {
+        daemon_status: None,
+        ..App::default()
+    };
+    app.start_daemon();
+    assert_eq!(
+        app.action_log,
+        vec!["cannot start smstatus: daemon status unknown"]
+    );
+    assert!(app.pending_start.is_none());
+}
+
+#[test]
 fn stop_daemon_when_status_unknown_is_a_noop_with_message() {
     let mut app = App {
         daemon_status: None,

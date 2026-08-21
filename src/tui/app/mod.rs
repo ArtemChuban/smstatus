@@ -102,6 +102,7 @@ pub(super) struct App {
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,
+    pub(super) overlay_viewport_height: usize,
     pub(super) selected_index: Option<usize>,
     pub(super) panel_focus: PanelFocus,
     pub(super) module_params: Option<ModuleParamsState>,

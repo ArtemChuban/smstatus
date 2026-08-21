@@ -33,7 +33,7 @@ fn question_mark_preserves_panel_focus() {
 #[test]
 fn help_scroll_down_is_noop_when_lines_fit_in_viewport() {
     let mut app = App {
-        modules_viewport_height: 64,
+        overlay_viewport_height: 64,
         ..App::default()
     };
     app.handle_key(key(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -41,8 +41,8 @@ fn help_scroll_down_is_noop_when_lines_fit_in_viewport() {
     assert_eq!(app.help_scroll_offset, 0);
     let line_count = super::super::super::ui::help_lines(&app).len();
     assert!(
-        line_count <= app.modules_viewport_height,
-        "precondition: help lines ({line_count}) must fit in viewport"
+        line_count <= app.overlay_viewport_height,
+        "precondition: help lines ({line_count}) must fit in overlay viewport"
     );
 
     app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));

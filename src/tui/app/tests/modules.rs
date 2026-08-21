@@ -306,7 +306,7 @@ fn adding_module_down_key_clamps_at_last_available_entry() {
             selected: 0,
             scroll_offset: 0,
         },
-        modules_viewport_height: 2,
+        overlay_viewport_height: 2,
         ..App::default()
     };
     app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
@@ -339,6 +339,42 @@ fn adding_module_up_key_clamps_at_zero() {
             available: vec!["a".to_string(), "b".to_string()],
             selected: 0,
             scroll_offset: 0,
+        }
+    );
+}
+
+#[test]
+fn adding_module_down_key_scrolls_using_overlay_viewport_not_column() {
+    let mut app = App {
+        mode: Mode::AddingModule {
+            available: vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ],
+            selected: 0,
+            scroll_offset: 0,
+        },
+        modules_viewport_height: 8,
+        overlay_viewport_height: 2,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+    app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        app.mode,
+        Mode::AddingModule {
+            available: vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ],
+            selected: 2,
+            scroll_offset: 1,
         }
     );
 }

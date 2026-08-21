@@ -21,7 +21,7 @@ impl App {
             }
             KeyCode::Down => {
                 let total = super::super::ui::help_lines(self).len();
-                let max_offset = total.saturating_sub(self.modules_viewport_height);
+                let max_offset = total.saturating_sub(self.overlay_viewport_height);
                 self.help_scroll_offset =
                     (self.help_scroll_offset.saturating_add(1)).min(max_offset);
             }

@@ -47,6 +47,16 @@ pub(in crate::tui) fn modules_viewport_height(frame_height: u16) -> usize {
     compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS)).modules_content as usize
 }
 
+pub(in crate::tui) fn overlay_viewport_height(frame_height: u16) -> usize {
+    let heights = compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS));
+    let region_height = heights
+        .modules_border
+        .saturating_add(heights.modules_content);
+    let margin_y = OVERLAY_MARGIN_Y.min(region_height.saturating_sub(2) / 2);
+    let overlay_height = region_height.saturating_sub(margin_y.saturating_mul(2));
+    overlay_height.saturating_sub(2) as usize
+}
+
 pub(super) struct Areas {
     pub(super) settings: Rect,
     pub(super) modules: Rect,

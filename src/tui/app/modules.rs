@@ -111,14 +111,14 @@ impl App {
             KeyCode::Up => {
                 *selected = selected.saturating_sub(1);
                 *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.modules_viewport_height);
+                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
             }
             KeyCode::Down => {
                 if !available.is_empty() {
                     *selected = (*selected + 1).min(available.len() - 1);
                 }
                 *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.modules_viewport_height);
+                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
             }
             KeyCode::Enter => self.begin_naming_module_instance(),
             _ => {}
