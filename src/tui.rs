@@ -2,6 +2,7 @@ mod app;
 mod event;
 mod terminal;
 mod ui;
+mod util;
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -10,13 +11,6 @@ use app::App;
 use terminal::TerminalGuard;
 
 const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(250);
-
-pub(super) fn char_byte_offset(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(s.len())
-}
 
 pub(crate) fn run() -> ExitCode {
     match run_inner() {
