@@ -21,7 +21,26 @@ struct Config {
     credentials_path: Option<String>,
     url: Option<String>,
     format: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_interval_ms")]
     interval_ms: Option<u32>,
+}
+
+fn deserialize_interval_ms<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntervalMs {
+        Number(u32),
+        Text(String),
+    }
+
+    let value = Option::<IntervalMs>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| match v {
+        IntervalMs::Number(n) => Some(n),
+        IntervalMs::Text(s) => s.parse().ok(),
+    }))
 }
 
 thread_local! {
@@ -319,7 +338,33 @@ mod tests {
 
     #[test]
     fn returns_none_for_wrong_field_type() {
-        assert_eq!(parse_config(r#"{"interval_ms":"soon"}"#), None);
+        assert_eq!(parse_config(r#"{"interval_ms":{"nested":true}}"#), None);
+    }
+
+    #[test]
+    fn interval_ms_accepts_numeric_string() {
+        assert_eq!(
+            parse_config(r#"{"interval_ms":"1000"}"#),
+            Some(Config {
+                credentials_path: None,
+                url: None,
+                format: None,
+                interval_ms: Some(1000),
+            })
+        );
+    }
+
+    #[test]
+    fn interval_ms_unparseable_string_falls_back_to_none() {
+        assert_eq!(
+            parse_config(r#"{"interval_ms":"soon"}"#),
+            Some(Config {
+                credentials_path: None,
+                url: None,
+                format: None,
+                interval_ms: None,
+            })
+        );
     }
 
     #[test]
