@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::config::{BarConfig, ModuleSectionView, ParamWriteExpect};
 
 use super::text::clamped_scroll_offset;
@@ -5,13 +7,17 @@ use super::{App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus};
 
 impl App {
     pub(in crate::tui) fn poll_config_changes(&mut self) {
-        let reloaded = self
+        let Some(batch) = self
             .config_watcher
             .as_mut()
-            .map(|watcher| watcher.try_reload())
-            .unwrap_or(false);
-        if reloaded {
+            .and_then(|watcher| watcher.try_reload())
+        else {
+            return;
+        };
+        if batch.config {
             self.refresh_config();
+        } else if !batch.wasm_kinds.is_empty() {
+            self.refresh_metadata_for_kinds(&batch.wasm_kinds);
         }
     }
 
@@ -39,6 +45,7 @@ impl App {
                         };
                         self.modules = Some(names);
                         self.last_modules_error = None;
+                        self.prune_metadata_to_configured();
                         self.ensure_selected_visible();
                         let new_entry = self
                             .selected_index
@@ -51,6 +58,7 @@ impl App {
                     }
                     Err(err) => {
                         self.modules = None;
+                        self.clear_metadata_state();
                         self.selected_index = None;
                         self.module_params = None;
                         self.panel_focus = PanelFocus::Modules;
@@ -66,6 +74,7 @@ impl App {
             Err(err) => {
                 self.separator = None;
                 self.modules = None;
+                self.clear_metadata_state();
                 self.selected_index = None;
                 self.module_params = None;
                 self.config_cache = None;
@@ -79,6 +88,79 @@ impl App {
         }
         self.drop_stale_confirming_remove_mode();
         self.drop_stale_param_modes();
+    }
+
+    fn clear_metadata_state(&mut self) {
+        self.metadata_by_kind.clear();
+        self.metadata_failed.clear();
+        self.metadata_needs_stable.clear();
+    }
+
+    fn prune_metadata_to_configured(&mut self) {
+        let configured = self.configured_kinds();
+        self.metadata_by_kind
+            .retain(|kind, _| configured.contains(kind));
+        self.metadata_failed
+            .retain(|kind| configured.contains(kind));
+        self.metadata_needs_stable
+            .retain(|kind| configured.contains(kind));
+    }
+
+    fn refresh_metadata_for_kinds(&mut self, wasm_kinds: &[String]) {
+        let configured = self.configured_kinds();
+        for kind in wasm_kinds {
+            if !configured.contains(kind) {
+                continue;
+            }
+            self.metadata_by_kind.remove(kind);
+            self.metadata_failed.remove(kind);
+            self.metadata_needs_stable.insert(kind.clone());
+        }
+    }
+
+    pub(in crate::tui) fn poll_metadata(&mut self) {
+        let configured = self.configured_kinds();
+        let Some(kind) = configured.into_iter().find(|kind| {
+            !self.metadata_by_kind.contains_key(kind) && !self.metadata_failed.contains(kind)
+        }) else {
+            return;
+        };
+        let Some(modules_dir) = self.modules_dir.clone() else {
+            return;
+        };
+        if self.metadata_probe.is_none() {
+            match crate::meta::MetadataProbe::new() {
+                Ok(probe) => self.metadata_probe = Some(probe),
+                Err(_) => return,
+            }
+        }
+        let Some(probe) = self.metadata_probe.as_ref() else {
+            return;
+        };
+        let wait_stable = self.metadata_needs_stable.remove(&kind);
+        let result = if wait_stable {
+            probe.read_after_stable(&modules_dir, &kind)
+        } else {
+            probe.read(&modules_dir, &kind)
+        };
+        match result {
+            Ok(meta) => {
+                self.metadata_by_kind.insert(kind, meta);
+            }
+            Err(_) => {
+                self.metadata_failed.insert(kind);
+            }
+        }
+    }
+
+    fn configured_kinds(&self) -> HashSet<String> {
+        let Some(modules) = &self.modules else {
+            return HashSet::new();
+        };
+        modules
+            .iter()
+            .map(|entry| BarConfig::split_module_entry(entry).0.to_string())
+            .collect()
     }
 
     pub(super) fn rebuild_module_params_from(&mut self, config: &BarConfig, reset_selection: bool) {

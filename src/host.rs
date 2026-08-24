@@ -11,12 +11,20 @@ pub(crate) struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
-    connection: Arc<RustConnection>,
+    connection: Option<Arc<RustConnection>>,
     http_agent: ureq::Agent,
 }
 
 impl HostState {
     pub(crate) fn new(connection: Arc<RustConnection>, http_agent: ureq::Agent) -> Self {
+        Self::with_connection(Some(connection), http_agent)
+    }
+
+    pub(crate) fn new_without_display(http_agent: ureq::Agent) -> Self {
+        Self::with_connection(None, http_agent)
+    }
+
+    fn with_connection(connection: Option<Arc<RustConnection>>, http_agent: ureq::Agent) -> Self {
         Self {
             wasi_ctx: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
@@ -44,7 +52,11 @@ impl Host for HostState {
     }
 
     fn read_xkb_state(&mut self) -> Result<XkbState, String> {
-        x11::read_xkb_state(&self.connection).map_err(|e| e.to_string())
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "no display connection".to_string())?;
+        x11::read_xkb_state(connection).map_err(|e| e.to_string())
     }
 
     fn read_disk_usage(&mut self, device: String) -> Result<DiskUsage, String> {
@@ -80,5 +92,25 @@ impl WasiView for HostState {
             ctx: &mut self.wasi_ctx,
             table: &mut self.table,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bindings::Host;
+
+    fn http_agent() -> ureq::Agent {
+        let agent_config = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build();
+        ureq::Agent::new_with_config(agent_config)
+    }
+
+    #[test]
+    fn read_xkb_state_errors_without_display() {
+        let mut state = HostState::new_without_display(http_agent());
+        let err = state.read_xkb_state().unwrap_err();
+        assert!(err.contains("no display"));
     }
 }
