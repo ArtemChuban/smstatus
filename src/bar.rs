@@ -29,9 +29,10 @@ pub(crate) fn run() -> Result<()> {
     let mut config = BarConfig::load(&config_path)?;
     let mut separator = config.separator();
     if let Err(err) = logging::init(config.log_days()) {
-        let message = format!("failed to initialize logging: {err}");
-        eprintln!("{message}");
-        logging::append_message(log::Level::Error, &message);
+        logging::to_stderr(
+            log::Level::Error,
+            &format!("failed to initialize logging: {err}"),
+        );
     }
 
     let mut linker = Linker::new(&engine);
