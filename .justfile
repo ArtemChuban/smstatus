@@ -49,9 +49,14 @@ build-echo flags="":
 
 build-echo-release: (build-echo "--release")
 
-build-extensions: build-echo
+build-time flags="":
+    cargo build -p smstatus-time {{flags}}
 
-build-extensions-release: build-echo-release
+build-time-release: (build-time "--release")
+
+build-extensions: build-echo build-time
+
+build-extensions-release: build-echo-release build-time-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -95,11 +100,14 @@ test-extension-protocol:
 test-echo:
     cargo test -p echo
 
+test-time:
+    cargo test -p smstatus-time
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-extensions: test-echo
+test-extensions: test-echo test-time
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -119,12 +127,15 @@ cov-extension-protocol:
 cov-echo:
     cargo llvm-cov -p echo --summary-only
 
+cov-time:
+    cargo llvm-cov -p smstatus-time --summary-only
+
 cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo
+cov-extensions: cov-echo cov-time
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -142,5 +153,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -- -D warnings
+    cargo clippy -p echo -p smstatus-time -- -D warnings
     cargo clippy -p smstatus -- -D warnings

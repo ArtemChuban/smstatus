@@ -25,12 +25,25 @@ mod logic {
     use crate::DEFAULT_FORMAT;
 
     use super::Config;
+    use serde::Deserialize;
     use time::OffsetDateTime;
+
+    #[derive(Deserialize)]
+    struct TimeStateJson {
+        now_ms: u64,
+        offset_seconds: i32,
+    }
 
     pub fn parse_format_from_config(config: &str) -> Option<String> {
         serde_json::from_str::<Config>(config)
             .ok()
             .map(|c| c.format.unwrap_or_else(|| DEFAULT_FORMAT.to_string()))
+    }
+
+    pub fn parse_time_state_json(json: &str) -> Result<(u64, i32), String> {
+        serde_json::from_str::<TimeStateJson>(json)
+            .map(|s| (s.now_ms, s.offset_seconds))
+            .map_err(|e| format!("malformed time state: {e}"))
     }
 
     pub fn to_local_datetime(ms: u64, offset_secs: i32) -> OffsetDateTime {
@@ -47,6 +60,10 @@ mod logic {
             .and_then(|desc| dt.format(&desc).ok())
             .unwrap_or_else(|| "time format error".to_string())
     }
+
+    pub fn format_error(err: &str) -> String {
+        format!("datetime error: {err}")
+    }
 }
 
 struct Component;
@@ -59,9 +76,16 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let state = host::read_time_state();
-        let dt = logic::to_local_datetime(state.now_ms, state.offset_seconds);
-        let text = FORMAT.with(|f| logic::format_datetime(dt, &f.borrow()));
+        let text = match host::call_extension("time", "read-time-state", "") {
+            Ok(json) => match logic::parse_time_state_json(&json) {
+                Ok((now_ms, offset_seconds)) => {
+                    let dt = logic::to_local_datetime(now_ms, offset_seconds);
+                    FORMAT.with(|f| logic::format_datetime(dt, &f.borrow()))
+                }
+                Err(err) => logic::format_error(&err),
+            },
+            Err(err) => logic::format_error(&err),
+        };
 
         Output {
             text,
@@ -91,7 +115,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["time".to_string()]
     }
 }
 
@@ -300,10 +324,28 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_time() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["time".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_time_state_json_success() {
+        assert_eq!(
+            parse_time_state_json(r#"{"now_ms":123,"offset_seconds":3600}"#),
+            Ok((123, 3600))
+        );
+    }
+
+    #[test]
+    fn parse_time_state_json_missing_fields() {
+        assert!(parse_time_state_json(r#"{"now_ms":123}"#).is_err());
+    }
+
+    #[test]
+    fn parse_time_state_json_garbage() {
+        assert!(parse_time_state_json("not json").is_err());
     }
 }
