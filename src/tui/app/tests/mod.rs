@@ -19,6 +19,19 @@ pub(super) fn unique_temp_path(purpose: &str) -> std::path::PathBuf {
     ))
 }
 
+pub(super) fn install_test_log() {
+    let path = unique_temp_path("action-log").with_extension("log");
+    crate::logging::set_path_for_test(path);
+}
+
+pub(super) fn action_log() -> Vec<String> {
+    crate::logging::logged_messages()
+}
+
+pub(super) fn clear_action_log() {
+    crate::logging::clear_for_test();
+}
+
 mod daemon;
 mod help;
 mod modules;

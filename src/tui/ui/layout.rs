@@ -1,12 +1,12 @@
 use ratatui::layout::Rect;
 
-use super::super::app::ACTION_LOG_CAPACITY;
+use super::super::app::LOGS_PANEL_LINES;
 
 pub(super) const OUTER_BORDER_ROWS: u16 = 2;
 pub(super) const SETTINGS_BLOCK_HEIGHT: u16 = 3;
 pub(super) const MODULES_BORDER_ROWS: u16 = 2;
 pub(super) const HINT_HEIGHT: u16 = 1;
-pub(super) const LOGS_BLOCK_HEIGHT: u16 = 2 + ACTION_LOG_CAPACITY as u16;
+pub(super) const LOGS_BLOCK_HEIGHT: u16 = 2 + LOGS_PANEL_LINES as u16;
 const OVERLAY_MARGIN_X: u16 = 4;
 const OVERLAY_MARGIN_Y: u16 = 1;
 

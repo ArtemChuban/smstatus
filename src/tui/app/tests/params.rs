@@ -115,6 +115,7 @@ fn e_d_r_noop_on_missing_params_but_a_works() {
 
 #[test]
 fn double_d_removes_param_and_esc_cancel_edit_stays_params() {
+    install_test_log();
     let path = unique_temp_path("params-remove-edit");
     std::fs::write(
         &path,
@@ -149,14 +150,14 @@ fn double_d_removes_param_and_esc_cancel_edit_stays_params() {
     app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.panel_focus, PanelFocus::Params);
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
     let before = std::fs::read_to_string(&path).unwrap();
 
     app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(matches!(app.mode, Mode::ConfirmingRemoveParam { .. }));
     app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.iter().any(|m| m == "Removed format"));
+    assert!(action_log().iter().any(|m| m == "Removed format"));
     let after = std::fs::read_to_string(&path).unwrap();
     assert_ne!(before, after);
     assert!(!after.contains("format"));
@@ -166,6 +167,7 @@ fn double_d_removes_param_and_esc_cancel_edit_stays_params() {
 
 #[test]
 fn add_param_flow_writes_and_esc_on_value_returns_to_key() {
+    install_test_log();
     let path = unique_temp_path("params-add-flow");
     std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
     let config = BarConfig::load(&path).unwrap();
@@ -208,7 +210,7 @@ fn add_param_flow_writes_and_esc_on_value_returns_to_key() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.iter().any(|m| m == "Added format"));
+    assert!(action_log().iter().any(|m| m == "Added format"));
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("[cpu]"));
     assert!(content.contains("format"));
@@ -217,6 +219,7 @@ fn add_param_flow_writes_and_esc_on_value_returns_to_key() {
 
 #[test]
 fn rename_param_via_r() {
+    install_test_log();
     let path = unique_temp_path("params-rename");
     std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nold = \"v\"\n").unwrap();
     let config = BarConfig::load(&path).unwrap();
@@ -243,7 +246,7 @@ fn rename_param_via_r() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.iter().any(|m| m == "Renamed old → new"));
+    assert!(action_log().iter().any(|m| m == "Renamed old → new"));
     let sel = &app.module_params.as_ref().unwrap().entries
         [app.module_params.as_ref().unwrap().selected_index.unwrap()];
     assert_eq!(sel.0, "new");
@@ -290,6 +293,7 @@ fn params_up_down_move_selection() {
 
 #[test]
 fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
+    install_test_log();
     let path = unique_temp_path("params-add-keep-selection");
     std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nkeep = \"me\"\n").unwrap();
     let config = BarConfig::load(&path).unwrap();
@@ -320,7 +324,7 @@ fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.iter().any(|m| m == "Added newbie"));
+    assert!(action_log().iter().any(|m| m == "Added newbie"));
     let params = app.module_params.as_ref().unwrap();
     let sel = params.selected_index.unwrap();
     assert_eq!(params.entries[sel].0, "keep");
@@ -329,6 +333,7 @@ fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
 
 #[test]
 fn empty_value_commit_succeeds() {
+    install_test_log();
     let path = unique_temp_path("params-empty-value");
     std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nformat = \"old\"\n").unwrap();
     let config = BarConfig::load(&path).unwrap();
@@ -355,7 +360,7 @@ fn empty_value_commit_succeeds() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.iter().any(|m| m == "Updated format"));
+    assert!(action_log().iter().any(|m| m == "Updated format"));
     let content = std::fs::read_to_string(&path).unwrap();
     let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
     assert_eq!(doc["cpu"]["format"].as_str(), Some(""));
@@ -364,6 +369,7 @@ fn empty_value_commit_succeeds() {
 
 #[test]
 fn invalid_charset_on_add_and_rename_refuses_and_logs() {
+    install_test_log();
     let path = unique_temp_path("params-invalid-charset");
     std::fs::write(&path, "modules = [\"cpu\"]\n\n[cpu]\nold = \"v\"\n").unwrap();
     let config = BarConfig::load(&path).unwrap();
@@ -388,14 +394,10 @@ fn invalid_charset_on_add_and_rename_refuses_and_logs() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(matches!(app.mode, Mode::AddingParamKey { .. }));
-    assert!(
-        app.action_log
-            .iter()
-            .any(|m| m.contains("Invalid param key"))
-    );
+    assert!(action_log().iter().any(|m| m.contains("Invalid param key")));
 
     app.mode = Mode::Normal;
-    app.action_log.clear();
+    clear_action_log();
     app.handle_key(key(KeyCode::Char('r'), KeyModifiers::NONE));
     for _ in 0..3 {
         app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
@@ -405,11 +407,7 @@ fn invalid_charset_on_add_and_rename_refuses_and_logs() {
     }
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(matches!(app.mode, Mode::RenamingParamKey { .. }));
-    assert!(
-        app.action_log
-            .iter()
-            .any(|m| m.contains("Invalid param key"))
-    );
+    assert!(action_log().iter().any(|m| m.contains("Invalid param key")));
     let before = std::fs::read_to_string(&path).unwrap();
     assert!(before.contains("old ="));
     let _ = std::fs::remove_file(&path);
@@ -453,6 +451,7 @@ fn non_string_edit_begins_with_empty_buffer() {
 
 #[test]
 fn begin_remove_param_without_config_path_pushes_message_and_stays_normal() {
+    install_test_log();
     let mut app = App {
         modules: Some(vec!["cpu".to_string()]),
         selected_index: Some(0),
@@ -472,7 +471,7 @@ fn begin_remove_param_without_config_path_pushes_message_and_stays_normal() {
     app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(
-        app.action_log,
+        action_log(),
         vec!["cannot remove param: config path unknown"]
     );
 }

@@ -9,7 +9,32 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use super::*;
 use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
-use crate::tui::app::{App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus};
+use crate::tui::app::{
+    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
+};
+
+pub(super) fn install_test_log() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "smstatus-tui-ui-test-log-{}-{nanos}.log",
+        std::process::id()
+    ));
+    crate::logging::set_path_for_test(path);
+}
+
+pub(super) fn seed_log_lines(lines: &[&str]) {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    let mut content = String::new();
+    for line in lines {
+        content.push_str(line);
+        content.push('\n');
+    }
+    std::fs::write(path, content).unwrap();
+}
 
 pub(super) fn pad(content: &str, width: usize) -> String {
     let chars: Vec<char> = content.chars().collect();
@@ -131,7 +156,7 @@ pub(super) fn expected(
     if heights.logs > 0 {
         rows.push(nested_top_row("logs", w));
         let mut log_lines: Vec<String> = action_log.iter().map(|s| s.to_string()).collect();
-        while log_lines.len() < ACTION_LOG_CAPACITY {
+        while log_lines.len() < LOGS_PANEL_LINES {
             log_lines.push(String::new());
         }
         for line in &log_lines {
@@ -269,6 +294,14 @@ pub(super) fn render_terminal(app: &App, width: u16, height: u16) -> Terminal<Te
 }
 
 pub(super) fn render(app: &App, width: u16, height: u16) -> Buffer {
+    install_test_log();
+    render_terminal(app, width, height)
+        .backend()
+        .buffer()
+        .clone()
+}
+
+pub(super) fn render_with_log(app: &App, width: u16, height: u16) -> Buffer {
     render_terminal(app, width, height)
         .backend()
         .buffer()

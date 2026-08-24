@@ -47,7 +47,7 @@ impl BarConfig {
     pub(crate) fn module_config_json(&self, module_name: &str) -> String {
         match self.0.get(module_name) {
             Some(section) => serde_json::to_string(section).unwrap_or_else(|err| {
-                eprintln!("failed to serialize config for module `{module_name}`: {err}");
+                log::error!("failed to serialize config for module `{module_name}`: {err}");
                 "{}".to_string()
             }),
             None => "{}".to_string(),
@@ -85,6 +85,15 @@ impl BarConfig {
             .and_then(|v| v.as_str())
             .unwrap_or(" | ")
             .to_string()
+    }
+
+    pub(crate) fn log_days(&self) -> u64 {
+        self.0
+            .get("log_days")
+            .and_then(|v| v.as_integer())
+            .filter(|&n| n >= 0)
+            .map(|n| n as u64)
+            .unwrap_or(7)
     }
 
     pub(crate) fn module_names(&self) -> Result<Vec<String>> {

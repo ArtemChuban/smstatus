@@ -36,13 +36,20 @@ fn plain_c_without_control_does_not_request_quit() {
 }
 
 #[test]
-fn push_action_message_caps_at_capacity_keeping_most_recent() {
+fn push_action_message_panel_tail_keeps_most_recent() {
+    install_test_log();
     let mut app = App::default();
     app.push_action_message("one".to_string());
     app.push_action_message("two".to_string());
     app.push_action_message("three".to_string());
     app.push_action_message("four".to_string());
-    assert_eq!(app.action_log, vec!["two", "three", "four"]);
+    assert_eq!(action_log(), vec!["one", "two", "three", "four"]);
+    let path = crate::logging::current_log_path().unwrap();
+    let panel = crate::logging::tail_lines(&path, LOGS_PANEL_LINES);
+    assert_eq!(panel.len(), LOGS_PANEL_LINES);
+    assert!(panel[0].ends_with(" INFO two"));
+    assert!(panel[1].ends_with(" INFO three"));
+    assert!(panel[2].ends_with(" INFO four"));
 }
 
 #[test]
@@ -64,6 +71,7 @@ fn begin_edit_separator_prefills_buffer_with_current_separator() {
 
 #[test]
 fn begin_edit_separator_without_config_path_pushes_message_and_stays_normal() {
+    install_test_log();
     let mut app = App {
         config_path: None,
         ..App::default()
@@ -71,7 +79,7 @@ fn begin_edit_separator_without_config_path_pushes_message_and_stays_normal() {
     app.begin_edit_separator();
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(
-        app.action_log,
+        action_log(),
         vec!["cannot edit separator: config path unknown"]
     );
 }
@@ -314,6 +322,7 @@ fn ctrl_c_while_editing_still_quits() {
 
 #[test]
 fn esc_while_editing_returns_to_normal_without_logging() {
+    install_test_log();
     let mut app = App {
         mode: Mode::EditingSeparator {
             buffer: "abc".to_string(),
@@ -323,11 +332,12 @@ fn esc_while_editing_returns_to_normal_without_logging() {
     };
     app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn enter_while_editing_writes_value_updates_separator_and_logs_success() {
+    install_test_log();
     let path = unique_temp_path("commit");
     std::fs::write(&path, "separator = \" | \"\n").unwrap();
     let mut app = App {
@@ -343,11 +353,12 @@ fn enter_while_editing_writes_value_updates_separator_and_logs_success() {
 
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.separator, Some(" :: ".to_string()));
-    assert_eq!(app.action_log, vec!["Separator updated"]);
+    assert_eq!(action_log(), vec!["Separator updated"]);
 }
 
 #[test]
 fn enter_with_empty_buffer_writes_empty_separator_successfully() {
+    install_test_log();
     let path = unique_temp_path("commit-empty");
     std::fs::write(&path, "separator = \" | \"\n").unwrap();
     let mut app = App {
@@ -364,6 +375,6 @@ fn enter_with_empty_buffer_writes_empty_separator_successfully() {
 
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.separator, Some(String::new()));
-    assert_eq!(app.action_log, vec!["Separator updated"]);
+    assert_eq!(action_log(), vec!["Separator updated"]);
     assert!(content.contains("separator = \"\""));
 }
