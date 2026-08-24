@@ -197,9 +197,9 @@ impl ReloadWatcher {
         }
     }
 
-    pub(crate) fn try_reload(&mut self) -> bool {
+    pub(crate) fn try_reload(&mut self) -> Option<ReloadBatch> {
         if !self.alive {
-            return false;
+            return None;
         }
         match self.reload_rx.try_recv() {
             Ok(first) => {
@@ -209,15 +209,18 @@ impl ReloadWatcher {
                 while let Ok(event) = self.reload_rx.try_recv() {
                     apply_event(event, &mut config, &mut kinds);
                 }
-                config
+                Some(ReloadBatch {
+                    config,
+                    wasm_kinds: kinds,
+                })
             }
-            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 log::error!(
                     "reload watcher channel disconnected; disabling hot-reload for the rest of this run"
                 );
                 self.alive = false;
-                false
+                None
             }
         }
     }

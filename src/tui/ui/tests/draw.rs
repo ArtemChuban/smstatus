@@ -749,3 +749,87 @@ fn draw_renders_help_title_content_and_hint() {
         )
     );
 }
+
+fn sample_cpu_metadata() -> Metadata {
+    Metadata {
+        display_name: "CPU".to_string(),
+        version: "0.1.0".to_string(),
+        author: "ArtemChuban".to_string(),
+    }
+}
+
+fn sample_disk_metadata() -> Metadata {
+    Metadata {
+        display_name: "Disk".to_string(),
+        version: "0.1.0".to_string(),
+        author: "ArtemChuban".to_string(),
+    }
+}
+
+#[test]
+fn draw_renders_metadata_display_name_for_undecorated_module() {
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        metadata_by_kind: [("cpu".to_string(), sample_cpu_metadata())]
+            .into_iter()
+            .collect(),
+        module_params: Some(params_empty()),
+        ..App::default()
+    };
+    let height = BASELINE_HEIGHT + 1;
+    assert_eq!(
+        render(&app, 70, height),
+        with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-1/1",
+                &["CPU 0.1.0 by ArtemChuban"],
+                "config CPU",
+                &["(empty)"],
+                &[],
+                NORMAL_HINT_MODULES,
+            ),
+            5,
+            70,
+        )
+    );
+}
+
+#[test]
+fn draw_renders_metadata_with_entry_for_instance_module() {
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        modules: Some(vec!["disk#root".to_string()]),
+        selected_index: Some(0),
+        metadata_by_kind: [("disk".to_string(), sample_disk_metadata())]
+            .into_iter()
+            .collect(),
+        module_params: Some(params_empty()),
+        ..App::default()
+    };
+    let height = BASELINE_HEIGHT + 1;
+    assert_eq!(
+        render(&app, 70, height),
+        with_reversed_modules_row(
+            expected(
+                70,
+                height,
+                Some(DaemonStatus::Stopped),
+                "separator: unknown",
+                "modules 1-1/1",
+                &["Disk (disk#root) 0.1.0 by ArtemChuban"],
+                "config Disk (disk#root)",
+                &["(empty)"],
+                &[],
+                NORMAL_HINT_MODULES,
+            ),
+            5,
+            70,
+        )
+    );
+}

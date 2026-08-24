@@ -7,7 +7,8 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::config::ModuleParamValue;
+use crate::bindings::Metadata;
+use crate::config::{BarConfig, ModuleParamValue};
 
 use super::super::app::{
     App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
@@ -158,10 +159,40 @@ pub(super) fn modules_title(app: &App, viewport_height: usize) -> String {
 
 pub(super) fn params_title(app: &App) -> String {
     let text = match selected_module_entry(app) {
-        Some(entry) => format!("config {entry}"),
+        Some(entry) => {
+            let kind = BarConfig::split_module_entry(entry).0;
+            params_title_text(entry, app.metadata_by_kind.get(kind))
+        }
         None => "config".to_string(),
     };
     boxed_title(&text)
+}
+
+pub(super) fn module_list_label(entry: &str, meta: Option<&Metadata>) -> String {
+    let Some(meta) = meta else {
+        return entry.to_string();
+    };
+    let kind = BarConfig::split_module_entry(entry).0;
+    if entry == kind {
+        format!("{} {} by {}", meta.display_name, meta.version, meta.author)
+    } else {
+        format!(
+            "{} ({entry}) {} by {}",
+            meta.display_name, meta.version, meta.author
+        )
+    }
+}
+
+pub(super) fn params_title_text(entry: &str, meta: Option<&Metadata>) -> String {
+    let Some(meta) = meta else {
+        return format!("config {entry}");
+    };
+    let kind = BarConfig::split_module_entry(entry).0;
+    if entry == kind {
+        format!("config {}", meta.display_name)
+    } else {
+        format!("config {} ({entry})", meta.display_name)
+    }
 }
 
 pub(super) fn selected_module_entry(app: &App) -> Option<&str> {
@@ -205,13 +236,20 @@ pub(super) fn visible_module_lines(
     let Some(modules) = &app.modules else {
         return Vec::new();
     };
+    let labels: Vec<String> = modules
+        .iter()
+        .map(|entry| {
+            let kind = BarConfig::split_module_entry(entry).0;
+            module_list_label(entry, app.metadata_by_kind.get(kind))
+        })
+        .collect();
     let selected = if app.panel_focus == PanelFocus::Modules {
         app.selected_index
     } else {
         None
     };
     styled_list_lines(
-        modules,
+        &labels,
         selected,
         app.module_scroll_offset,
         viewport_height,
@@ -313,4 +351,59 @@ pub(super) fn log_panel_lines(lines: Vec<String>) -> Vec<String> {
         lines = lines.split_off(lines.len() - LOGS_PANEL_LINES);
     }
     lines
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::{module_list_label, params_title_text};
+    use crate::bindings::Metadata;
+
+    fn sample_meta() -> Metadata {
+        Metadata {
+            display_name: "CPU".to_string(),
+            version: "0.1.0".to_string(),
+            author: "ArtemChuban".to_string(),
+        }
+    }
+
+    #[test]
+    fn module_list_label_without_metadata_returns_entry() {
+        assert_eq!(module_list_label("cpu", None), "cpu");
+        assert_eq!(module_list_label("disk#root", None), "disk#root");
+    }
+
+    #[test]
+    fn module_list_label_undecorated_includes_version_and_author() {
+        assert_eq!(
+            module_list_label("cpu", Some(&sample_meta())),
+            "CPU 0.1.0 by ArtemChuban"
+        );
+    }
+
+    #[test]
+    fn module_list_label_instance_keeps_entry_in_parens() {
+        assert_eq!(
+            module_list_label("cpu#home", Some(&sample_meta())),
+            "CPU (cpu#home) 0.1.0 by ArtemChuban"
+        );
+    }
+
+    #[test]
+    fn params_title_text_without_metadata_keeps_entry() {
+        assert_eq!(params_title_text("cpu", None), "config cpu");
+        assert_eq!(params_title_text("disk#root", None), "config disk#root");
+    }
+
+    #[test]
+    fn params_title_text_undecorated_uses_display_name() {
+        assert_eq!(params_title_text("cpu", Some(&sample_meta())), "config CPU");
+    }
+
+    #[test]
+    fn params_title_text_instance_includes_entry() {
+        assert_eq!(
+            params_title_text("cpu#home", Some(&sample_meta())),
+            "config CPU (cpu#home)"
+        );
+    }
 }
