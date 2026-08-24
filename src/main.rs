@@ -6,6 +6,7 @@ mod daemon;
 mod error;
 mod host;
 mod lock;
+mod logging;
 mod module;
 mod schema;
 mod sysinfo;

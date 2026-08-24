@@ -14,7 +14,7 @@ mod text;
 
 use text::{is_hard_quit, is_quit};
 
-pub(super) const ACTION_LOG_CAPACITY: usize = 3;
+pub(super) const LOGS_PANEL_LINES: usize = 3;
 
 #[derive(Default, PartialEq, Eq, Debug)]
 pub(super) enum Mode {
@@ -89,7 +89,6 @@ pub(super) struct ModuleParamsState {
 pub(super) struct App {
     pub(super) should_quit: bool,
     pub(super) daemon_status: Option<crate::daemon::DaemonStatus>,
-    pub(super) action_log: Vec<String>,
     pub(super) pending_start: Option<std::process::Child>,
     pub(super) pending_start_confirmed_running: bool,
     pub(super) mode: Mode,
@@ -117,6 +116,15 @@ impl App {
             Ok(config_dir) => {
                 let config_path = config_dir.join("config.toml");
                 let modules_dir = config_dir.join("modules");
+                let log_days = BarConfig::load(&config_path)
+                    .map(|config| config.log_days())
+                    .unwrap_or(7);
+                if let Err(err) = crate::logging::init(log_days) {
+                    crate::logging::to_stderr(
+                        log::Level::Error,
+                        &format!("failed to initialize logging: {err}"),
+                    );
+                }
                 match crate::watcher::ReloadWatcher::new(
                     &config_dir,
                     config_path.clone(),
@@ -212,10 +220,7 @@ impl App {
     }
 
     fn push_action_message(&mut self, message: String) {
-        self.action_log.push(message);
-        if self.action_log.len() > ACTION_LOG_CAPACITY {
-            self.action_log.remove(0);
-        }
+        crate::logging::log_message(log::Level::Info, &message);
     }
 }
 

@@ -21,6 +21,7 @@ impl App {
         };
         match BarConfig::load(path) {
             Ok(config) => {
+                crate::logging::set_retain_days(config.log_days());
                 self.separator = Some(config.separator());
                 self.last_separator_error = None;
                 match config.module_names() {
