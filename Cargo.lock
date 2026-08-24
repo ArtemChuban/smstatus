@@ -2478,6 +2478,7 @@ dependencies = [
  "nix",
  "notify",
  "ratatui",
+ "serde",
  "serde_json",
  "toml",
  "toml_edit",

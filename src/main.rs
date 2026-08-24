@@ -5,6 +5,7 @@ mod config;
 mod daemon;
 mod error;
 mod host;
+mod host_module;
 mod lock;
 mod logging;
 mod meta;
