@@ -45,8 +45,8 @@ fn push_action_message_panel_tail_keeps_most_recent() {
     app.push_action_message("four".to_string());
     assert_eq!(action_log(), vec!["one", "two", "three", "four"]);
     let path = crate::logging::current_log_path().unwrap();
-    let panel = crate::logging::tail_lines(&path, LOGS_PANEL_LINES);
-    assert_eq!(panel.len(), LOGS_PANEL_LINES);
+    let panel = crate::logging::tail_lines(&path, 3);
+    assert_eq!(panel.len(), 3);
     assert!(panel[0].ends_with(" INFO two"));
     assert!(panel[1].ends_with(" INFO three"));
     assert!(panel[2].ends_with(" INFO four"));

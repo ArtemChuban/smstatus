@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -242,6 +242,60 @@ pub(crate) fn prune_old_entries(path: &Path, retain_days: u64) -> Result<()> {
         .map_err(|err| format!("failed to write {}: {err}", path.display()).into())
 }
 
+pub(crate) fn count_non_empty_lines(path: &Path) -> usize {
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if !line.is_empty() {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Non-empty lines in absolute range `[start, start + count)`.
+pub(crate) fn lines_in_range(path: &Path, start: usize, count: usize) -> Vec<String> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let total = count_non_empty_lines(path);
+    if start >= total {
+        return Vec::new();
+    }
+    let want = count.min(total - start);
+    // Suffix reads can reuse the backward scanner.
+    if start + want == total {
+        return tail_lines(path, want);
+    }
+
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(want);
+    let mut idx = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if idx >= start {
+            out.push(line);
+            if out.len() == want {
+                break;
+            }
+        }
+        idx += 1;
+    }
+    out
+}
+
 pub(crate) fn tail_lines(path: &Path, n: usize) -> Vec<String> {
     if n == 0 {
         return Vec::new();
@@ -408,6 +462,23 @@ mod tests {
             tail_lines(&path, 10),
             vec!["one".to_string(), "two".to_string(), "three".to_string()]
         );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn count_and_lines_in_range_cover_full_file() {
+        let path = temp_log_path("range");
+        std::fs::write(&path, "a\n\nb\nc\nd\n").unwrap();
+        assert_eq!(count_non_empty_lines(&path), 4);
+        assert_eq!(
+            lines_in_range(&path, 1, 2),
+            vec!["b".to_string(), "c".to_string()]
+        );
+        assert_eq!(
+            lines_in_range(&path, 2, 10),
+            vec!["c".to_string(), "d".to_string()]
+        );
+        assert_eq!(lines_in_range(&path, 0, 4), tail_lines(&path, 4));
         cleanup(&path);
     }
 

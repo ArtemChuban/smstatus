@@ -11,8 +11,7 @@ use crate::bindings::Metadata;
 use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
 use crate::tui::app::{
-    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
-    ParamOrigin,
+    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
 };
 
 pub(super) fn install_test_log() {
@@ -124,6 +123,7 @@ pub(super) fn expected(
     module_lines: &[&str],
     params_title_text: &str,
     params_lines: &[&str],
+    logs_title_text: &str,
     action_log: &[&str],
     hint_text: &str,
 ) -> Buffer {
@@ -156,15 +156,22 @@ pub(super) fn expected(
     }
 
     if heights.logs > 0 {
-        rows.push(nested_top_row("logs", w));
+        rows.push(nested_top_row(logs_title_text, w));
+        let log_vh = heights.logs.saturating_sub(2) as usize;
         let mut log_lines: Vec<String> = action_log.iter().map(|s| s.to_string()).collect();
-        while log_lines.len() < LOGS_PANEL_LINES {
+        while log_lines.len() < log_vh {
             log_lines.push(String::new());
         }
-        for line in &log_lines {
+        for line in log_lines.iter().take(log_vh) {
             rows.push(nested_content_row(line, w));
         }
         rows.push(nested_bottom_row(w));
+    }
+
+    let hint_and_bottom = usize::from(heights.hint > 0) + 1;
+    let target_before_hint = (height as usize).saturating_sub(hint_and_bottom);
+    while rows.len() < target_before_hint {
+        rows.push(outer_content_row("", w));
     }
 
     if heights.hint > 0 {
@@ -183,6 +190,7 @@ pub(super) fn expected_overlay(
     separator_text: &str,
     overlay_title_text: &str,
     overlay_lines: &[&str],
+    logs_title_text: &str,
     action_log: &[&str],
     hint_text: &str,
 ) -> Buffer {
@@ -197,6 +205,7 @@ pub(super) fn expected_overlay(
         &[],
         "config",
         &[],
+        logs_title_text,
         action_log,
         hint_text,
     );
@@ -245,6 +254,7 @@ pub(super) fn expected_param_text_overlay(
     separator_text: &str,
     overlay_title_text: &str,
     overlay_line: &str,
+    logs_title_text: &str,
     action_log: &[&str],
     hint_text: &str,
 ) -> Buffer {
@@ -259,6 +269,7 @@ pub(super) fn expected_param_text_overlay(
         &[],
         "config",
         &[],
+        logs_title_text,
         action_log,
         hint_text,
     );
@@ -281,12 +292,13 @@ pub(super) fn expected_param_text_overlay(
     buf
 }
 
-const NORMAL_HINT_MODULES: &str =
-    "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?";
-const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_LOGS: &str =
+    "Scroll: \u{2191}/\u{2193} | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?";
 const HELP_HINT: &str = "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";
 
-const BASELINE_HEIGHT: u16 = 13;
+const BASELINE_HEIGHT: u16 = 16;
 
 pub(super) fn render_terminal(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
     let backend = TestBackend::new(width, height);
@@ -303,7 +315,13 @@ pub(super) fn render(app: &App, width: u16, height: u16) -> Buffer {
         .clone()
 }
 
-pub(super) fn render_with_log(app: &App, width: u16, height: u16) -> Buffer {
+pub(super) fn render_with_log(app: &mut App, width: u16, height: u16) -> Buffer {
+    app.logs_viewport_height = logs_viewport_height(height);
+    app.modules_viewport_height = modules_viewport_height(height);
+    app.refresh_log_history();
+    if app.logs_follow {
+        app.sync_logs_follow();
+    }
     render_terminal(app, width, height)
         .backend()
         .buffer()
@@ -326,6 +344,15 @@ pub(super) fn with_reversed_params_row(mut buffer: Buffer, y: u16, width: u16) -
     let content_w = (rw as u16).saturating_sub(2);
     buffer.set_style(
         Rect::new(x, y, content_w, 1),
+        Style::default().add_modifier(Modifier::REVERSED),
+    );
+    buffer
+}
+
+pub(super) fn with_reversed_logs_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+    let content_w = width.saturating_sub(4);
+    buffer.set_style(
+        Rect::new(2, y, content_w, 1),
         Style::default().add_modifier(Modifier::REVERSED),
     );
     buffer

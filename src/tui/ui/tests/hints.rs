@@ -90,6 +90,7 @@ fn help_lines_modules_focus_lists_local_module_bindings() {
     assert_eq!(lines[0], "--- Local ---");
     assert!(lines.iter().any(|l| l.contains("Add module: a")));
     assert!(lines.iter().any(|l| l.contains("Focus params")));
+    assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l == "--- Global ---"));
     assert!(lines.iter().any(|l| l == "Quit: q"));
 }
@@ -106,7 +107,29 @@ fn help_lines_params_focus_lists_edit_add_del_rename() {
     assert!(lines.iter().any(|l| l.contains("Add param")));
     assert!(lines.iter().any(|l| l.contains("Remove param")));
     assert!(lines.iter().any(|l| l.contains("Rename key")));
+    assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l.contains("Back to modules")));
     assert!(!lines.iter().any(|l| l.contains("Add module")));
     assert!(!lines.iter().any(|l| l.contains("Edit separator")));
+}
+
+#[test]
+fn hint_line_normal_mode_logs_focus() {
+    let app = App {
+        panel_focus: PanelFocus::Logs,
+        ..App::default()
+    };
+    assert_eq!(hint_line(&app).as_ref(), NORMAL_HINT_LOGS);
+}
+
+#[test]
+fn help_lines_logs_focus_lists_scroll_and_back() {
+    let app = App {
+        panel_focus: PanelFocus::Logs,
+        ..App::default()
+    };
+    let lines = help_lines(&app);
+    assert!(lines.iter().any(|l| l.contains("Scroll logs")));
+    assert!(lines.iter().any(|l| l.contains("Back to modules")));
+    assert!(!lines.iter().any(|l| l.contains("Add module")));
 }

@@ -1,3 +1,5 @@
+use ratatui::widgets::{Block, Borders};
+
 use super::*;
 
 #[test]
@@ -14,8 +16,8 @@ fn compute_fixed_heights_settings_collapses_below_its_threshold() {
 fn compute_fixed_heights_settings_still_collapses_one_row_below_its_threshold() {
     let h = compute_fixed_heights(2);
     assert_eq!(h.settings, 0);
-    assert_eq!(h.modules_border, 2);
-    assert_eq!(h.hint, 0);
+    assert_eq!(h.hint, 1);
+    assert_eq!(h.modules_border, 0);
     assert_eq!(h.logs, 0);
     assert_eq!(h.modules_content, 0);
 }
@@ -24,74 +26,50 @@ fn compute_fixed_heights_settings_still_collapses_one_row_below_its_threshold() 
 fn compute_fixed_heights_settings_fits_at_its_threshold() {
     let h = compute_fixed_heights(3);
     assert_eq!(h.settings, 3);
-    assert_eq!(h.modules_border, 0);
     assert_eq!(h.hint, 0);
+    assert_eq!(h.modules_border, 0);
     assert_eq!(h.logs, 0);
     assert_eq!(h.modules_content, 0);
 }
 
 #[test]
-fn compute_fixed_heights_modules_border_collapses_below_its_threshold() {
+fn compute_fixed_heights_hint_fits_after_settings() {
     let h = compute_fixed_heights(4);
     assert_eq!(h.settings, 3);
+    assert_eq!(h.hint, 1);
     assert_eq!(h.modules_border, 0);
-    assert_eq!(h.hint, 1);
     assert_eq!(h.logs, 0);
     assert_eq!(h.modules_content, 0);
 }
 
 #[test]
-fn compute_fixed_heights_modules_border_fits_at_its_threshold() {
-    let h = compute_fixed_heights(5);
+fn compute_fixed_heights_splits_flexible_space_evenly() {
+    // settings=3, hint=1, flexible=10 -> modules_region=5, logs=5
+    let h = compute_fixed_heights(14);
     assert_eq!(h.settings, 3);
-    assert_eq!(h.modules_border, 2);
-    assert_eq!(h.hint, 0);
-    assert_eq!(h.logs, 0);
-    assert_eq!(h.modules_content, 0);
-}
-
-#[test]
-fn compute_fixed_heights_hint_collapses_below_its_threshold() {
-    let h = compute_fixed_heights(5);
-    assert_eq!(h.hint, 0);
-}
-
-#[test]
-fn compute_fixed_heights_hint_fits_at_its_threshold() {
-    let h = compute_fixed_heights(6);
-    assert_eq!(h.settings, 3);
-    assert_eq!(h.modules_border, 2);
-    assert_eq!(h.hint, 1);
-    assert_eq!(h.logs, 0);
-    assert_eq!(h.modules_content, 0);
-}
-
-#[test]
-fn compute_fixed_heights_logs_collapses_below_its_threshold() {
-    let h = compute_fixed_heights(10);
-    assert_eq!(h.settings, 3);
-    assert_eq!(h.modules_border, 2);
-    assert_eq!(h.hint, 1);
-    assert_eq!(h.logs, 0);
-    assert_eq!(h.modules_content, 4);
-}
-
-#[test]
-fn compute_fixed_heights_logs_fits_at_its_threshold_and_modules_content_drops_to_zero() {
-    let h = compute_fixed_heights(11);
-    assert_eq!(h.settings, 3);
-    assert_eq!(h.modules_border, 2);
     assert_eq!(h.hint, 1);
     assert_eq!(h.logs, 5);
-    assert_eq!(h.modules_content, 0);
+    assert_eq!(h.modules_border, 2);
+    assert_eq!(h.modules_content, 3);
 }
 
 #[test]
-fn compute_fixed_heights_modules_content_grows_linearly_once_everything_else_fits() {
-    assert_eq!(compute_fixed_heights(11).modules_content, 0);
-    assert_eq!(compute_fixed_heights(12).modules_content, 1);
-    assert_eq!(compute_fixed_heights(13).modules_content, 2);
-    assert_eq!(compute_fixed_heights(14).modules_content, 3);
+fn compute_fixed_heights_modules_get_ceil_when_flexible_odd() {
+    // settings=3, hint=1, flexible=7 -> modules_region=4, logs=3
+    let h = compute_fixed_heights(11);
+    assert_eq!(h.settings, 3);
+    assert_eq!(h.hint, 1);
+    assert_eq!(h.logs, 3);
+    assert_eq!(h.modules_border, 2);
+    assert_eq!(h.modules_content, 2);
+}
+
+#[test]
+fn compute_fixed_heights_grows_both_halves_together() {
+    let a = compute_fixed_heights(14);
+    let b = compute_fixed_heights(16);
+    assert_eq!(b.modules_content, a.modules_content + 1);
+    assert_eq!(b.logs, a.logs + 1);
 }
 
 #[test]
@@ -100,6 +78,16 @@ fn modules_viewport_height_matches_compute_fixed_heights_via_frame_height_offset
         let expected = compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS))
             .modules_content as usize;
         assert_eq!(modules_viewport_height(frame_height), expected);
+    }
+}
+
+#[test]
+fn logs_viewport_height_matches_inner_logs_rows() {
+    for frame_height in [0u16, 1, 2, 5, 7, 13, 14, 20, 30] {
+        let expected = compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS))
+            .logs
+            .saturating_sub(2) as usize;
+        assert_eq!(logs_viewport_height(frame_height), expected);
     }
 }
 
