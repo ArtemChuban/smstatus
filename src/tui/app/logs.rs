@@ -63,7 +63,6 @@ impl App {
         self.log_history = crate::logging::lines_in_range_filtered(&path, from, count, visibility);
     }
 
-    /// Ensure absolute indices in `[abs_start, abs_end)` are present in `log_history`.
     fn ensure_logs_cover(&mut self, abs_start: usize, abs_end: usize) {
         if self.logs_total == 0 {
             return;

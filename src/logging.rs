@@ -258,7 +258,6 @@ pub(crate) fn count_non_empty_lines(path: &Path) -> usize {
     count
 }
 
-/// Non-empty lines in absolute range `[start, start + count)`.
 pub(crate) fn lines_in_range(path: &Path, start: usize, count: usize) -> Vec<String> {
     if count == 0 {
         return Vec::new();
@@ -268,7 +267,6 @@ pub(crate) fn lines_in_range(path: &Path, start: usize, count: usize) -> Vec<Str
         return Vec::new();
     }
     let want = count.min(total - start);
-    // Suffix reads can reuse the backward scanner.
     if start + want == total {
         return tail_lines(path, want);
     }
