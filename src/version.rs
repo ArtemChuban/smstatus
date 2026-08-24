@@ -1,6 +1,6 @@
 use crate::error::Result;
 
-pub(crate) const HOST_API_VERSION: (u32, u32, u32) = (1, 0, 0);
+pub(crate) const HOST_API_VERSION: (u32, u32, u32) = (1, 1, 0);
 
 mod logic {
     pub(super) fn is_compatible(host: (u32, u32, u32), required: (u32, u32, u32)) -> bool {

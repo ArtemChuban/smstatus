@@ -5,6 +5,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 use x11rb::rust_connection::RustConnection;
 
 use crate::bindings::{DiskUsage, Host, MemUsage, TimeState, XkbState};
+use crate::host_module::HostModuleRegistry;
 use crate::{sysinfo, x11};
 
 pub(crate) struct HostState {
@@ -13,18 +14,30 @@ pub(crate) struct HostState {
     limits: StoreLimits,
     connection: Option<Arc<RustConnection>>,
     http_agent: ureq::Agent,
+    host_modules: Arc<HostModuleRegistry>,
 }
 
 impl HostState {
-    pub(crate) fn new(connection: Arc<RustConnection>, http_agent: ureq::Agent) -> Self {
-        Self::with_connection(Some(connection), http_agent)
+    pub(crate) fn new(
+        connection: Arc<RustConnection>,
+        http_agent: ureq::Agent,
+        host_modules: Arc<HostModuleRegistry>,
+    ) -> Self {
+        Self::with_connection(Some(connection), http_agent, host_modules)
     }
 
-    pub(crate) fn new_without_display(http_agent: ureq::Agent) -> Self {
-        Self::with_connection(None, http_agent)
+    pub(crate) fn new_without_display(
+        http_agent: ureq::Agent,
+        host_modules: Arc<HostModuleRegistry>,
+    ) -> Self {
+        Self::with_connection(None, http_agent, host_modules)
     }
 
-    fn with_connection(connection: Option<Arc<RustConnection>>, http_agent: ureq::Agent) -> Self {
+    fn with_connection(
+        connection: Option<Arc<RustConnection>>,
+        http_agent: ureq::Agent,
+        host_modules: Arc<HostModuleRegistry>,
+    ) -> Self {
         Self {
             wasi_ctx: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
@@ -34,6 +47,7 @@ impl HostState {
                 .build(),
             connection,
             http_agent,
+            host_modules,
         }
     }
 
@@ -84,6 +98,15 @@ impl Host for HostState {
             .read_to_string()
             .map_err(|e| format!("failed to read response body: {e}"))
     }
+
+    fn call_host_module(
+        &mut self,
+        module: String,
+        method: String,
+        payload: String,
+    ) -> Result<String, String> {
+        self.host_modules.call(&module, &method, &payload)
+    }
 }
 
 impl WasiView for HostState {
@@ -107,10 +130,27 @@ mod tests {
         ureq::Agent::new_with_config(agent_config)
     }
 
+    fn host_modules() -> Arc<HostModuleRegistry> {
+        let dir = crate::host_module::test_temp_dir("host");
+        Arc::new(HostModuleRegistry::new(
+            dir.join("host_modules"),
+            dir.join("sockets"),
+        ))
+    }
+
     #[test]
     fn read_xkb_state_errors_without_display() {
-        let mut state = HostState::new_without_display(http_agent());
+        let mut state = HostState::new_without_display(http_agent(), host_modules());
         let err = state.read_xkb_state().unwrap_err();
         assert!(err.contains("no display"));
+    }
+
+    #[test]
+    fn call_host_module_errors_when_not_installed() {
+        let mut state = HostState::new_without_display(http_agent(), host_modules());
+        let err = state
+            .call_host_module("missing".to_string(), "ping".to_string(), String::new())
+            .unwrap_err();
+        assert!(err.contains("not installed"));
     }
 }

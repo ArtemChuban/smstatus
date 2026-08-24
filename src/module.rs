@@ -13,6 +13,7 @@ use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
 use crate::host::HostState;
+use crate::host_module::HostModuleRegistry;
 use crate::version;
 
 pub(crate) struct ModuleState {
@@ -43,6 +44,7 @@ pub(crate) struct ModuleRuntime {
     fuel_per_tick: u64,
     connection: Arc<RustConnection>,
     http_agent: ureq::Agent,
+    host_modules: Arc<HostModuleRegistry>,
     validated_kinds: RefCell<HashSet<String>>,
 }
 
@@ -66,6 +68,7 @@ impl ModuleRuntime {
         fuel_per_tick: u64,
         connection: Arc<RustConnection>,
         http_agent: ureq::Agent,
+        host_modules: Arc<HostModuleRegistry>,
     ) -> Self {
         Self {
             engine,
@@ -74,6 +77,7 @@ impl ModuleRuntime {
             fuel_per_tick,
             connection,
             http_agent,
+            host_modules,
             validated_kinds: RefCell::new(HashSet::new()),
         }
     }
@@ -89,7 +93,11 @@ impl ModuleRuntime {
     }
 
     fn instantiate(&self, component: &Component) -> Result<(Store<HostState>, GuestModule)> {
-        let state = HostState::new(Arc::clone(&self.connection), self.http_agent.clone());
+        let state = HostState::new(
+            Arc::clone(&self.connection),
+            self.http_agent.clone(),
+            Arc::clone(&self.host_modules),
+        );
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(self.fuel_per_tick)?;
