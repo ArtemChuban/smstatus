@@ -180,7 +180,6 @@ fn scrolling_up_past_chunk_loads_older_lines_with_full_total() {
     assert!(app.log_history.len() <= LOGS_CHUNK_LINES.max(6));
     assert!(app.logs_loaded_from > 0);
 
-    // Walk up past the initially loaded window.
     for _ in 0..(app.logs_selected_index.unwrap() + 1) {
         app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
     }

@@ -44,7 +44,6 @@ fn compute_fixed_heights_hint_fits_after_settings() {
 
 #[test]
 fn compute_fixed_heights_splits_flexible_space_evenly() {
-    // settings=3, hint=1, flexible=10 -> modules_region=5, logs=5
     let h = compute_fixed_heights(14);
     assert_eq!(h.settings, 3);
     assert_eq!(h.hint, 1);
@@ -55,7 +54,6 @@ fn compute_fixed_heights_splits_flexible_space_evenly() {
 
 #[test]
 fn compute_fixed_heights_modules_get_ceil_when_flexible_odd() {
-    // settings=3, hint=1, flexible=7 -> modules_region=4, logs=3
     let h = compute_fixed_heights(11);
     assert_eq!(h.settings, 3);
     assert_eq!(h.hint, 1);
