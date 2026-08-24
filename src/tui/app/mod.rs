@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
+use crate::meta::MetadataProbe;
 
 mod daemon;
 mod help;
@@ -101,6 +102,9 @@ pub(super) struct App {
     pub(super) last_separator_error: Option<String>,
     pub(super) modules: Option<Vec<String>>,
     pub(super) metadata_by_kind: HashMap<String, Metadata>,
+    pub(super) metadata_failed: HashSet<String>,
+    pub(super) metadata_needs_stable: HashSet<String>,
+    pub(super) metadata_probe: Option<MetadataProbe>,
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,
