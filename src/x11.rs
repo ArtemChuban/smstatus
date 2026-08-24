@@ -21,7 +21,12 @@ impl X11Bar {
         let (connection, screen_num) = x11rb::connect(None)?;
         connection.xkb_use_extension(1, 0)?.reply()?;
         let connection = Arc::new(connection);
-        let root = connection.setup().roots[screen_num].root;
+        let root = connection
+            .setup()
+            .roots
+            .get(screen_num)
+            .ok_or_else(|| format!("X11 setup reported no screen {screen_num}"))?
+            .root;
         Ok(Self { connection, root })
     }
 

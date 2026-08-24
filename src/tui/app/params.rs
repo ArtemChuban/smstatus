@@ -37,17 +37,17 @@ impl App {
     }
 
     pub(super) fn select_next_param(&mut self) {
-        let Some(params) = self.module_params.as_ref() else {
+        let Some(params) = self.module_params.as_mut() else {
             return;
         };
         let Some(idx) = params.selected_index else {
             return;
         };
-        if idx + 1 < params.entries.len() {
-            let params = self.module_params.as_mut().unwrap();
-            params.selected_index = Some(idx + 1);
-            self.ensure_selected_param_visible();
+        if idx + 1 >= params.entries.len() {
+            return;
         }
+        params.selected_index = Some(idx + 1);
+        self.ensure_selected_param_visible();
     }
 
     pub(super) fn selected_section_name(&self) -> Option<String> {

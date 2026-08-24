@@ -62,6 +62,77 @@ fn apply_event(event: ReloadEvent, config: &mut bool, kinds: &mut Vec<String>) {
     }
 }
 
+fn is_content_change(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(ModifyKind::Data(_))
+            | EventKind::Modify(ModifyKind::Name(_))
+            | EventKind::Modify(ModifyKind::Any)
+            | EventKind::Other
+            | EventKind::Any
+    )
+}
+
+fn classify_path(
+    path: &Path,
+    canonical_config: &Path,
+    config_target_fallback: &Path,
+    canonical_modules: &Path,
+    modules_dir_fallback: &Path,
+) -> Option<ReloadEvent> {
+    match path.canonicalize() {
+        Ok(canonical) => {
+            if canonical == canonical_config {
+                return Some(ReloadEvent::Config);
+            }
+            logic::wasm_kind_from_path(&canonical, canonical_modules).map(ReloadEvent::Wasm)
+        }
+        Err(_) => {
+            if path == canonical_config || path == config_target_fallback {
+                return Some(ReloadEvent::Config);
+            }
+            logic::wasm_kind_from_path(path, modules_dir_fallback)
+                .or_else(|| logic::wasm_kind_from_path(path, canonical_modules))
+                .map(ReloadEvent::Wasm)
+        }
+    }
+}
+
+fn handle_watch_event(
+    res: notify::Result<Event>,
+    reload_tx: &mpsc::Sender<ReloadEvent>,
+    canonical_config: &Path,
+    config_target_fallback: &Path,
+    canonical_modules: &Path,
+    modules_dir_fallback: &Path,
+) {
+    let event = match res {
+        Ok(event) => event,
+        Err(err) => {
+            log::error!("reload watcher error: {err}");
+            return;
+        }
+    };
+
+    if !is_content_change(&event.kind) {
+        return;
+    }
+
+    for path in &event.paths {
+        if let Some(reload_event) = classify_path(
+            path,
+            canonical_config,
+            config_target_fallback,
+            canonical_modules,
+            modules_dir_fallback,
+        ) {
+            let _ = reload_tx.send(reload_event);
+        }
+    }
+}
+
 impl ReloadWatcher {
     pub(crate) fn new(
         config_dir: &Path,
@@ -74,54 +145,16 @@ impl ReloadWatcher {
         let config_target_fallback = config_target.clone();
         let modules_dir_fallback = modules_dir.clone();
 
-        let mut watcher =
-            notify::recommended_watcher(move |res: notify::Result<Event>| match res {
-                Ok(event) => {
-                    let is_content_change = matches!(
-                        event.kind,
-                        EventKind::Create(_)
-                            | EventKind::Remove(_)
-                            | EventKind::Modify(ModifyKind::Data(_))
-                            | EventKind::Modify(ModifyKind::Name(_))
-                            | EventKind::Modify(ModifyKind::Any)
-                            | EventKind::Other
-                            | EventKind::Any
-                    );
-                    if !is_content_change {
-                        return;
-                    }
-
-                    for path in &event.paths {
-                        match path.canonicalize() {
-                            Ok(canonical) => {
-                                if canonical == canonical_config {
-                                    let _ = reload_tx.send(ReloadEvent::Config);
-                                    continue;
-                                }
-                                if let Some(kind) =
-                                    logic::wasm_kind_from_path(&canonical, &canonical_modules)
-                                {
-                                    let _ = reload_tx.send(ReloadEvent::Wasm(kind));
-                                }
-                            }
-                            Err(_) => {
-                                if *path == canonical_config || *path == config_target_fallback {
-                                    let _ = reload_tx.send(ReloadEvent::Config);
-                                    continue;
-                                }
-                                let kind = logic::wasm_kind_from_path(path, &modules_dir_fallback)
-                                    .or_else(|| {
-                                        logic::wasm_kind_from_path(path, &canonical_modules)
-                                    });
-                                if let Some(kind) = kind {
-                                    let _ = reload_tx.send(ReloadEvent::Wasm(kind));
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(err) => log::error!("reload watcher error: {err}"),
-            })?;
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+            handle_watch_event(
+                res,
+                &reload_tx,
+                &canonical_config,
+                &config_target_fallback,
+                &canonical_modules,
+                &modules_dir_fallback,
+            );
+        })?;
 
         watcher.watch(config_dir, RecursiveMode::Recursive)?;
 
