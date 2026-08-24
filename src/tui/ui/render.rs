@@ -11,8 +11,7 @@ use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue};
 
 use super::super::app::{
-    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
-    ParamOrigin,
+    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
 };
 
 pub(super) const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
@@ -157,6 +156,23 @@ pub(super) fn modules_title(app: &App, viewport_height: usize) -> String {
                 format!("modules {}-{end}/{total}", start + 1)
             }
         }
+    };
+    boxed_title(&text)
+}
+
+pub(super) fn logs_title(app: &App, viewport_height: usize) -> String {
+    let total = app.log_history.len();
+    let text = if total == 0 {
+        "logs".to_string()
+    } else if viewport_height == 0 {
+        format!("logs {total}")
+    } else {
+        let (start, end, _) = module_window(
+            total,
+            logs_view_offset(app, total, viewport_height),
+            viewport_height,
+        );
+        format!("logs {}-{end}/{total}", start + 1)
     };
     boxed_title(&text)
 }
@@ -376,28 +392,41 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
     lines
 }
 
-pub(super) fn logs_view_offset_and_selection(
-    app: &App,
-    history_len: usize,
-) -> (usize, Option<usize>) {
-    let offset = if history_len == 0 {
+pub(super) fn logs_view_offset(app: &App, history_len: usize, viewport_height: usize) -> usize {
+    if history_len == 0 {
         0
     } else {
         app.logs_scroll_offset
-            .min(history_len.saturating_sub(LOGS_PANEL_LINES))
-    };
-    (offset, app.logs_selected_index)
+            .min(history_len.saturating_sub(viewport_height.max(1)))
+    }
 }
 
-pub(super) fn visible_log_lines(app: &App, history: &[String], width: u16) -> Vec<Line<'static>> {
-    let (offset, selected_in_history) = logs_view_offset_and_selection(app, history.len());
+pub(super) fn logs_view_offset_and_selection(
+    app: &App,
+    history_len: usize,
+    viewport_height: usize,
+) -> (usize, Option<usize>) {
+    (
+        logs_view_offset(app, history_len, viewport_height),
+        app.logs_selected_index,
+    )
+}
+
+pub(super) fn visible_log_lines(
+    app: &App,
+    history: &[String],
+    width: u16,
+    viewport_height: usize,
+) -> Vec<Line<'static>> {
+    let (offset, selected_in_history) =
+        logs_view_offset_and_selection(app, history.len(), viewport_height);
     let selected = if app.panel_focus == PanelFocus::Logs {
         selected_in_history
     } else {
         None
     };
-    let mut lines = styled_list_lines(history, selected, offset, LOGS_PANEL_LINES, width);
-    while lines.len() < LOGS_PANEL_LINES {
+    let mut lines = styled_list_lines(history, selected, offset, viewport_height, width);
+    while lines.len() < viewport_height {
         lines.push(Line::from(String::new()));
     }
     lines
