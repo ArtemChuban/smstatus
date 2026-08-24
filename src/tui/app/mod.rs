@@ -120,9 +120,10 @@ impl App {
                     .map(|config| config.log_days())
                     .unwrap_or(7);
                 if let Err(err) = crate::logging::init(log_days) {
-                    let message = format!("failed to initialize logging: {err}");
-                    eprintln!("{message}");
-                    crate::logging::append_message(log::Level::Error, &message);
+                    crate::logging::to_stderr(
+                        log::Level::Error,
+                        &format!("failed to initialize logging: {err}"),
+                    );
                 }
                 match crate::watcher::ReloadWatcher::new(
                     &config_dir,
@@ -219,11 +220,7 @@ impl App {
     }
 
     fn push_action_message(&mut self, message: String) {
-        if log::log_enabled!(log::Level::Info) {
-            log::info!("{message}");
-        } else {
-            crate::logging::append_message(log::Level::Info, &message);
-        }
+        crate::logging::log_message(log::Level::Info, &message);
     }
 }
 

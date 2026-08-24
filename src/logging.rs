@@ -119,6 +119,34 @@ pub(crate) fn append_message(level: Level, message: &str) {
     let _ = append_locked(&path, &format!("{ts} {level} {message}"));
 }
 
+fn emit(level: Level, message: &str) {
+    if LOGGER.get().is_some() {
+        match level {
+            Level::Error => log::error!("{message}"),
+            Level::Warn => log::warn!("{message}"),
+            Level::Info => log::info!("{message}"),
+            Level::Debug => log::debug!("{message}"),
+            Level::Trace => log::trace!("{message}"),
+        }
+    } else {
+        append_message(level, message);
+    }
+}
+
+pub(crate) fn to_stderr(level: Level, message: &str) {
+    emit(level, message);
+    eprintln!("{message}");
+}
+
+pub(crate) fn to_stdout(level: Level, message: &str) {
+    emit(level, message);
+    println!("{message}");
+}
+
+pub(crate) fn log_message(level: Level, message: &str) {
+    emit(level, message);
+}
+
 pub(crate) fn init(retain_days: u64) -> Result<()> {
     let path = lock::log_file_path()?;
     if let Some(parent) = path.parent() {

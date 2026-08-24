@@ -16,7 +16,10 @@ pub(crate) fn run() -> ExitCode {
     match run_inner() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("smstatus tui exited with an error: {err}");
+            crate::logging::to_stderr(
+                log::Level::Error,
+                &format!("smstatus tui exited with an error: {err}"),
+            );
             ExitCode::FAILURE
         }
     }
