@@ -5,6 +5,7 @@ mod config;
 mod daemon;
 mod error;
 mod host;
+#[allow(dead_code)]
 mod host_module;
 mod lock;
 mod logging;
