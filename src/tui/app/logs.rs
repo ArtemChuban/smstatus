@@ -1,65 +1,162 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::text::clamped_scroll_offset;
-use super::{App, LOGS_HISTORY_LINES, PanelFocus};
+use super::{App, LOGS_CHUNK_LINES, PanelFocus};
 
-pub(in crate::tui) fn log_history_lines() -> Vec<String> {
+fn log_path() -> Option<std::path::PathBuf> {
     crate::logging::current_log_path()
-        .map(|path| crate::logging::tail_lines(&path, LOGS_HISTORY_LINES))
-        .unwrap_or_default()
-}
-
-fn dropped_prefix_len(previous: &[String], next: &[String]) -> Option<usize> {
-    if previous.is_empty() {
-        return Some(0);
-    }
-    if next.is_empty() {
-        return Some(previous.len());
-    }
-    // next is previous[k..] or previous[k..] plus a suffix (ring drop + append).
-    for k in 0..=previous.len() {
-        let suffix = &previous[k..];
-        if next.len() >= suffix.len() && next[..suffix.len()] == *suffix {
-            return Some(k);
-        }
-    }
-    None
 }
 
 impl App {
-    pub(in crate::tui) fn refresh_log_history(&mut self) {
-        let previous = std::mem::take(&mut self.log_history);
-        let previous_selected = self.logs_selected_index;
-        let previous_line = previous_selected.and_then(|i| previous.get(i).cloned());
-        self.log_history = log_history_lines();
+    fn load_log_window(&mut self, from: usize, count: usize) {
+        let Some(path) = log_path() else {
+            self.log_history.clear();
+            self.logs_loaded_from = 0;
+            self.logs_total = 0;
+            return;
+        };
+        self.logs_total = crate::logging::count_non_empty_lines(&path);
+        let from = from.min(self.logs_total);
+        let count = count.min(self.logs_total.saturating_sub(from));
+        self.logs_loaded_from = from;
+        self.log_history = crate::logging::lines_in_range(&path, from, count);
+    }
 
-        if self.logs_follow {
+    fn reload_follow_window(&mut self) {
+        let viewport = self.logs_viewport_height.max(1);
+        let chunk = LOGS_CHUNK_LINES.max(viewport.saturating_mul(2));
+        let Some(path) = log_path() else {
+            self.log_history.clear();
+            self.logs_loaded_from = 0;
+            self.logs_total = 0;
+            return;
+        };
+        self.logs_total = crate::logging::count_non_empty_lines(&path);
+        let count = chunk.min(self.logs_total);
+        let from = self.logs_total.saturating_sub(count);
+        self.logs_loaded_from = from;
+        self.log_history = crate::logging::lines_in_range(&path, from, count);
+    }
+
+    /// Ensure absolute indices in `[abs_start, abs_end)` are present in `log_history`.
+    fn ensure_logs_cover(&mut self, abs_start: usize, abs_end: usize) {
+        if self.logs_total == 0 {
+            return;
+        }
+        let abs_start = abs_start.min(self.logs_total);
+        let abs_end = abs_end.min(self.logs_total).max(abs_start);
+        if abs_start >= abs_end {
             return;
         }
 
-        let Some(old_idx) = previous_selected else {
+        let loaded_end = self.logs_loaded_from + self.log_history.len();
+        if abs_start >= self.logs_loaded_from && abs_end <= loaded_end {
+            return;
+        }
+
+        let Some(path) = log_path() else {
             return;
         };
 
-        if let Some(dropped) = dropped_prefix_len(&previous, &self.log_history) {
-            self.logs_selected_index = Some(old_idx.saturating_sub(dropped));
-            self.logs_scroll_offset = self.logs_scroll_offset.saturating_sub(dropped);
-        } else if let Some(line) = previous_line.as_ref()
-            && let Some(new_idx) = self.log_history.iter().position(|l| l == line)
-        {
-            let delta = new_idx as isize - old_idx as isize;
-            self.logs_selected_index = Some(new_idx);
-            self.logs_scroll_offset = (self.logs_scroll_offset as isize + delta).max(0) as usize;
+        if abs_start < self.logs_loaded_from {
+            let need = self.logs_loaded_from - abs_start;
+            let chunk = need.max(LOGS_CHUNK_LINES);
+            let new_from = self.logs_loaded_from.saturating_sub(chunk);
+            let older =
+                crate::logging::lines_in_range(&path, new_from, self.logs_loaded_from - new_from);
+            self.log_history.splice(0..0, older);
+            self.logs_loaded_from = new_from;
         }
 
-        let len = self.log_history.len();
-        if let Some(idx) = self.logs_selected_index
-            && idx >= len
-        {
-            self.logs_selected_index = len.checked_sub(1);
+        let loaded_end = self.logs_loaded_from + self.log_history.len();
+        if abs_end > loaded_end {
+            let newer = crate::logging::lines_in_range(&path, loaded_end, abs_end - loaded_end);
+            self.log_history.extend(newer);
         }
+    }
+
+    fn restore_selection_to_line(&mut self, line: &str, fallback: usize) {
+        if let Some(rel) = self.log_history.iter().position(|l| l == line) {
+            self.logs_selected_index = Some(self.logs_loaded_from + rel);
+            return;
+        }
+        let Some(path) = log_path() else {
+            self.logs_selected_index = Some(fallback.min(self.logs_total.saturating_sub(1)));
+            return;
+        };
+        // Search the whole file for the sticky line.
+        let all = crate::logging::lines_in_range(&path, 0, self.logs_total);
+        if let Some(abs) = all.iter().position(|l| l == line) {
+            self.logs_selected_index = Some(abs);
+            let viewport = self.logs_viewport_height.max(1);
+            let chunk = LOGS_CHUNK_LINES.max(viewport.saturating_mul(2));
+            let from = abs.saturating_sub(chunk / 2);
+            self.load_log_window(from, chunk);
+        } else {
+            self.logs_selected_index = Some(fallback.min(self.logs_total.saturating_sub(1)));
+        }
+    }
+
+    pub(in crate::tui) fn refresh_log_history(&mut self) {
+        let previous_line = self
+            .logs_selected_index
+            .and_then(|abs| abs.checked_sub(self.logs_loaded_from))
+            .and_then(|rel| self.log_history.get(rel).cloned());
+        let previous_selected = self.logs_selected_index;
+
+        if self.logs_follow {
+            self.reload_follow_window();
+            return;
+        }
+
+        let Some(path) = log_path() else {
+            self.log_history.clear();
+            self.logs_loaded_from = 0;
+            self.logs_total = 0;
+            return;
+        };
+
+        let new_total = crate::logging::count_non_empty_lines(&path);
+        if new_total == 0 {
+            self.log_history.clear();
+            self.logs_loaded_from = 0;
+            self.logs_total = 0;
+            self.logs_selected_index = None;
+            self.logs_scroll_offset = 0;
+            return;
+        }
+        self.logs_total = new_total;
+
         let viewport = self.logs_viewport_height.max(1);
-        self.logs_scroll_offset = self.logs_scroll_offset.min(len.saturating_sub(viewport));
+        let chunk = LOGS_CHUNK_LINES.max(viewport.saturating_mul(2));
+        let anchor = previous_selected
+            .unwrap_or(self.logs_scroll_offset)
+            .min(new_total.saturating_sub(1));
+        let from = self
+            .logs_scroll_offset
+            .saturating_sub(chunk / 2)
+            .min(anchor.saturating_sub(chunk / 2))
+            .min(new_total.saturating_sub(1));
+        self.load_log_window(from, chunk);
+
+        if let Some(line) = previous_line.as_ref() {
+            let still_same = previous_selected
+                .and_then(|abs| abs.checked_sub(self.logs_loaded_from))
+                .and_then(|rel| self.log_history.get(rel))
+                .is_some_and(|current| current == line);
+            if !still_same {
+                self.restore_selection_to_line(line, anchor);
+            }
+        } else if let Some(idx) = self.logs_selected_index
+            && idx >= self.logs_total
+        {
+            self.logs_selected_index = self.logs_total.checked_sub(1);
+        }
+
+        self.logs_scroll_offset = self
+            .logs_scroll_offset
+            .min(self.logs_total.saturating_sub(viewport));
+        self.ensure_selected_log_visible();
     }
 
     pub(super) fn focus_logs(&mut self) {
@@ -77,13 +174,12 @@ impl App {
         if !self.logs_follow {
             return;
         }
-        let len = self.log_history.len();
-        if len == 0 {
+        if self.logs_total == 0 {
             self.logs_selected_index = None;
             self.logs_scroll_offset = 0;
             return;
         }
-        self.logs_selected_index = Some(len - 1);
+        self.logs_selected_index = Some(self.logs_total - 1);
         self.ensure_selected_log_visible();
     }
 
@@ -93,15 +189,19 @@ impl App {
         };
         let viewport = self.logs_viewport_height.max(1);
         self.logs_scroll_offset = clamped_scroll_offset(self.logs_scroll_offset, idx, viewport);
+        let vis_end = self
+            .logs_scroll_offset
+            .saturating_add(viewport)
+            .min(self.logs_total);
+        self.ensure_logs_cover(self.logs_scroll_offset, vis_end);
     }
 
     pub(super) fn select_previous_log(&mut self) {
-        let len = self.log_history.len();
-        if len == 0 {
+        if self.logs_total == 0 {
             return;
         }
         if self.logs_follow || self.logs_selected_index.is_none() {
-            self.logs_selected_index = Some(len - 1);
+            self.logs_selected_index = Some(self.logs_total - 1);
         }
         let Some(idx) = self.logs_selected_index else {
             return;
@@ -109,26 +209,28 @@ impl App {
         if idx == 0 {
             return;
         }
-        self.logs_selected_index = Some(idx - 1);
+        let next = idx - 1;
+        self.ensure_logs_cover(next, idx);
+        self.logs_selected_index = Some(next);
         self.logs_follow = false;
         self.ensure_selected_log_visible();
     }
 
     pub(super) fn select_next_log(&mut self) {
-        let len = self.log_history.len();
-        if len == 0 {
+        if self.logs_total == 0 {
             return;
         }
-        let idx = self.logs_selected_index.unwrap_or(len - 1);
-        if idx + 1 >= len {
-            self.logs_selected_index = Some(len - 1);
+        let idx = self.logs_selected_index.unwrap_or(self.logs_total - 1);
+        if idx + 1 >= self.logs_total {
+            self.logs_selected_index = Some(self.logs_total - 1);
             self.logs_follow = true;
             self.ensure_selected_log_visible();
             return;
         }
         let next = idx + 1;
+        self.ensure_logs_cover(idx, next + 1);
         self.logs_selected_index = Some(next);
-        self.logs_follow = next + 1 == len;
+        self.logs_follow = next + 1 == self.logs_total;
         self.ensure_selected_log_visible();
     }
 

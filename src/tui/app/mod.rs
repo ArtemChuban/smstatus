@@ -19,7 +19,7 @@ mod text;
 
 use text::{is_hard_quit, is_quit};
 
-pub(super) const LOGS_HISTORY_LINES: usize = 200;
+pub(super) const LOGS_CHUNK_LINES: usize = 200;
 
 #[derive(Default, PartialEq, Eq, Debug)]
 pub(super) enum Mode {
@@ -137,6 +137,10 @@ pub(super) struct App {
     pub(super) logs_selected_index: Option<usize>,
     pub(super) logs_follow: bool,
     pub(super) logs_viewport_height: usize,
+    /// Absolute index of `log_history[0]` in the full log file.
+    pub(super) logs_loaded_from: usize,
+    /// Total non-empty lines in the log file (not just the loaded window).
+    pub(super) logs_total: usize,
     pub(in crate::tui) log_history: Vec<String>,
 }
 
@@ -158,6 +162,10 @@ impl Default for App {
             metadata_failed: HashSet::new(),
             metadata_needs_stable: HashSet::new(),
             metadata_probe: None,
+            schema_by_kind: HashMap::new(),
+            schema_failed: HashSet::new(),
+            schema_needs_stable: HashSet::new(),
+            schema_probe: None,
             last_modules_error: None,
             module_scroll_offset: 0,
             modules_viewport_height: 0,
@@ -171,6 +179,8 @@ impl Default for App {
             logs_selected_index: None,
             logs_follow: true,
             logs_viewport_height: 0,
+            logs_loaded_from: 0,
+            logs_total: 0,
             log_history: Vec::new(),
         }
     }

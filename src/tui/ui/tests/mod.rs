@@ -10,14 +10,9 @@ use super::*;
 use crate::bindings::Metadata;
 use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
-<<<<<<< HEAD
 use crate::tui::app::{
-    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
-    ParamOrigin,
+    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
 };
-=======
-use crate::tui::app::{App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus};
->>>>>>> 64fed38 (Give logs half the TUI height, sticky selection, and a range title)
 
 pub(super) fn install_test_log() {
     let nanos = std::time::SystemTime::now()
