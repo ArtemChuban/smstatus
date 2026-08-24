@@ -7,18 +7,20 @@ mod layout;
 mod overlay;
 mod render;
 
-pub(in crate::tui) use layout::{modules_viewport_height, overlay_viewport_height};
+pub(in crate::tui) use layout::{
+    logs_viewport_height, modules_viewport_height, overlay_viewport_height,
+};
 pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};
 use overlay::{draw_add_overlay, draw_help_overlay, draw_naming_overlay, draw_param_text_overlay};
 use render::{
     SEPARATOR_EDIT_PREFIX, boxed_title, draw_modules_column, draw_params_column, hint_line,
-    outer_title, separator_line, text_edit_cursor_column, visible_log_lines,
+    logs_title, outer_title, separator_line, text_edit_cursor_column, visible_log_lines,
 };
 
 #[cfg(test)]
-use layout::{OUTER_BORDER_ROWS, overlay_rect};
+use layout::{LOGS_BORDER_ROWS, OUTER_BORDER_ROWS, overlay_rect};
 #[cfg(test)]
 use overlay::{PARAM_TEXT_OVERLAY_HEIGHT, param_text_overlay_rect};
 #[cfg(test)]
@@ -58,13 +60,14 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
 
     if areas.logs.height > 0 {
+        let logs_viewport = areas.logs.height.saturating_sub(2) as usize;
         let logs_block = Block::default()
-            .title(boxed_title("logs"))
+            .title(logs_title(app, logs_viewport))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded);
         let logs_inner = logs_block.inner(areas.logs);
         frame.render_widget(logs_block, areas.logs);
-        let log_lines = visible_log_lines(app, &app.log_history, logs_inner.width);
+        let log_lines = visible_log_lines(app, &app.log_history, logs_inner.width, logs_viewport);
         frame.render_widget(Paragraph::new(log_lines), logs_inner);
     }
 

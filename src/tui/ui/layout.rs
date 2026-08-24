@@ -1,12 +1,10 @@
 use ratatui::layout::Rect;
 
-use super::super::app::LOGS_PANEL_LINES;
-
 pub(super) const OUTER_BORDER_ROWS: u16 = 2;
 pub(super) const SETTINGS_BLOCK_HEIGHT: u16 = 3;
 pub(super) const MODULES_BORDER_ROWS: u16 = 2;
 pub(super) const HINT_HEIGHT: u16 = 1;
-pub(super) const LOGS_BLOCK_HEIGHT: u16 = 2 + LOGS_PANEL_LINES as u16;
+pub(super) const LOGS_BORDER_ROWS: u16 = 2;
 const OVERLAY_MARGIN_X: u16 = 4;
 const OVERLAY_MARGIN_Y: u16 = 1;
 
@@ -30,10 +28,33 @@ pub(super) fn take(remaining: &mut u16, want: u16) -> u16 {
 pub(super) fn compute_fixed_heights(outer_inner_height: u16) -> FixedHeights {
     let mut remaining = outer_inner_height;
     let settings = take(&mut remaining, SETTINGS_BLOCK_HEIGHT);
-    let modules_border = take(&mut remaining, MODULES_BORDER_ROWS);
     let hint = take(&mut remaining, HINT_HEIGHT);
-    let logs = take(&mut remaining, LOGS_BLOCK_HEIGHT);
-    let modules_content = if modules_border > 0 { remaining } else { 0 };
+
+    // Split flexible space evenly: half modules+params, half logs.
+    let mut modules_region = remaining.div_ceil(2);
+    let mut logs = remaining.saturating_sub(modules_region);
+
+    // A side needs a full border pair or it collapses (avoids 1-row broken blocks).
+    if logs > 0 && logs < LOGS_BORDER_ROWS {
+        modules_region = modules_region.saturating_add(logs);
+        logs = 0;
+    }
+    if modules_region > 0 && modules_region < MODULES_BORDER_ROWS {
+        logs = logs.saturating_add(modules_region);
+        modules_region = 0;
+        if logs > 0 && logs < LOGS_BORDER_ROWS {
+            logs = 0;
+        }
+    }
+
+    let mut modules_budget = modules_region;
+    let modules_border = take(&mut modules_budget, MODULES_BORDER_ROWS);
+    let modules_content = if modules_border > 0 {
+        modules_budget
+    } else {
+        0
+    };
+
     FixedHeights {
         settings,
         modules_border,
@@ -45,6 +66,12 @@ pub(super) fn compute_fixed_heights(outer_inner_height: u16) -> FixedHeights {
 
 pub(in crate::tui) fn modules_viewport_height(frame_height: u16) -> usize {
     compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS)).modules_content as usize
+}
+
+pub(in crate::tui) fn logs_viewport_height(frame_height: u16) -> usize {
+    compute_fixed_heights(frame_height.saturating_sub(OUTER_BORDER_ROWS))
+        .logs
+        .saturating_sub(LOGS_BORDER_ROWS) as usize
 }
 
 pub(in crate::tui) fn overlay_viewport_height(frame_height: u16) -> usize {
@@ -80,6 +107,14 @@ pub(super) fn layout_areas(outer_inner: Rect, heights: &FixedHeights) -> Areas {
 
     let logs = Rect::new(outer_inner.x, y, outer_inner.width, heights.logs);
     y += heights.logs;
+
+    let used = heights.settings
+        + heights.modules_border
+        + heights.modules_content
+        + heights.logs
+        + heights.hint;
+    let spacer = outer_inner.height.saturating_sub(used);
+    y += spacer;
 
     let hint = Rect::new(outer_inner.x, y, outer_inner.width, heights.hint);
 

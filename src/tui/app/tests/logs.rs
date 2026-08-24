@@ -1,5 +1,5 @@
 use super::*;
-use crate::tui::app::{LOGS_PANEL_LINES, PanelFocus};
+use crate::tui::app::PanelFocus;
 
 #[test]
 fn tab_focuses_logs_and_sets_follow() {
@@ -89,7 +89,10 @@ fn scroll_offset_clamps_selected_line_into_viewport() {
     let path = crate::logging::current_log_path().expect("test log path");
     std::fs::write(&path, "l0\nl1\nl2\nl3\nl4\nl5\n").unwrap();
 
-    let mut app = App::default();
+    let mut app = App {
+        logs_viewport_height: 3,
+        ..App::default()
+    };
     app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.logs_selected_index, Some(5));
     assert_eq!(app.logs_scroll_offset, 3);
@@ -101,5 +104,54 @@ fn scroll_offset_clamps_selected_line_into_viewport() {
     assert_eq!(app.logs_scroll_offset, 2);
     let idx = app.logs_selected_index.unwrap();
     assert!(idx >= app.logs_scroll_offset);
-    assert!(idx < app.logs_scroll_offset + LOGS_PANEL_LINES);
+    assert!(idx < app.logs_scroll_offset + app.logs_viewport_height);
+}
+
+#[test]
+fn refresh_keeps_selected_line_when_new_log_appended() {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    std::fs::write(&path, "a\nb\nc\nd\n").unwrap();
+
+    let mut app = App {
+        logs_viewport_height: 3,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+    app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+    assert!(!app.logs_follow);
+    assert_eq!(app.logs_selected_index, Some(1));
+    let selected = app.log_history[1].clone();
+
+    std::fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
+    app.refresh_log_history();
+    assert_eq!(app.logs_selected_index, Some(1));
+    assert_eq!(app.log_history[1], selected);
+}
+
+#[test]
+fn refresh_keeps_selected_line_when_history_drops_oldest() {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    std::fs::write(&path, "line0\nline1\nline2\nline3\nline4\n").unwrap();
+
+    let mut app = App {
+        logs_viewport_height: 3,
+        logs_follow: false,
+        panel_focus: PanelFocus::Logs,
+        ..App::default()
+    };
+    app.refresh_log_history();
+    app.logs_follow = false;
+    app.logs_selected_index = Some(1);
+    app.logs_scroll_offset = 0;
+    let selected = app.log_history[1].clone();
+    assert_eq!(selected, "line1");
+
+    std::fs::write(&path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+    app.refresh_log_history();
+    assert_eq!(app.logs_selected_index, Some(0));
+    assert_eq!(app.log_history[0], selected);
+    assert_eq!(app.logs_scroll_offset, 0);
 }

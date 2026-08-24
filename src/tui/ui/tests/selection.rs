@@ -25,6 +25,7 @@ fn selected_module_row_is_rendered_with_reversed_style() {
             &["cpu", "disk", "battery"],
             "config disk",
             &["(no [disk] section)"],
+            "logs",
             &[],
             NORMAL_HINT_MODULES,
         ),
@@ -68,6 +69,7 @@ fn selected_param_row_reversed_only_when_params_focused() {
             &["cpu"],
             "config cpu",
             &["a = \"1\"", "b = \"2\""],
+            "logs",
             &[],
             NORMAL_HINT_MODULES,
         ),
@@ -106,6 +108,7 @@ fn selected_param_row_reversed_only_when_params_focused() {
             &["cpu"],
             "config cpu",
             &["a = \"1\"", "b = \"2\""],
+            "logs",
             &[],
             NORMAL_HINT_PARAMS,
         ),
@@ -140,10 +143,11 @@ fn selected_module_row_style_follows_selection_when_scrolled() {
             height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
-            "modules 3-4/6",
-            &["m2", "m3"],
+            "modules 3-6/6",
+            &["m2", "m3", "m4", "m5"],
             "config m3",
             &["(no [m3] section)"],
+            "logs",
             &[],
             NORMAL_HINT_MODULES,
         ),
@@ -199,10 +203,11 @@ fn draw_logs_scrolled_up_shows_older_seeded_lines() {
             &[],
             "config",
             &[],
+            "logs 1-3/5",
             &["old0", "old1", "old2"],
             NORMAL_HINT_LOGS,
         ),
-        7,
+        10,
         70,
     );
     assert_eq!(buffer, expected_buf);
@@ -227,8 +232,9 @@ fn draw_logs_follow_still_shows_newest_tail_when_unfocused() {
             &[],
             "config",
             &[],
+            "logs 3-5/5",
             &["old2", "new3", "new4"],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }

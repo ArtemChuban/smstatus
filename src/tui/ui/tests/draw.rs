@@ -17,8 +17,9 @@ fn draw_renders_stopped_status_in_outer_title() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -40,8 +41,9 @@ fn draw_renders_running_status_in_outer_title() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -63,8 +65,9 @@ fn draw_renders_running_pid_unknown_status_in_outer_title() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -86,8 +89,9 @@ fn draw_renders_unknown_status_in_outer_title() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -110,8 +114,9 @@ fn draw_renders_separator_value() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -134,8 +139,9 @@ fn draw_renders_empty_separator_as_quoted_empty_string() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -161,8 +167,9 @@ fn draw_renders_editing_prompt_with_buffer_contents() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            "Save: Enter | Cancel: Esc",
+            "Save: Enter | Cancel: Esc"
         )
     );
 }
@@ -188,8 +195,9 @@ fn draw_renders_editing_prompt_with_empty_buffer() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            "Save: Enter | Cancel: Esc",
+            "Save: Enter | Cancel: Esc"
         )
     );
 }
@@ -212,8 +220,9 @@ fn draw_renders_empty_action_log_as_blank_rows() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -236,8 +245,9 @@ fn draw_renders_single_action_message_padded_to_capacity() {
             &[],
             "config",
             &[],
+            "logs 1-1/1",
             &["Starting smstatus..."],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -264,12 +274,13 @@ fn draw_renders_action_log_at_capacity() {
             &[],
             "config",
             &[],
+            "logs 1-3/3",
             &[
                 "Starting smstatus...",
                 "smstatus is already running",
                 "Sent stop signal to smstatus (pid 42)",
             ],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -292,8 +303,9 @@ fn draw_renders_empty_module_list_title_with_zero_rows() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -309,19 +321,22 @@ fn draw_renders_degraded_title_when_viewport_height_is_zero_with_modules_present
         ]),
         ..App::default()
     };
+    // modules_region == 2 with logs == 2 => border only, content 0 => degraded title
+    let height = 10;
     assert_eq!(
-        render(&app, 70, BASELINE_HEIGHT),
+        render(&app, 70, height),
         expected(
             70,
-            BASELINE_HEIGHT,
+            height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
             "modules 3 configured",
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -349,8 +364,9 @@ fn draw_renders_modules_that_fully_fit_in_the_viewport() {
             &["cpu", "disk#root", "battery"],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -378,12 +394,13 @@ fn draw_renders_scrolled_slice_of_modules_when_more_than_fit() {
             height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
-            "modules 3-4/6",
-            &["m2", "m3"],
+            "modules 3-6/6",
+            &["m2", "m3", "m4", "m5"],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -407,8 +424,9 @@ fn draw_renders_instance_suffixed_module_entry_verbatim() {
             &["disk#root"],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -435,8 +453,9 @@ fn draw_renders_missing_params_section_message() {
                 &["cpu"],
                 "config cpu",
                 &["(no [cpu] section)"],
+                "logs",
                 &[],
-                NORMAL_HINT_MODULES,
+                NORMAL_HINT_MODULES
             ),
             5,
             70,
@@ -466,8 +485,9 @@ fn draw_renders_empty_params_section_message() {
                 &["cpu"],
                 "config cpu",
                 &["(empty)"],
+                "logs",
                 &[],
-                NORMAL_HINT_MODULES,
+                NORMAL_HINT_MODULES
             ),
             5,
             70,
@@ -508,8 +528,9 @@ fn draw_renders_string_and_non_string_param_entries() {
                 &["disk#root"],
                 "config disk#root",
                 &["path = \"/\"", "interval = <non-string>"],
+                "logs",
                 &[],
-                NORMAL_HINT_MODULES,
+                NORMAL_HINT_MODULES
             ),
             5,
             70,
@@ -534,8 +555,9 @@ fn draw_at_very_short_height_renders_only_what_fits_without_corrupting_borders()
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -557,8 +579,9 @@ fn draw_at_height_with_only_settings_and_hint_present() {
             &[],
             "config",
             &[],
+            "logs",
             &[],
-            NORMAL_HINT_MODULES,
+            NORMAL_HINT_MODULES
         )
     );
 }
@@ -582,6 +605,7 @@ fn draw_renders_add_picker_title_list_and_hint() {
         "separator: unknown",
         "add module 1-3/3",
         &["battery", "cpu", "disk"],
+        "logs",
         &[],
         "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc",
     );
@@ -611,8 +635,9 @@ fn draw_renders_add_picker_with_empty_available_list() {
             "separator: unknown",
             "add module 0 available",
             &[],
+            "logs",
             &[],
-            "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc",
+            "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc"
         )
     );
 }
@@ -639,8 +664,9 @@ fn draw_renders_naming_instance_prompt_and_cursor() {
             "separator: unknown",
             "name instance of disk",
             &["instance name for disk: \"root\""],
+            "logs",
             &[],
-            "Confirm: Enter | Cancel: Esc",
+            "Confirm: Enter | Cancel: Esc"
         )
     );
     assert!(terminal.backend().cursor_visible());
@@ -678,8 +704,9 @@ fn draw_renders_compact_param_value_overlay_without_prefix() {
             "separator: unknown",
             "value for format",
             "\"hi\"",
+            "logs",
             &[],
-            "Confirm: Enter | Cancel: Esc",
+            "Confirm: Enter | Cancel: Esc"
         )
     );
     let overlay = param_text_overlay_area_for_frame(70, height);
@@ -721,6 +748,7 @@ fn draw_renders_confirming_remove_hint_with_unchanged_list_and_title() {
             &["cpu", "disk", "battery"],
             "config disk",
             &["(no [disk] section)"],
+            "logs",
             &[],
             "Remove disk? Confirm: d | Cancel: any key",
         ),
@@ -749,8 +777,9 @@ fn draw_renders_help_title_content_and_hint() {
             "separator: unknown",
             "help",
             &line_refs,
+            "logs",
             &[],
-            HELP_HINT,
+            HELP_HINT
         )
     );
 }
@@ -796,8 +825,9 @@ fn draw_renders_metadata_display_name_for_undecorated_module() {
                 &["CPU 0.1.0 by ArtemChuban"],
                 "config CPU",
                 &["(empty)"],
+                "logs",
                 &[],
-                NORMAL_HINT_MODULES,
+                NORMAL_HINT_MODULES
             ),
             5,
             70,
@@ -830,8 +860,9 @@ fn draw_renders_metadata_with_entry_for_instance_module() {
                 &["Disk (disk#root) 0.1.0 by ArtemChuban"],
                 "config Disk (disk#root)",
                 &["(empty)"],
+                "logs",
                 &[],
-                NORMAL_HINT_MODULES,
+                NORMAL_HINT_MODULES
             ),
             5,
             70,

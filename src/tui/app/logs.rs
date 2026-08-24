@@ -1,7 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::text::clamped_scroll_offset;
-use super::{App, LOGS_HISTORY_LINES, LOGS_PANEL_LINES, PanelFocus};
+use super::{App, LOGS_HISTORY_LINES, PanelFocus};
 
 pub(in crate::tui) fn log_history_lines() -> Vec<String> {
     crate::logging::current_log_path()
@@ -9,9 +9,57 @@ pub(in crate::tui) fn log_history_lines() -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn dropped_prefix_len(previous: &[String], next: &[String]) -> Option<usize> {
+    if previous.is_empty() {
+        return Some(0);
+    }
+    if next.is_empty() {
+        return Some(previous.len());
+    }
+    // next is previous[k..] or previous[k..] plus a suffix (ring drop + append).
+    for k in 0..=previous.len() {
+        let suffix = &previous[k..];
+        if next.len() >= suffix.len() && next[..suffix.len()] == *suffix {
+            return Some(k);
+        }
+    }
+    None
+}
+
 impl App {
     pub(in crate::tui) fn refresh_log_history(&mut self) {
+        let previous = std::mem::take(&mut self.log_history);
+        let previous_selected = self.logs_selected_index;
+        let previous_line = previous_selected.and_then(|i| previous.get(i).cloned());
         self.log_history = log_history_lines();
+
+        if self.logs_follow {
+            return;
+        }
+
+        let Some(old_idx) = previous_selected else {
+            return;
+        };
+
+        if let Some(dropped) = dropped_prefix_len(&previous, &self.log_history) {
+            self.logs_selected_index = Some(old_idx.saturating_sub(dropped));
+            self.logs_scroll_offset = self.logs_scroll_offset.saturating_sub(dropped);
+        } else if let Some(line) = previous_line.as_ref()
+            && let Some(new_idx) = self.log_history.iter().position(|l| l == line)
+        {
+            let delta = new_idx as isize - old_idx as isize;
+            self.logs_selected_index = Some(new_idx);
+            self.logs_scroll_offset = (self.logs_scroll_offset as isize + delta).max(0) as usize;
+        }
+
+        let len = self.log_history.len();
+        if let Some(idx) = self.logs_selected_index
+            && idx >= len
+        {
+            self.logs_selected_index = len.checked_sub(1);
+        }
+        let viewport = self.logs_viewport_height.max(1);
+        self.logs_scroll_offset = self.logs_scroll_offset.min(len.saturating_sub(viewport));
     }
 
     pub(super) fn focus_logs(&mut self) {
@@ -43,8 +91,8 @@ impl App {
         let Some(idx) = self.logs_selected_index else {
             return;
         };
-        self.logs_scroll_offset =
-            clamped_scroll_offset(self.logs_scroll_offset, idx, LOGS_PANEL_LINES);
+        let viewport = self.logs_viewport_height.max(1);
+        self.logs_scroll_offset = clamped_scroll_offset(self.logs_scroll_offset, idx, viewport);
     }
 
     pub(super) fn select_previous_log(&mut self) {

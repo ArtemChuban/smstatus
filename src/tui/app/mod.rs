@@ -19,7 +19,6 @@ mod text;
 
 use text::{is_hard_quit, is_quit};
 
-pub(super) const LOGS_PANEL_LINES: usize = 3;
 pub(super) const LOGS_HISTORY_LINES: usize = 200;
 
 #[derive(Default, PartialEq, Eq, Debug)]
@@ -137,6 +136,7 @@ pub(super) struct App {
     pub(super) logs_scroll_offset: usize,
     pub(super) logs_selected_index: Option<usize>,
     pub(super) logs_follow: bool,
+    pub(super) logs_viewport_height: usize,
     pub(in crate::tui) log_history: Vec<String>,
 }
 
@@ -170,6 +170,7 @@ impl Default for App {
             logs_scroll_offset: 0,
             logs_selected_index: None,
             logs_follow: true,
+            logs_viewport_height: 0,
             log_history: Vec::new(),
         }
     }
