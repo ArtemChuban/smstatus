@@ -63,7 +63,7 @@ pub fn perform_handshake_client<S: Read + Write>(stream: &mut S) -> Result<(), S
     match read_frame(stream).map_err(|e| e.to_string())? {
         HandshakeResponse::Ok => Ok(()),
         HandshakeResponse::Mismatch { protocol_version } => Err(format!(
-            "protocol version mismatch: client has v{PROTOCOL_VERSION}, host module has v{protocol_version}"
+            "protocol version mismatch: client has v{PROTOCOL_VERSION}, extension has v{protocol_version}"
         )),
     }
 }
@@ -81,7 +81,7 @@ pub fn perform_handshake_server<S: Read + Write>(stream: &mut S) -> Result<(), S
         )
         .map_err(|e| e.to_string())?;
         Err(format!(
-            "protocol version mismatch: client has v{}, host module has v{PROTOCOL_VERSION}",
+            "protocol version mismatch: client has v{}, extension has v{PROTOCOL_VERSION}",
             handshake.protocol_version
         ))
     }

@@ -124,7 +124,7 @@ impl Guest for Component {
         }
     }
 
-    fn required_host_modules() -> Vec<String> {
+    fn required_extensions() -> Vec<String> {
         vec![]
     }
 }
@@ -312,9 +312,9 @@ mod tests {
     }
 
     #[test]
-    fn required_host_modules_is_empty() {
+    fn required_extensions_is_empty() {
         assert_eq!(
-            super::Component::required_host_modules(),
+            super::Component::required_extensions(),
             Vec::<String>::new()
         );
     }
