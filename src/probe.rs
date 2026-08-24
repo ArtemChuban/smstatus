@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use wasmtime::component::{Component, Linker};
@@ -6,7 +7,9 @@ use wasmtime::{Config, Engine, Store};
 
 use crate::bindings::GuestModule;
 use crate::error::Result;
+use crate::extension::ExtensionRegistry;
 use crate::host::HostState;
+use crate::lock;
 
 const FUEL_PER_PROBE: u64 = 10_000_000;
 
@@ -14,6 +17,7 @@ pub(crate) struct WasmProbe {
     engine: Engine,
     linker: Linker<HostState>,
     http_agent: ureq::Agent,
+    extensions: Arc<ExtensionRegistry>,
 }
 
 impl WasmProbe {
@@ -37,16 +41,23 @@ impl WasmProbe {
             ureq::Agent::new_with_config(agent_config)
         };
 
+        let extensions = Arc::new(ExtensionRegistry::new(
+            crate::config::default_config_dir()?.join("extensions"),
+            lock::lock_dir()?.join("extensions"),
+        ));
+
         Ok(Self {
             engine,
             linker,
             http_agent,
+            extensions,
         })
     }
 
     pub(crate) fn instantiate(&self, path: &Path) -> Result<(Store<HostState>, GuestModule)> {
         let component = Component::from_file(&self.engine, path)?;
-        let state = HostState::new_without_display(self.http_agent.clone());
+        let state =
+            HostState::new_without_display(self.http_agent.clone(), Arc::clone(&self.extensions));
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(FUEL_PER_PROBE)?;
