@@ -44,14 +44,23 @@ build-modules: build-battery build-datetime build-keyboard build-disk build-ram 
 
 build-modules-release: build-battery-release build-datetime-release build-keyboard-release build-disk-release build-ram-release build-cpu-release build-process-release build-claude-release
 
+build-echo flags="":
+    cargo build -p echo {{flags}}
+
+build-echo-release: (build-echo "--release")
+
+build-extensions: build-echo
+
+build-extensions-release: build-echo-release
+
 build-app flags="":
     cargo build -p smstatus {{flags}}
 
 build-app-release: (build-app "--release")
 
-build-all: build-modules build-app
+build-all: build-modules build-extensions build-app
 
-build-all-release: build-modules-release build-app-release
+build-all-release: build-modules-release build-extensions-release build-app-release
 
 test-battery:
     cargo test -p battery
@@ -83,15 +92,20 @@ test-fmt-common:
 test-extension-protocol:
     cargo test -p extension-protocol
 
+test-echo:
+    cargo test -p echo
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-app:
-    cargo build -p echo
+test-extensions: test-echo
+
+# Registry integration tests need the echo binary on disk.
+test-app: build-echo
     cargo test -p smstatus
 
-test-all: test-packages test-modules test-app
+test-all: test-packages test-modules test-extensions test-app
 
 cov-app:
     cargo llvm-cov -p smstatus --summary-only
@@ -102,10 +116,15 @@ cov-fmt-common:
 cov-extension-protocol:
     cargo llvm-cov -p extension-protocol --summary-only
 
+cov-echo:
+    cargo llvm-cov -p echo --summary-only
+
 cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
+
+cov-extensions: cov-echo
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -123,4 +142,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p smstatus -p echo -- -D warnings
+    cargo clippy -p echo -- -D warnings
+    cargo clippy -p smstatus -- -D warnings
