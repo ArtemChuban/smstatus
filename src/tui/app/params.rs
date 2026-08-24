@@ -3,7 +3,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
 
 use super::text::{apply_text_edit, clamped_scroll_offset, is_valid_param_key};
-use super::{App, Mode, PanelFocus};
+use super::{App, Mode, PanelFocus, ParamEntry, ParamOrigin};
 
 impl App {
     pub(super) fn focus_params(&mut self) {
@@ -56,10 +56,14 @@ impl App {
         Some(BarConfig::split_module_entry(entry).1.to_string())
     }
 
-    pub(super) fn selected_param_entry(&self) -> Option<&(String, ModuleParamValue)> {
+    pub(super) fn selected_param_entry(&self) -> Option<&ParamEntry> {
         let params = self.module_params.as_ref()?;
         let idx = params.selected_index?;
         params.entries.get(idx)
+    }
+
+    fn reject_default_origin_mutation(&mut self, key: &str) {
+        self.push_action_message(format!("{key} is not set in config yet; edit it first"));
     }
 
     pub(super) fn begin_add_param(&mut self) {
@@ -81,19 +85,27 @@ impl App {
         let Some(section) = self.selected_section_name() else {
             return;
         };
-        let Some((key, value)) = self.selected_param_entry().cloned() else {
+        let Some(ParamEntry { key, value, origin }) = self.selected_param_entry().cloned() else {
             return;
         };
         if self.config_path.is_none() {
             self.push_action_message("cannot edit param: config path unknown".to_string());
             return;
         }
-        let (buffer, expect) = match value {
-            ModuleParamValue::String(s) => {
-                let expect = ParamWriteExpect::ExistingString(s.clone());
-                (s, expect)
+        let (buffer, expect) = match origin {
+            ParamOrigin::Default => {
+                let ModuleParamValue::String(default) = value else {
+                    return;
+                };
+                (default, ParamWriteExpect::KeyAbsent)
             }
-            ModuleParamValue::NonString => (String::new(), ParamWriteExpect::ExistingNonString),
+            ParamOrigin::Explicit => match value {
+                ModuleParamValue::String(s) => {
+                    let expect = ParamWriteExpect::ExistingString(s.clone());
+                    (s, expect)
+                }
+                ModuleParamValue::NonString => (String::new(), ParamWriteExpect::ExistingNonString),
+            },
         };
         let cursor = buffer.chars().count();
         self.mode = Mode::EditingParamValue {
@@ -109,9 +121,13 @@ impl App {
         let Some(section) = self.selected_section_name() else {
             return;
         };
-        let Some((key, _)) = self.selected_param_entry().cloned() else {
+        let Some(ParamEntry { key, origin, .. }) = self.selected_param_entry().cloned() else {
             return;
         };
+        if origin == ParamOrigin::Default {
+            self.reject_default_origin_mutation(&key);
+            return;
+        }
         if self.config_path.is_none() {
             self.push_action_message("cannot remove param: config path unknown".to_string());
             return;
@@ -123,9 +139,18 @@ impl App {
         let Some(section) = self.selected_section_name() else {
             return;
         };
-        let Some((old_key, _)) = self.selected_param_entry().cloned() else {
+        let Some(ParamEntry {
+            key: old_key,
+            origin,
+            ..
+        }) = self.selected_param_entry().cloned()
+        else {
             return;
         };
+        if origin == ParamOrigin::Default {
+            self.reject_default_origin_mutation(&old_key);
+            return;
+        }
         if self.config_path.is_none() {
             self.push_action_message("cannot rename param: config path unknown".to_string());
             return;
@@ -177,7 +202,7 @@ impl App {
         if self
             .module_params
             .as_ref()
-            .is_some_and(|p| p.entries.iter().any(|(k, _)| k == buffer))
+            .is_some_and(|p| p.entries.iter().any(|e| e.key == *buffer))
         {
             self.push_action_message(format!("Param key `{buffer}` already exists"));
             return;
@@ -245,7 +270,7 @@ impl App {
         };
         let is_add = matches!(expect, ParamWriteExpect::KeyAbsent);
         let keep_key = if is_add {
-            self.selected_param_entry().map(|(k, _)| k.clone())
+            self.selected_param_entry().map(|e| e.key.clone())
         } else {
             Some(key.clone())
         };
@@ -337,7 +362,7 @@ impl App {
         if self
             .module_params
             .as_ref()
-            .is_some_and(|p| p.entries.iter().any(|(k, _)| k == &new_key))
+            .is_some_and(|p| p.entries.iter().any(|e| e.key == new_key))
         {
             self.push_action_message(format!("Param key `{new_key}` already exists"));
             return;
@@ -376,7 +401,7 @@ impl App {
         let Some(params) = self.module_params.as_mut() else {
             return;
         };
-        if let Some(i) = params.entries.iter().position(|(k, _)| k == key) {
+        if let Some(i) = params.entries.iter().position(|e| e.key == key) {
             params.selected_index = Some(i);
             self.ensure_selected_param_visible();
         }

@@ -57,10 +57,11 @@ fn e_and_enter_edit_selected_param_value() {
         config_path: Some(path.clone()),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![(
-                "format".to_string(),
-                ModuleParamValue::String("old".to_string()),
-            )],
+            entries: vec![ParamEntry {
+                key: "format".to_string(),
+                value: ModuleParamValue::String("old".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -132,14 +133,16 @@ fn double_d_removes_param_and_esc_cancel_edit_stays_params() {
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
             entries: vec![
-                (
-                    "format".to_string(),
-                    ModuleParamValue::String("x".to_string()),
-                ),
-                (
-                    "other".to_string(),
-                    ModuleParamValue::String("y".to_string()),
-                ),
+                ParamEntry {
+                    key: "format".to_string(),
+                    value: ModuleParamValue::String("x".to_string()),
+                    origin: ParamOrigin::Explicit,
+                },
+                ParamEntry {
+                    key: "other".to_string(),
+                    value: ModuleParamValue::String("y".to_string()),
+                    origin: ParamOrigin::Explicit,
+                },
             ],
             selected_index: Some(0),
             scroll_offset: 0,
@@ -231,7 +234,11 @@ fn rename_param_via_r() {
         config_cache: Some(config),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![("old".to_string(), ModuleParamValue::String("v".to_string()))],
+            entries: vec![ParamEntry {
+                key: "old".to_string(),
+                value: ModuleParamValue::String("v".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -249,7 +256,7 @@ fn rename_param_via_r() {
     assert!(action_log().iter().any(|m| m == "Renamed old → new"));
     let sel = &app.module_params.as_ref().unwrap().entries
         [app.module_params.as_ref().unwrap().selected_index.unwrap()];
-    assert_eq!(sel.0, "new");
+    assert_eq!(sel.key, "new");
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("new"));
     assert!(!content.contains("old ="));
@@ -276,9 +283,21 @@ fn params_up_down_move_selection() {
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
             entries: vec![
-                ("a".to_string(), ModuleParamValue::String("1".to_string())),
-                ("b".to_string(), ModuleParamValue::String("2".to_string())),
-                ("c".to_string(), ModuleParamValue::String("3".to_string())),
+                ParamEntry {
+                    key: "a".to_string(),
+                    value: ModuleParamValue::String("1".to_string()),
+                    origin: ParamOrigin::Explicit,
+                },
+                ParamEntry {
+                    key: "b".to_string(),
+                    value: ModuleParamValue::String("2".to_string()),
+                    origin: ParamOrigin::Explicit,
+                },
+                ParamEntry {
+                    key: "c".to_string(),
+                    value: ModuleParamValue::String("3".to_string()),
+                    origin: ParamOrigin::Explicit,
+                },
             ],
             selected_index: Some(0),
             scroll_offset: 0,
@@ -305,10 +324,11 @@ fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
         config_cache: Some(config),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![(
-                "keep".to_string(),
-                ModuleParamValue::String("me".to_string()),
-            )],
+            entries: vec![ParamEntry {
+                key: "keep".to_string(),
+                value: ModuleParamValue::String("me".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -327,7 +347,7 @@ fn add_param_keeps_previous_selection_when_a_row_was_already_selected() {
     assert!(action_log().iter().any(|m| m == "Added newbie"));
     let params = app.module_params.as_ref().unwrap();
     let sel = params.selected_index.unwrap();
-    assert_eq!(params.entries[sel].0, "keep");
+    assert_eq!(params.entries[sel].key, "keep");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -345,10 +365,11 @@ fn empty_value_commit_succeeds() {
         config_cache: Some(config),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![(
-                "format".to_string(),
-                ModuleParamValue::String("old".to_string()),
-            )],
+            entries: vec![ParamEntry {
+                key: "format".to_string(),
+                value: ModuleParamValue::String("old".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -381,7 +402,11 @@ fn invalid_charset_on_add_and_rename_refuses_and_logs() {
         config_cache: Some(config),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![("old".to_string(), ModuleParamValue::String("v".to_string()))],
+            entries: vec![ParamEntry {
+                key: "old".to_string(),
+                value: ModuleParamValue::String("v".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -424,7 +449,11 @@ fn non_string_edit_begins_with_empty_buffer() {
         config_path: Some(path.clone()),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![("count".to_string(), ModuleParamValue::NonString)],
+            entries: vec![ParamEntry {
+                key: "count".to_string(),
+                value: ModuleParamValue::NonString,
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -459,10 +488,11 @@ fn begin_remove_param_without_config_path_pushes_message_and_stays_normal() {
         config_path: None,
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![(
-                "format".to_string(),
-                ModuleParamValue::String("x".to_string()),
-            )],
+            entries: vec![ParamEntry {
+                key: "format".to_string(),
+                value: ModuleParamValue::String("x".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -473,5 +503,77 @@ fn begin_remove_param_without_config_path_pushes_message_and_stays_normal() {
     assert_eq!(
         action_log(),
         vec!["cannot remove param: config path unknown"]
+    );
+}
+
+#[test]
+fn begin_edit_param_value_on_default_origin_prefills_default_and_expects_key_absent() {
+    let path = unique_temp_path("params-edit-default-origin");
+    let mut app = App {
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        panel_focus: PanelFocus::Params,
+        config_path: Some(path.clone()),
+        module_params: Some(ModuleParamsState {
+            status: ModuleParamsStatus::Entries,
+            entries: vec![ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/sys/default".to_string()),
+                origin: ParamOrigin::Default,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+        }),
+        ..App::default()
+    };
+    app.begin_edit_param_value();
+    match &app.mode {
+        Mode::EditingParamValue {
+            key,
+            buffer,
+            expect,
+            ..
+        } => {
+            assert_eq!(key, "path");
+            assert_eq!(buffer, "/sys/default");
+            assert_eq!(expect, &ParamWriteExpect::KeyAbsent);
+        }
+        other => panic!("expected EditingParamValue, got {other:?}"),
+    }
+}
+
+#[test]
+fn begin_remove_and_rename_on_default_origin_are_refused() {
+    install_test_log();
+    let path = unique_temp_path("params-remove-rename-default-origin");
+    let mut app = App {
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        panel_focus: PanelFocus::Params,
+        config_path: Some(path.clone()),
+        module_params: Some(ModuleParamsState {
+            status: ModuleParamsStatus::Entries,
+            entries: vec![ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/sys/default".to_string()),
+                origin: ParamOrigin::Default,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+        }),
+        ..App::default()
+    };
+    app.begin_remove_param();
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(
+        action_log(),
+        vec!["path is not set in config yet; edit it first"]
+    );
+    clear_action_log();
+    app.begin_rename_param();
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(
+        action_log(),
+        vec!["path is not set in config yet; edit it first"]
     );
 }
