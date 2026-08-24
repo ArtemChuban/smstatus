@@ -5,7 +5,7 @@ wit_bindgen::generate!({
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Metadata, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
@@ -245,6 +245,14 @@ impl Guest for Component {
             ("format", DEFAULT_FORMAT),
             ("interval_ms", DEFAULT_INTERVAL_MS),
         ]
+    }
+
+    fn get_metadata() -> Metadata {
+        Metadata {
+            display_name: "Claude".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            author: "ArtemChuban".to_string(),
+        }
     }
 }
 
@@ -674,6 +682,18 @@ mod tests {
                     default: super::DEFAULT_INTERVAL_MS.to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn get_metadata_reports_display_name_version_and_author() {
+        assert_eq!(
+            super::Component::get_metadata(),
+            super::Metadata {
+                display_name: "Claude".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                author: "ArtemChuban".to_string(),
+            }
         );
     }
 }
