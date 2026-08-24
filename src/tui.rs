@@ -37,6 +37,7 @@ fn run_inner() -> crate::error::Result<()> {
         app.modules_viewport_height = ui::modules_viewport_height(completed.area.height);
         app.overlay_viewport_height = ui::overlay_viewport_height(completed.area.height);
         app.poll_metadata();
+        app.poll_schema();
         if let Some(key) = event::next_key_event(EVENT_POLL_TIMEOUT)? {
             app.handle_key(key);
         }

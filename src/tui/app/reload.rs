@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
-use crate::config::{BarConfig, ModuleSectionView, ParamWriteExpect};
+use crate::config::{BarConfig, ModuleParamValue, ModuleSectionView, ParamWriteExpect};
 
 use super::text::clamped_scroll_offset;
-use super::{App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus};
+use super::{
+    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
+};
 
 impl App {
     pub(in crate::tui) fn poll_config_changes(&mut self) {
@@ -17,7 +19,7 @@ impl App {
         if batch.config {
             self.refresh_config();
         } else if !batch.wasm_kinds.is_empty() {
-            self.refresh_metadata_for_kinds(&batch.wasm_kinds);
+            self.refresh_wasm_derived_state_for_kinds(&batch.wasm_kinds);
         }
     }
 
@@ -46,6 +48,7 @@ impl App {
                         self.modules = Some(names);
                         self.last_modules_error = None;
                         self.prune_metadata_to_configured();
+                        self.prune_schema_to_configured();
                         self.ensure_selected_visible();
                         let new_entry = self
                             .selected_index
@@ -59,6 +62,7 @@ impl App {
                     Err(err) => {
                         self.modules = None;
                         self.clear_metadata_state();
+                        self.clear_schema_state();
                         self.selected_index = None;
                         self.module_params = None;
                         self.panel_focus = PanelFocus::Modules;
@@ -75,6 +79,7 @@ impl App {
                 self.separator = None;
                 self.modules = None;
                 self.clear_metadata_state();
+                self.clear_schema_state();
                 self.selected_index = None;
                 self.module_params = None;
                 self.config_cache = None;
@@ -96,6 +101,12 @@ impl App {
         self.metadata_needs_stable.clear();
     }
 
+    fn clear_schema_state(&mut self) {
+        self.schema_by_kind.clear();
+        self.schema_failed.clear();
+        self.schema_needs_stable.clear();
+    }
+
     fn prune_metadata_to_configured(&mut self) {
         let configured = self.configured_kinds();
         self.metadata_by_kind
@@ -106,7 +117,16 @@ impl App {
             .retain(|kind| configured.contains(kind));
     }
 
-    fn refresh_metadata_for_kinds(&mut self, wasm_kinds: &[String]) {
+    fn prune_schema_to_configured(&mut self) {
+        let configured = self.configured_kinds();
+        self.schema_by_kind
+            .retain(|kind, _| configured.contains(kind));
+        self.schema_failed.retain(|kind| configured.contains(kind));
+        self.schema_needs_stable
+            .retain(|kind| configured.contains(kind));
+    }
+
+    fn refresh_wasm_derived_state_for_kinds(&mut self, wasm_kinds: &[String]) {
         let configured = self.configured_kinds();
         for kind in wasm_kinds {
             if !configured.contains(kind) {
@@ -115,6 +135,9 @@ impl App {
             self.metadata_by_kind.remove(kind);
             self.metadata_failed.remove(kind);
             self.metadata_needs_stable.insert(kind.clone());
+            self.schema_by_kind.remove(kind);
+            self.schema_failed.remove(kind);
+            self.schema_needs_stable.insert(kind.clone());
         }
     }
 
@@ -163,6 +186,50 @@ impl App {
             .collect()
     }
 
+    fn selected_kind(&self) -> Option<String> {
+        let idx = self.selected_index?;
+        let entry = self.modules.as_ref()?.get(idx)?;
+        Some(BarConfig::split_module_entry(entry).0.to_string())
+    }
+
+    pub(in crate::tui) fn poll_schema(&mut self) {
+        let configured = self.configured_kinds();
+        let Some(kind) = configured.into_iter().find(|kind| {
+            !self.schema_by_kind.contains_key(kind) && !self.schema_failed.contains(kind)
+        }) else {
+            return;
+        };
+        let Some(modules_dir) = self.modules_dir.clone() else {
+            return;
+        };
+        if self.schema_probe.is_none() {
+            match crate::schema_probe::SchemaProbe::new() {
+                Ok(probe) => self.schema_probe = Some(probe),
+                Err(_) => return,
+            }
+        }
+        let Some(probe) = self.schema_probe.as_ref() else {
+            return;
+        };
+        let wait_stable = self.schema_needs_stable.remove(&kind);
+        let result = if wait_stable {
+            probe.read_after_stable(&modules_dir, &kind)
+        } else {
+            probe.read(&modules_dir, &kind)
+        };
+        match result {
+            Ok(schema) => {
+                self.schema_by_kind.insert(kind.clone(), schema);
+                if self.selected_kind().as_deref() == Some(kind.as_str()) {
+                    self.rebuild_module_params(false);
+                }
+            }
+            Err(_) => {
+                self.schema_failed.insert(kind);
+            }
+        }
+    }
+
     pub(super) fn rebuild_module_params_from(&mut self, config: &BarConfig, reset_selection: bool) {
         let Some(idx) = self.selected_index else {
             self.module_params = None;
@@ -172,9 +239,10 @@ impl App {
             self.module_params = None;
             return;
         };
+        let kind = BarConfig::split_module_entry(entry).0.to_string();
         let section_name = BarConfig::split_module_entry(entry).1.to_string();
         let view = config.module_section_string_entries(&section_name);
-        let (status, entries) = match view {
+        let (status, raw_entries) = match view {
             ModuleSectionView::Missing => (
                 ModuleParamsStatus::Missing {
                     section: section_name,
@@ -183,6 +251,32 @@ impl App {
             ),
             ModuleSectionView::Empty => (ModuleParamsStatus::Empty, Vec::new()),
             ModuleSectionView::Entries(raw) => (ModuleParamsStatus::Entries, raw),
+        };
+        let mut entries: Vec<ParamEntry> = raw_entries
+            .into_iter()
+            .map(|(key, value)| ParamEntry {
+                key,
+                value,
+                origin: ParamOrigin::Explicit,
+            })
+            .collect();
+        let explicit_keys: HashSet<String> = entries.iter().map(|e| e.key.clone()).collect();
+        if let Some(schema) = self.schema_by_kind.get(&kind) {
+            for param in schema {
+                if explicit_keys.contains(param.name.as_str()) {
+                    continue;
+                }
+                entries.push(ParamEntry {
+                    key: param.name.clone(),
+                    value: ModuleParamValue::String(param.default.clone()),
+                    origin: ParamOrigin::Default,
+                });
+            }
+        }
+        let status = if entries.is_empty() {
+            status
+        } else {
+            ModuleParamsStatus::Entries
         };
         let selected_index = if entries.is_empty() {
             None
@@ -245,7 +339,7 @@ impl App {
         let key_still_present = |key: &str| {
             self.module_params
                 .as_ref()
-                .is_some_and(|p| p.entries.iter().any(|(k, _)| k == key))
+                .is_some_and(|p| p.entries.iter().any(|e| e.key == key))
         };
         let should_drop = match &self.mode {
             Mode::AddingParamKey { section, .. } => {
