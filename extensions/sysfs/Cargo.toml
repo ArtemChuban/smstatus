@@ -1,0 +1,13 @@
+[package]
+name = "smstatus-sysfs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "sysfs"
+path = "src/main.rs"
+
+[dependencies]
+dirs = "6.0.0"
+extension-protocol = { workspace = true }
