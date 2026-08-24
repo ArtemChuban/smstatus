@@ -19,11 +19,6 @@ pub(crate) enum DaemonStatus {
     RunningPidUnknown,
 }
 
-fn report_host_error(message: String) {
-    eprintln!("{message}");
-    crate::logging::append_message(log::Level::Error, &message);
-}
-
 fn run_locked(report_already_running: impl FnOnce(Option<i32>)) -> ExitCode {
     match lock::acquire_lock() {
         Ok(LockOutcome::AlreadyRunning(pid)) => {
@@ -33,12 +28,15 @@ fn run_locked(report_already_running: impl FnOnce(Option<i32>)) -> ExitCode {
         Ok(LockOutcome::Acquired(_flock)) => match bar::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                report_host_error(format!("smstatus exited with an error: {err}"));
+                crate::logging::to_stderr(
+                    log::Level::Error,
+                    &format!("smstatus exited with an error: {err}"),
+                );
                 ExitCode::FAILURE
             }
         },
         Err(err) => {
-            report_host_error(format!("failed to acquire lock: {err}"));
+            crate::logging::to_stderr(log::Level::Error, &format!("failed to acquire lock: {err}"));
             ExitCode::FAILURE
         }
     }
@@ -50,8 +48,11 @@ pub(crate) fn run_daemon() -> ExitCode {
 
 pub(crate) fn cmd_run() -> ExitCode {
     run_locked(|pid| match pid {
-        Some(pid) => eprintln!("smstatus is already running (pid {pid})"),
-        None => eprintln!("smstatus is already running"),
+        Some(pid) => crate::logging::to_stderr(
+            log::Level::Info,
+            &format!("smstatus is already running (pid {pid})"),
+        ),
+        None => crate::logging::to_stderr(log::Level::Info, "smstatus is already running"),
     })
 }
 
@@ -97,7 +98,7 @@ pub(crate) fn cmd_start() -> ExitCode {
     let mut child = match spawn_daemon() {
         Ok(child) => child,
         Err(err) => {
-            eprintln!("{err}");
+            crate::logging::to_stderr(log::Level::Error, &err.to_string());
             return ExitCode::FAILURE;
         }
     };
@@ -105,14 +106,20 @@ pub(crate) fn cmd_start() -> ExitCode {
     let lock_path = match lock::lock_file_path() {
         Ok(path) => path,
         Err(err) => {
-            eprintln!("failed to determine lock file path: {err}");
+            crate::logging::to_stderr(
+                log::Level::Error,
+                &format!("failed to determine lock file path: {err}"),
+            );
             return ExitCode::FAILURE;
         }
     };
     let log_path = match lock::log_file_path() {
         Ok(path) => path,
         Err(err) => {
-            eprintln!("failed to determine log file path: {err}");
+            crate::logging::to_stderr(
+                log::Level::Error,
+                &format!("failed to determine log file path: {err}"),
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -126,12 +133,21 @@ pub(crate) fn cmd_start() -> ExitCode {
                         .ok()
                         .and_then(|mut f| lock::read_pid(&mut f));
                     match pid {
-                        Some(pid) => eprintln!("smstatus is already running (pid {pid})"),
-                        None => eprintln!("smstatus is already running"),
+                        Some(pid) => crate::logging::to_stderr(
+                            log::Level::Info,
+                            &format!("smstatus is already running (pid {pid})"),
+                        ),
+                        None => crate::logging::to_stderr(
+                            log::Level::Info,
+                            "smstatus is already running",
+                        ),
                     }
                     return ExitCode::from(EXIT_ALREADY_RUNNING);
                 }
-                eprintln!("smstatus failed to start, see {}:", log_path.display());
+                crate::logging::to_stderr(
+                    log::Level::Error,
+                    &format!("smstatus failed to start, see {}:", log_path.display()),
+                );
                 if let Ok(contents) = std::fs::read_to_string(&log_path) {
                     eprint!("{contents}");
                 }
@@ -143,20 +159,29 @@ pub(crate) fn cmd_start() -> ExitCode {
                     .and_then(|mut f| lock::read_pid(&mut f))
                     && pid == child.id() as i32
                 {
-                    println!("smstatus started (pid {pid})");
+                    crate::logging::to_stdout(
+                        log::Level::Info,
+                        &format!("smstatus started (pid {pid})"),
+                    );
                     return ExitCode::SUCCESS;
                 }
             }
             Err(err) => {
-                eprintln!("failed to check daemon status: {err}");
+                crate::logging::to_stderr(
+                    log::Level::Error,
+                    &format!("failed to check daemon status: {err}"),
+                );
                 return ExitCode::FAILURE;
             }
         }
 
         if Instant::now() >= deadline {
-            eprintln!(
-                "smstatus did not confirm startup in time; check {}",
-                log_path.display()
+            crate::logging::to_stderr(
+                log::Level::Error,
+                &format!(
+                    "smstatus did not confirm startup in time; check {}",
+                    log_path.display()
+                ),
             );
             return ExitCode::FAILURE;
         }
@@ -214,15 +239,18 @@ pub(crate) fn cmd_stop() -> ExitCode {
     let pid = match signal_stop() {
         Ok(StopOutcome::Signaled { pid }) => pid,
         Ok(StopOutcome::NotRunning) => {
-            println!("smstatus is not running");
+            crate::logging::to_stdout(log::Level::Info, "smstatus is not running");
             return ExitCode::SUCCESS;
         }
         Ok(StopOutcome::PidUnknown) => {
-            eprintln!("smstatus is running, but its pid file is unreadable");
+            crate::logging::to_stderr(
+                log::Level::Error,
+                "smstatus is running, but its pid file is unreadable",
+            );
             return ExitCode::FAILURE;
         }
         Err(err) => {
-            eprintln!("failed to stop daemon: {err}");
+            crate::logging::to_stderr(log::Level::Error, &format!("failed to stop daemon: {err}"));
             return ExitCode::FAILURE;
         }
     };
@@ -231,11 +259,14 @@ pub(crate) fn cmd_stop() -> ExitCode {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         if let Err(Errno::ESRCH) = kill(target, None) {
-            println!("smstatus stopped (pid {pid})");
+            crate::logging::to_stdout(log::Level::Info, &format!("smstatus stopped (pid {pid})"));
             return ExitCode::SUCCESS;
         }
         if Instant::now() >= deadline {
-            eprintln!("sent SIGTERM to smstatus (pid {pid}) but it has not exited yet");
+            crate::logging::to_stderr(
+                log::Level::Error,
+                &format!("sent SIGTERM to smstatus (pid {pid}) but it has not exited yet"),
+            );
             return ExitCode::FAILURE;
         }
         std::thread::sleep(Duration::from_millis(50));
