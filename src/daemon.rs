@@ -19,6 +19,11 @@ pub(crate) enum DaemonStatus {
     RunningPidUnknown,
 }
 
+fn report_host_error(message: String) {
+    eprintln!("{message}");
+    crate::logging::append_message(log::Level::Error, &message);
+}
+
 fn run_locked(report_already_running: impl FnOnce(Option<i32>)) -> ExitCode {
     match lock::acquire_lock() {
         Ok(LockOutcome::AlreadyRunning(pid)) => {
@@ -28,12 +33,12 @@ fn run_locked(report_already_running: impl FnOnce(Option<i32>)) -> ExitCode {
         Ok(LockOutcome::Acquired(_flock)) => match bar::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
-                eprintln!("smstatus exited with an error: {err}");
+                report_host_error(format!("smstatus exited with an error: {err}"));
                 ExitCode::FAILURE
             }
         },
         Err(err) => {
-            eprintln!("failed to acquire lock: {err}");
+            report_host_error(format!("failed to acquire lock: {err}"));
             ExitCode::FAILURE
         }
     }
@@ -57,15 +62,11 @@ pub(crate) fn spawn_daemon() -> crate::error::Result<std::process::Child> {
         std::fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
-    let log_file = OpenOptions::new()
+    let _log_file = OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(&log_path)
         .map_err(|err| format!("failed to open log file {}: {err}", log_path.display()))?;
-    let stdout_log = log_file
-        .try_clone()
-        .map_err(|err| format!("failed to duplicate log file handle: {err}"))?;
 
     let current_exe = std::env::current_exe()
         .map_err(|err| format!("failed to determine current executable: {err}"))?;
@@ -74,11 +75,11 @@ pub(crate) fn spawn_daemon() -> crate::error::Result<std::process::Child> {
     command
         .env(DAEMON_ENV_VAR, "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(log_file));
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     // SAFETY: `pre_exec` runs in the forked child, after fork but before
-    // exec — the only point `setsid()` can take effect. It detaches the
+    // exec - the only point `setsid()` can take effect. It detaches the
     // daemon into its own session so it survives the parent shell exiting
     // and won't receive signals meant for the invoking terminal's process
     // group. The closure only calls the async-signal-safe `setsid()` and

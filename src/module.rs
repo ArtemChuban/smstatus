@@ -145,11 +145,12 @@ impl ModuleRuntime {
                 state.next_due = now + Duration::from_millis(output.interval_ms as u64);
             }
             Err(err) => {
-                eprintln!(
+                log::error!(
                     "module `{}` (kind `{}`) tick failed: {err}",
-                    state.name, state.kind
+                    state.name,
+                    state.kind
                 );
-                eprintln!("re-instantiating module after trap");
+                log::error!("re-instantiating module after trap");
                 match self.instantiate(&state.component) {
                     Ok((mut store, module)) => {
                         match module
@@ -161,14 +162,14 @@ impl ModuleRuntime {
                                 state.module = module;
                             }
                             Err(err) => {
-                                eprintln!(
+                                log::error!(
                                     "failed to re-init `{}`, keeping previous instance running: {err}",
                                     state.name
                                 );
                             }
                         }
                     }
-                    Err(err) => eprintln!("failed to re-instantiate `{}`: {err}", state.name),
+                    Err(err) => log::error!("failed to re-instantiate `{}`: {err}", state.name),
                 }
                 state.next_due = now + Duration::from_secs(1);
             }
@@ -189,7 +190,7 @@ impl ModuleRuntime {
         let new_names = match new_config.module_names() {
             Ok(names) => names,
             Err(err) => {
-                eprintln!("reload aborted, bad `modules` list: {err}");
+                log::error!("reload aborted, bad `modules` list: {err}");
                 return old_modules;
             }
         };
@@ -221,7 +222,7 @@ impl ModuleRuntime {
                     match self.start_after_stable(kind, name, &config) {
                         Ok(state) => new_modules.push(state),
                         Err(err) => {
-                            eprintln!(
+                            log::error!(
                                 "failed to reload wasm for `{name}` (kind `{kind}`), keeping previous instance: {err}"
                             );
                             new_modules.push(existing);
@@ -246,7 +247,7 @@ impl ModuleRuntime {
                             existing.next_due = Instant::now();
                         }
                         Err(err) => {
-                            eprintln!(
+                            log::error!(
                                 "failed to re-init `{name}` with new config, keeping old config running: {err}"
                             );
                         }
@@ -255,7 +256,7 @@ impl ModuleRuntime {
                 }
                 None => match self.start(kind, name, &config) {
                     Ok(state) => new_modules.push(state),
-                    Err(err) => eprintln!("failed to start new module `{name}`: {err}"),
+                    Err(err) => log::error!("failed to start new module `{name}`: {err}"),
                 },
             }
         }
@@ -277,9 +278,10 @@ impl ModuleRuntime {
 
             let path = self.wasm_path(&existing.kind);
             if !path.exists() {
-                eprintln!(
+                log::error!(
                     "wasm for `{}` (kind `{}`) missing on disk; dropping instance",
-                    existing.name, existing.kind
+                    existing.name,
+                    existing.kind
                 );
                 continue;
             }
@@ -287,9 +289,10 @@ impl ModuleRuntime {
             match self.start_after_stable(&existing.kind, &existing.name, &existing.config) {
                 Ok(restarted) => kept.push(restarted),
                 Err(err) => {
-                    eprintln!(
+                    log::error!(
                         "failed to reload wasm for `{}` (kind `{}`), keeping previous instance: {err}",
-                        existing.name, existing.kind
+                        existing.name,
+                        existing.kind
                     );
                     kept.push(existing);
                 }
@@ -312,7 +315,7 @@ impl ModuleRuntime {
             let module_config = config.module_config_json(name);
             match self.start_after_stable(kind, name, &module_config) {
                 Ok(state) => kept.push(state),
-                Err(err) => eprintln!("failed to start module `{name}` after wasm create: {err}"),
+                Err(err) => log::error!("failed to start module `{name}` after wasm create: {err}"),
             }
         }
 

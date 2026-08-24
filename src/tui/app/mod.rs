@@ -117,6 +117,12 @@ impl App {
             Ok(config_dir) => {
                 let config_path = config_dir.join("config.toml");
                 let modules_dir = config_dir.join("modules");
+                let log_days = BarConfig::load(&config_path)
+                    .map(|config| config.log_days())
+                    .unwrap_or(7);
+                if let Err(err) = crate::logging::init(log_days) {
+                    eprintln!("failed to initialize logging: {err}");
+                }
                 match crate::watcher::ReloadWatcher::new(
                     &config_dir,
                     config_path.clone(),

@@ -2474,6 +2474,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "log",
  "nix",
  "notify",
  "ratatui",
