@@ -198,22 +198,44 @@ mod tests {
     }
 
     fn echo_extension_path() -> PathBuf {
+        use std::sync::OnceLock;
+
+        static ECHO: OnceLock<PathBuf> = OnceLock::new();
+        ECHO.get_or_init(find_or_build_echo).clone()
+    }
+
+    fn find_or_build_echo() -> PathBuf {
         if let Ok(path) = std::env::var("CARGO_BIN_EXE_echo") {
-            return PathBuf::from(path);
+            let path = PathBuf::from(path);
+            if path.exists() {
+                return path;
+            }
         }
 
-        let mut path = std::env::current_exe().unwrap();
-        path.pop();
-        if path.ends_with("deps") {
-            path.pop();
+        let mut dir = std::env::current_exe().unwrap();
+        dir.pop();
+        if dir.ends_with("deps") {
+            dir.pop();
         }
-        path.push("echo");
+        let bin = dir.join("echo");
+        if bin.exists() {
+            return bin;
+        }
+
+        let target_dir = dir.parent().expect("debug dir has a target-dir parent");
+        let status = std::process::Command::new(env!("CARGO"))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["build", "-p", "echo", "--target-dir"])
+            .arg(target_dir)
+            .status()
+            .expect("failed to spawn cargo build -p echo");
         assert!(
-            path.exists(),
-            "echo fixture missing at {}; build with `cargo build -p echo`",
-            path.display()
+            status.success() && bin.exists(),
+            "echo fixture missing at {}; build with `cargo build -p echo --target-dir {}`",
+            bin.display(),
+            target_dir.display()
         );
-        path
+        bin
     }
 
     fn install_echo(extensions_dir: &Path) {
