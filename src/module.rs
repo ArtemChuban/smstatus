@@ -46,7 +46,7 @@ pub(crate) struct ModuleRuntime {
     validated_kinds: RefCell<HashSet<String>>,
 }
 
-fn wait_wasm_stable(path: &Path) {
+pub(crate) fn wait_wasm_stable(path: &Path) {
     let mut last_size = None;
     for _ in 0..3 {
         let size = std::fs::metadata(path).ok().map(|m| m.len());
