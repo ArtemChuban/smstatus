@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixListener;
 
-use smstatus::extension::protocol;
+use extension_protocol::{self as protocol, Request, Response};
 
 fn main() {
     let socket_path = std::env::args()
@@ -11,8 +11,8 @@ fn main() {
     let (mut stream, _) = listener.accept().expect("failed to accept connection");
     protocol::perform_handshake_server(&mut stream).expect("handshake failed");
 
-    while let Ok(request) = protocol::read_frame::<_, protocol::Request>(&mut stream) {
-        let response = protocol::Response::Ok(request.payload);
+    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
+        let response = Response::Ok(request.payload);
         if protocol::write_frame(&mut stream, &response).is_err() {
             break;
         }

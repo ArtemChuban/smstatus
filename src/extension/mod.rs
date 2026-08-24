@@ -1,5 +1,3 @@
-pub mod protocol;
-
 mod client;
 mod registry;
 

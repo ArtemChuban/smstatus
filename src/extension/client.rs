@@ -2,7 +2,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use super::protocol::{self, Request, Response};
+use extension_protocol::{self as protocol, Request, Response};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 

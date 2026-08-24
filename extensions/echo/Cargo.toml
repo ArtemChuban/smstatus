@@ -9,4 +9,4 @@ name = "echo"
 path = "src/main.rs"
 
 [dependencies]
-smstatus = { path = "../.." }
+extension-protocol = { workspace = true }
