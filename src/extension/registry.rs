@@ -157,11 +157,10 @@ impl ExtensionRegistry {
         }
 
         let reused = lock(&self.connections).remove(name);
-        if let Some(mut stream) = reused {
-            match client::call(&mut stream, method, payload) {
-                Ok(value) => return Ok(self.on_success(name, stream, value)),
-                Err(_) => {}
-            }
+        if let Some(mut stream) = reused
+            && let Ok(value) = client::call(&mut stream, method, payload)
+        {
+            return Ok(self.on_success(name, stream, value));
         }
 
         match self
