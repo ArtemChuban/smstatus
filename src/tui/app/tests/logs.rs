@@ -189,3 +189,74 @@ fn scrolling_up_past_chunk_loads_older_lines_with_full_total() {
     assert_eq!(app.logs_total, total);
     assert!(app.log_history.len() >= total.min(LOGS_CHUNK_LINES + 50));
 }
+
+#[test]
+fn toggle_i_hides_info_keeps_error_and_moves_among_visible() {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    std::fs::write(
+        &path,
+        concat!(
+            "2026-08-24T08:41:00.000Z ERROR e1\n",
+            "2026-08-24T08:41:00.000Z INFO i1\n",
+            "2026-08-24T08:41:00.000Z WARN w1\n",
+            "2026-08-24T08:41:00.000Z INFO i2\n",
+            "2026-08-24T08:41:00.000Z ERROR e2\n",
+        ),
+    )
+    .unwrap();
+
+    let mut app = App {
+        logs_viewport_height: 5,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.logs_total, 5);
+    assert_eq!(app.logs_file_total, 5);
+    assert!(app.logs_follow);
+    assert_eq!(app.logs_selected_index, Some(4));
+
+    app.handle_key(key(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(!app.logs_show_info);
+    assert_eq!(app.logs_total, 3);
+    assert_eq!(app.logs_file_total, 5);
+    assert!(app.logs_follow);
+    assert_eq!(app.logs_selected_index, Some(2));
+    assert!(app.log_history.iter().all(|l| !l.contains(" INFO ")));
+    assert!(app.log_history.iter().any(|l| l.contains(" ERROR ")));
+
+    app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+    assert!(!app.logs_follow);
+    assert_eq!(app.logs_selected_index, Some(1));
+    let selected = app.log_history[app.logs_selected_index.unwrap() - app.logs_loaded_from].clone();
+    assert!(selected.contains(" WARN "));
+
+    app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.logs_selected_index, Some(0));
+    let selected = app.log_history[app.logs_selected_index.unwrap() - app.logs_loaded_from].clone();
+    assert!(selected.contains(" ERROR e1"));
+}
+
+#[test]
+fn filtered_title_includes_file_total() {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    std::fs::write(
+        &path,
+        concat!(
+            "2026-08-24T08:41:00.000Z ERROR e1\n",
+            "2026-08-24T08:41:00.000Z INFO i1\n",
+            "2026-08-24T08:41:00.000Z WARN w1\n",
+        ),
+    )
+    .unwrap();
+    let mut app = App {
+        logs_viewport_height: 3,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    app.handle_key(key(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert_eq!(app.logs_total, 2);
+    assert_eq!(app.logs_file_total, 3);
+    assert!(app.logs_filter_active());
+}

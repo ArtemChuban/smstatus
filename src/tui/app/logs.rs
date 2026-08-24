@@ -2,40 +2,65 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::text::clamped_scroll_offset;
 use super::{App, LOGS_CHUNK_LINES, PanelFocus};
+use crate::logging::LogLevelVisibility;
 
 fn log_path() -> Option<std::path::PathBuf> {
     crate::logging::current_log_path()
 }
 
 impl App {
+    fn log_level_visibility(&self) -> LogLevelVisibility {
+        LogLevelVisibility {
+            error: self.logs_show_error,
+            warn: self.logs_show_warn,
+            info: self.logs_show_info,
+        }
+    }
+
+    pub(in crate::tui) fn logs_filter_active(&self) -> bool {
+        !self.log_level_visibility().all_enabled()
+    }
+
+    fn clear_log_state(&mut self) {
+        self.log_history.clear();
+        self.logs_loaded_from = 0;
+        self.logs_total = 0;
+        self.logs_file_total = 0;
+    }
+
+    fn refresh_log_counts(&mut self, path: &std::path::Path) {
+        let visibility = self.log_level_visibility();
+        let (visible, file_total) = crate::logging::count_visible_and_file_lines(path, visibility);
+        self.logs_total = visible;
+        self.logs_file_total = file_total;
+    }
+
     fn load_log_window(&mut self, from: usize, count: usize) {
         let Some(path) = log_path() else {
-            self.log_history.clear();
-            self.logs_loaded_from = 0;
-            self.logs_total = 0;
+            self.clear_log_state();
             return;
         };
-        self.logs_total = crate::logging::count_non_empty_lines(&path);
+        let visibility = self.log_level_visibility();
+        self.refresh_log_counts(&path);
         let from = from.min(self.logs_total);
         let count = count.min(self.logs_total.saturating_sub(from));
         self.logs_loaded_from = from;
-        self.log_history = crate::logging::lines_in_range(&path, from, count);
+        self.log_history = crate::logging::lines_in_range_filtered(&path, from, count, visibility);
     }
 
     fn reload_follow_window(&mut self) {
         let viewport = self.logs_viewport_height.max(1);
         let chunk = LOGS_CHUNK_LINES.max(viewport.saturating_mul(2));
         let Some(path) = log_path() else {
-            self.log_history.clear();
-            self.logs_loaded_from = 0;
-            self.logs_total = 0;
+            self.clear_log_state();
             return;
         };
-        self.logs_total = crate::logging::count_non_empty_lines(&path);
+        let visibility = self.log_level_visibility();
+        self.refresh_log_counts(&path);
         let count = chunk.min(self.logs_total);
         let from = self.logs_total.saturating_sub(count);
         self.logs_loaded_from = from;
-        self.log_history = crate::logging::lines_in_range(&path, from, count);
+        self.log_history = crate::logging::lines_in_range_filtered(&path, from, count, visibility);
     }
 
     /// Ensure absolute indices in `[abs_start, abs_end)` are present in `log_history`.
@@ -57,20 +82,30 @@ impl App {
         let Some(path) = log_path() else {
             return;
         };
+        let visibility = self.log_level_visibility();
 
         if abs_start < self.logs_loaded_from {
             let need = self.logs_loaded_from - abs_start;
             let chunk = need.max(LOGS_CHUNK_LINES);
             let new_from = self.logs_loaded_from.saturating_sub(chunk);
-            let older =
-                crate::logging::lines_in_range(&path, new_from, self.logs_loaded_from - new_from);
+            let older = crate::logging::lines_in_range_filtered(
+                &path,
+                new_from,
+                self.logs_loaded_from - new_from,
+                visibility,
+            );
             self.log_history.splice(0..0, older);
             self.logs_loaded_from = new_from;
         }
 
         let loaded_end = self.logs_loaded_from + self.log_history.len();
         if abs_end > loaded_end {
-            let newer = crate::logging::lines_in_range(&path, loaded_end, abs_end - loaded_end);
+            let newer = crate::logging::lines_in_range_filtered(
+                &path,
+                loaded_end,
+                abs_end - loaded_end,
+                visibility,
+            );
             self.log_history.extend(newer);
         }
     }
@@ -84,8 +119,12 @@ impl App {
             self.logs_selected_index = Some(fallback.min(self.logs_total.saturating_sub(1)));
             return;
         };
-        // Search the whole file for the sticky line.
-        let all = crate::logging::lines_in_range(&path, 0, self.logs_total);
+        let all = crate::logging::lines_in_range_filtered(
+            &path,
+            0,
+            self.logs_total,
+            self.log_level_visibility(),
+        );
         if let Some(abs) = all.iter().position(|l| l == line) {
             self.logs_selected_index = Some(abs);
             let viewport = self.logs_viewport_height.max(1);
@@ -110,22 +149,20 @@ impl App {
         }
 
         let Some(path) = log_path() else {
-            self.log_history.clear();
-            self.logs_loaded_from = 0;
-            self.logs_total = 0;
+            self.clear_log_state();
             return;
         };
 
-        let new_total = crate::logging::count_non_empty_lines(&path);
+        self.refresh_log_counts(&path);
+        let new_total = self.logs_total;
         if new_total == 0 {
-            self.log_history.clear();
-            self.logs_loaded_from = 0;
-            self.logs_total = 0;
+            let file_total = self.logs_file_total;
+            self.clear_log_state();
+            self.logs_file_total = file_total;
             self.logs_selected_index = None;
             self.logs_scroll_offset = 0;
             return;
         }
-        self.logs_total = new_total;
 
         let viewport = self.logs_viewport_height.max(1);
         let chunk = LOGS_CHUNK_LINES.max(viewport.saturating_mul(2));
@@ -157,6 +194,14 @@ impl App {
             .logs_scroll_offset
             .min(self.logs_total.saturating_sub(viewport));
         self.ensure_selected_log_visible();
+    }
+
+    fn apply_log_level_filter_change(&mut self) {
+        let follow = self.logs_follow;
+        self.refresh_log_history();
+        if follow {
+            self.sync_logs_follow();
+        }
     }
 
     pub(super) fn focus_logs(&mut self) {
@@ -240,6 +285,18 @@ impl App {
             KeyCode::Down => self.select_next_log(),
             KeyCode::Esc | KeyCode::Left => self.leave_logs_focus(PanelFocus::Modules),
             KeyCode::Tab => self.leave_logs_focus(PanelFocus::Modules),
+            KeyCode::Char('e') => {
+                self.logs_show_error = !self.logs_show_error;
+                self.apply_log_level_filter_change();
+            }
+            KeyCode::Char('w') => {
+                self.logs_show_warn = !self.logs_show_warn;
+                self.apply_log_level_filter_change();
+            }
+            KeyCode::Char('i') => {
+                self.logs_show_info = !self.logs_show_info;
+                self.apply_log_level_filter_change();
+            }
             _ => {}
         }
     }
