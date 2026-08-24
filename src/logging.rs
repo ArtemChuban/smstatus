@@ -387,10 +387,9 @@ impl LogLevelVisibility {
 
     pub(crate) fn permits(self, line: &str) -> bool {
         match parse_log_level(line) {
-            None => true,
+            None | Some(Level::Info) => self.info,
             Some(Level::Error) => self.error,
             Some(Level::Warn) => self.warn,
-            Some(Level::Info) => self.info,
             Some(Level::Debug) | Some(Level::Trace) => true,
         }
     }
@@ -680,14 +679,12 @@ mod tests {
             warn: true,
             info: false,
         };
-        assert_eq!(count_visible_and_file_lines(&path, vis), (3, 5));
-        assert_eq!(count_visible_and_file_lines(&path, vis).0, 3);
+        assert_eq!(count_visible_and_file_lines(&path, vis), (2, 5));
         assert_eq!(
             lines_in_range_filtered(&path, 0, 10, vis),
             vec![
                 "2026-08-24T08:41:00.000Z ERROR e1".to_string(),
                 "2026-08-24T08:41:00.000Z WARN w1".to_string(),
-                "plain line".to_string(),
             ]
         );
         assert_eq!(
@@ -698,6 +695,31 @@ mod tests {
         assert_eq!(
             count_visible_and_file_lines(&path, all).0,
             count_non_empty_lines(&path)
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn bare_legacy_lines_follow_info_visibility() {
+        let path = temp_log_path("bare-legacy");
+        std::fs::write(
+            &path,
+            concat!(
+                "root window set to: CPU 1%\n",
+                "2026-08-24T08:41:00.000Z ERROR boom\n",
+                "root window set to: CPU 2%\n",
+            ),
+        )
+        .unwrap();
+        let hide_info = LogLevelVisibility {
+            error: true,
+            warn: true,
+            info: false,
+        };
+        assert_eq!(count_visible_and_file_lines(&path, hide_info), (1, 3));
+        assert_eq!(
+            lines_in_range_filtered(&path, 0, 10, hide_info),
+            vec!["2026-08-24T08:41:00.000Z ERROR boom".to_string()]
         );
         cleanup(&path);
     }
