@@ -1,0 +1,2 @@
+[rules]
+"clippy::mem_forget" = "off"
