@@ -1,14 +1,16 @@
 use std::borrow::Cow;
 
+use log::Level;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue};
+use crate::logging::parse_log_level;
 
 use super::super::app::{
     App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
@@ -103,7 +105,7 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
                 "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Logs => Cow::Borrowed(
-                "Scroll: \u{2191}/\u{2193} | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?",
+                "Scroll: \u{2191}/\u{2193} | Levels: e/w/i | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?",
             ),
         },
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
@@ -163,16 +165,32 @@ pub(super) fn modules_title(app: &App, viewport_height: usize) -> String {
 pub(super) fn logs_title(app: &App, viewport_height: usize) -> String {
     let total = app.logs_total;
     let text = if total == 0 {
-        "logs".to_string()
+        if app.logs_filter_active() && app.logs_file_total > 0 {
+            format!("logs 0 of {}", app.logs_file_total)
+        } else {
+            "logs".to_string()
+        }
     } else if viewport_height == 0 {
-        format!("logs {total}")
+        if app.logs_filter_active() {
+            format!("logs {total} of {}", app.logs_file_total)
+        } else {
+            format!("logs {total}")
+        }
     } else {
         let (start, end, _) = module_window(
             total,
             logs_view_offset(app, total, viewport_height),
             viewport_height,
         );
-        format!("logs {}-{end}/{total}", start + 1)
+        if app.logs_filter_active() {
+            format!(
+                "logs {}-{end}/{total} of {}",
+                start + 1,
+                app.logs_file_total
+            )
+        } else {
+            format!("logs {}-{end}/{total}", start + 1)
+        }
     };
     boxed_title(&text)
 }
@@ -367,6 +385,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
             }
             PanelFocus::Logs => {
                 lines.push("Scroll logs: \u{2191}/\u{2193}".to_string());
+                lines.push("Toggle ERROR/WARN/INFO: e/w/i".to_string());
                 lines.push("Back to modules: Esc/\u{2190}/Tab".to_string());
             }
         },
@@ -401,6 +420,16 @@ pub(super) fn logs_view_offset(app: &App, history_len: usize, viewport_height: u
     }
 }
 
+fn style_for_log_level(level: Option<Level>) -> Style {
+    match level {
+        Some(Level::Error) => Style::default().fg(Color::Red),
+        Some(Level::Warn) => Style::default().fg(Color::Yellow),
+        Some(Level::Info) => Style::default().fg(Color::Cyan),
+        Some(Level::Debug) | Some(Level::Trace) => Style::default().add_modifier(Modifier::DIM),
+        None => Style::default(),
+    }
+}
+
 pub(super) fn visible_log_lines(
     app: &App,
     history: &[String],
@@ -419,7 +448,26 @@ pub(super) fn visible_log_lines(
     } else {
         None
     };
-    let mut lines = styled_list_lines(history, selected, rel_offset, viewport_height, width);
+    let (start, end, _total) = module_window(history.len(), rel_offset, viewport_height);
+    let mut lines: Vec<Line<'static>> = history
+        .get(start..end)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let mut style = style_for_log_level(parse_log_level(text));
+            if Some(start + i) == selected {
+                style = style.add_modifier(Modifier::REVERSED);
+                let display_width = text.width();
+                let padding = " ".repeat((width as usize).saturating_sub(display_width));
+                Line::styled(format!("{text}{padding}"), style)
+            } else if style == Style::default() {
+                Line::from(text.clone())
+            } else {
+                Line::styled(text.clone(), style)
+            }
+        })
+        .collect();
     while lines.len() < viewport_height {
         lines.push(Line::from(String::new()));
     }
@@ -519,5 +567,32 @@ mod param_display_lines_tests {
             param_display_lines(&state),
             vec![("path = \"/sys\" (default)".to_string(), true)]
         );
+    }
+}
+
+#[cfg(test)]
+mod visible_log_lines_tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn visible_log_lines_styles_error_warn_info_distinctly() {
+        let history = vec![
+            "2026-08-24T08:41:00.000Z ERROR boom".to_string(),
+            "2026-08-24T08:41:00.000Z WARN careful".to_string(),
+            "2026-08-24T08:41:00.000Z INFO hello".to_string(),
+        ];
+        let app = App {
+            logs_total: history.len(),
+            logs_loaded_from: 0,
+            logs_scroll_offset: 0,
+            logs_follow: false,
+            panel_focus: PanelFocus::Modules,
+            ..App::default()
+        };
+        let lines = visible_log_lines(&app, &history, 80, 3);
+        assert_eq!(lines[0].style.fg, Some(Color::Red));
+        assert_eq!(lines[1].style.fg, Some(Color::Yellow));
+        assert_eq!(lines[2].style.fg, Some(Color::Cyan));
     }
 }

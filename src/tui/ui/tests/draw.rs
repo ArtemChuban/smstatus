@@ -321,7 +321,6 @@ fn draw_renders_degraded_title_when_viewport_height_is_zero_with_modules_present
         ]),
         ..App::default()
     };
-    // modules_region == 2 with logs == 2 => border only, content 0 => degraded title
     let height = 10;
     assert_eq!(
         render(&app, 70, height),

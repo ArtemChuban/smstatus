@@ -30,11 +30,9 @@ pub(super) fn compute_fixed_heights(outer_inner_height: u16) -> FixedHeights {
     let settings = take(&mut remaining, SETTINGS_BLOCK_HEIGHT);
     let hint = take(&mut remaining, HINT_HEIGHT);
 
-    // Split flexible space evenly: half modules+params, half logs.
     let mut modules_region = remaining.div_ceil(2);
     let mut logs = remaining.saturating_sub(modules_region);
 
-    // A side needs a full border pair or it collapses (avoids 1-row broken blocks).
     if logs > 0 && logs < LOGS_BORDER_ROWS {
         modules_region = modules_region.saturating_add(logs);
         logs = 0;

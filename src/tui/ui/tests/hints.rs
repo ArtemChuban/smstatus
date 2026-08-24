@@ -130,6 +130,7 @@ fn help_lines_logs_focus_lists_scroll_and_back() {
     };
     let lines = help_lines(&app);
     assert!(lines.iter().any(|l| l.contains("Scroll logs")));
+    assert!(lines.iter().any(|l| l.contains("Toggle ERROR/WARN/INFO")));
     assert!(lines.iter().any(|l| l.contains("Back to modules")));
     assert!(!lines.iter().any(|l| l.contains("Add module")));
 }
