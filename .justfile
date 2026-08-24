@@ -85,6 +85,7 @@ test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-c
 test-packages: test-fmt-common
 
 test-app:
+    cargo build -p smstatus --bin echo_host_module
     cargo test -p smstatus
 
 test-all: test-packages test-modules test-app

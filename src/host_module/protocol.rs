@@ -3,33 +3,33 @@ use std::io::{self, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 1;
 const MAX_FRAME_SIZE: u32 = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Handshake {
-    pub(crate) protocol_version: u32,
+pub struct Handshake {
+    pub protocol_version: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) enum HandshakeResponse {
+pub enum HandshakeResponse {
     Ok,
     Mismatch { protocol_version: u32 },
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Request {
-    pub(crate) method: String,
-    pub(crate) payload: String,
+pub struct Request {
+    pub method: String,
+    pub payload: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) enum Response {
+pub enum Response {
     Ok(String),
     Err(String),
 }
 
-pub(crate) fn write_frame<W: Write>(writer: &mut W, value: &impl Serialize) -> io::Result<()> {
+pub fn write_frame<W: Write>(writer: &mut W, value: &impl Serialize) -> io::Result<()> {
     let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
     let len = u32::try_from(bytes.len()).map_err(io::Error::other)?;
     writer.write_all(&len.to_be_bytes())?;
@@ -37,7 +37,7 @@ pub(crate) fn write_frame<W: Write>(writer: &mut W, value: &impl Serialize) -> i
     Ok(())
 }
 
-pub(crate) fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> io::Result<T> {
+pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> io::Result<T> {
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut len_bytes)?;
     let len = u32::from_be_bytes(len_bytes);
@@ -52,7 +52,7 @@ pub(crate) fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> io::Re
     serde_json::from_slice(&buf).map_err(io::Error::other)
 }
 
-pub(crate) fn perform_handshake_client<S: Read + Write>(stream: &mut S) -> Result<(), String> {
+pub fn perform_handshake_client<S: Read + Write>(stream: &mut S) -> Result<(), String> {
     write_frame(
         stream,
         &Handshake {
@@ -68,7 +68,7 @@ pub(crate) fn perform_handshake_client<S: Read + Write>(stream: &mut S) -> Resul
     }
 }
 
-pub(crate) fn perform_handshake_server<S: Read + Write>(stream: &mut S) -> Result<(), String> {
+pub fn perform_handshake_server<S: Read + Write>(stream: &mut S) -> Result<(), String> {
     let handshake: Handshake = read_frame(stream).map_err(|e| e.to_string())?;
     if handshake.protocol_version == PROTOCOL_VERSION {
         write_frame(stream, &HandshakeResponse::Ok).map_err(|e| e.to_string())
