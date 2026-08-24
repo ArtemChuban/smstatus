@@ -1,21 +1,22 @@
 use ratatui::Frame;
-use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::app::{App, LOGS_PANEL_LINES, Mode};
+use super::app::{App, Mode};
 
 mod layout;
 mod overlay;
 mod render;
 
-pub(in crate::tui) use layout::{modules_viewport_height, overlay_viewport_height};
+pub(in crate::tui) use layout::{
+    logs_viewport_height, modules_viewport_height, overlay_viewport_height,
+};
 pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};
 use overlay::{draw_add_overlay, draw_help_overlay, draw_naming_overlay, draw_param_text_overlay};
 use render::{
     SEPARATOR_EDIT_PREFIX, boxed_title, draw_modules_column, draw_params_column, hint_line,
-    log_panel_lines, outer_title, separator_line, text_edit_cursor_column,
+    logs_title, outer_title, separator_line, text_edit_cursor_column, visible_log_lines,
 };
 
 #[cfg(test)]
@@ -59,19 +60,14 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
 
     if areas.logs.height > 0 {
+        let logs_viewport = areas.logs.height.saturating_sub(2) as usize;
         let logs_block = Block::default()
-            .title(boxed_title("logs"))
+            .title(logs_title(app, logs_viewport))
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded);
         let logs_inner = logs_block.inner(areas.logs);
         frame.render_widget(logs_block, areas.logs);
-        let file_lines = crate::logging::current_log_path()
-            .map(|path| crate::logging::tail_lines(&path, LOGS_PANEL_LINES))
-            .unwrap_or_default();
-        let log_lines: Vec<Line> = log_panel_lines(file_lines)
-            .into_iter()
-            .map(Line::from)
-            .collect();
+        let log_lines = visible_log_lines(app, &app.log_history, logs_inner.width, logs_viewport);
         frame.render_widget(Paragraph::new(log_lines), logs_inner);
     }
 

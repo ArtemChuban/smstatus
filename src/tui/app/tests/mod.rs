@@ -34,6 +34,7 @@ pub(super) fn clear_action_log() {
 
 mod daemon;
 mod help;
+mod logs;
 mod modules;
 mod params;
 mod reload;

@@ -10,6 +10,7 @@ use crate::schema_probe::SchemaProbe;
 
 mod daemon;
 mod help;
+mod logs;
 mod modules;
 mod params;
 mod reload;
@@ -18,7 +19,7 @@ mod text;
 
 use text::{is_hard_quit, is_quit};
 
-pub(super) const LOGS_PANEL_LINES: usize = 3;
+pub(super) const LOGS_CHUNK_LINES: usize = 200;
 
 #[derive(Default, PartialEq, Eq, Debug)]
 pub(super) enum Mode {
@@ -72,6 +73,7 @@ pub(super) enum PanelFocus {
     #[default]
     Modules,
     Params,
+    Logs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +104,6 @@ pub(super) struct ModuleParamsState {
     pub(super) scroll_offset: usize,
 }
 
-#[derive(Default)]
 pub(super) struct App {
     pub(super) should_quit: bool,
     pub(super) daemon_status: Option<crate::daemon::DaemonStatus>,
@@ -132,6 +133,57 @@ pub(super) struct App {
     pub(super) module_params: Option<ModuleParamsState>,
     pub(super) help_scroll_offset: usize,
     pub(super) config_cache: Option<BarConfig>,
+    pub(super) logs_scroll_offset: usize,
+    pub(super) logs_selected_index: Option<usize>,
+    pub(super) logs_follow: bool,
+    pub(super) logs_viewport_height: usize,
+    /// Absolute index of `log_history[0]` in the full log file.
+    pub(super) logs_loaded_from: usize,
+    /// Total non-empty lines in the log file (not just the loaded window).
+    pub(super) logs_total: usize,
+    pub(in crate::tui) log_history: Vec<String>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            should_quit: false,
+            daemon_status: None,
+            pending_start: None,
+            pending_start_confirmed_running: false,
+            mode: Mode::default(),
+            config_path: None,
+            modules_dir: None,
+            separator: None,
+            config_watcher: None,
+            last_separator_error: None,
+            modules: None,
+            metadata_by_kind: HashMap::new(),
+            metadata_failed: HashSet::new(),
+            metadata_needs_stable: HashSet::new(),
+            metadata_probe: None,
+            schema_by_kind: HashMap::new(),
+            schema_failed: HashSet::new(),
+            schema_needs_stable: HashSet::new(),
+            schema_probe: None,
+            last_modules_error: None,
+            module_scroll_offset: 0,
+            modules_viewport_height: 0,
+            overlay_viewport_height: 0,
+            selected_index: None,
+            panel_focus: PanelFocus::default(),
+            module_params: None,
+            help_scroll_offset: 0,
+            config_cache: None,
+            logs_scroll_offset: 0,
+            logs_selected_index: None,
+            logs_follow: true,
+            logs_viewport_height: 0,
+            logs_loaded_from: 0,
+            logs_total: 0,
+            log_history: Vec::new(),
+        }
+    }
 }
 
 impl App {
@@ -212,6 +264,7 @@ impl App {
         match self.panel_focus {
             PanelFocus::Modules => self.handle_key_normal_modules(key),
             PanelFocus::Params => self.handle_key_normal_params(key),
+            PanelFocus::Logs => self.handle_key_normal_logs(key),
         }
     }
 
@@ -227,6 +280,7 @@ impl App {
             KeyCode::Char('a') => self.begin_add_module(),
             KeyCode::Char('d') => self.begin_remove_module(),
             KeyCode::Enter | KeyCode::Right => self.focus_params(),
+            KeyCode::Tab => self.focus_logs(),
             _ => {}
         }
     }
@@ -240,6 +294,7 @@ impl App {
             KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
             KeyCode::Up => self.select_previous_param(),
             KeyCode::Down => self.select_next_param(),
+            KeyCode::Tab => self.focus_logs(),
             _ => {}
         }
     }
