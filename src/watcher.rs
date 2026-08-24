@@ -43,7 +43,7 @@ mod logic {
 
 fn canonicalize_or(path: &Path, label: &str) -> PathBuf {
     path.canonicalize().unwrap_or_else(|err| {
-        eprintln!(
+        log::error!(
             "reload watcher: failed to canonicalize {label} {}: {err}",
             path.display()
         );
@@ -120,7 +120,7 @@ impl ReloadWatcher {
                         }
                     }
                 }
-                Err(err) => eprintln!("reload watcher error: {err}"),
+                Err(err) => log::error!("reload watcher error: {err}"),
             })?;
 
         watcher.watch(config_dir, RecursiveMode::Recursive)?;
@@ -155,7 +155,7 @@ impl ReloadWatcher {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                eprintln!(
+                log::error!(
                     "reload watcher channel disconnected; disabling hot-reload for the rest of this run"
                 );
                 self.alive = false;
@@ -180,7 +180,7 @@ impl ReloadWatcher {
             }
             Err(mpsc::TryRecvError::Empty) => false,
             Err(mpsc::TryRecvError::Disconnected) => {
-                eprintln!(
+                log::error!(
                     "reload watcher channel disconnected; disabling hot-reload for the rest of this run"
                 );
                 self.alive = false;
