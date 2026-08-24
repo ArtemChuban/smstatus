@@ -95,6 +95,10 @@ impl Guest for Component {
             author: "ArtemChuban".to_string(),
         }
     }
+
+    fn required_extensions() -> Vec<String> {
+        vec![]
+    }
 }
 
 export!(Component);
@@ -249,6 +253,14 @@ mod tests {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 author: "ArtemChuban".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn required_extensions_is_empty() {
+        assert_eq!(
+            super::Component::required_extensions(),
+            Vec::<String>::new()
         );
     }
 }

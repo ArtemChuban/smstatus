@@ -8,7 +8,9 @@ use wasmtime::{Config, Engine};
 use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
+use crate::extension::ExtensionRegistry;
 use crate::host::HostState;
+use crate::lock;
 use crate::logging;
 use crate::module::{ModuleRuntime, ModuleState};
 use crate::watcher::{ReloadBatch, ReloadWatcher};
@@ -34,6 +36,10 @@ pub(crate) fn run() -> Result<()> {
     let linker = build_linker(&engine)?;
     let x11_bar = X11Bar::connect()?;
     let http_agent = build_http_agent();
+    let extensions = Arc::new(ExtensionRegistry::new(
+        config_dir.join("extensions"),
+        lock::lock_dir()?.join("extensions"),
+    ));
 
     let runtime = ModuleRuntime::new(
         engine,
@@ -42,6 +48,7 @@ pub(crate) fn run() -> Result<()> {
         FUEL_PER_TICK,
         Arc::clone(x11_bar.connection()),
         http_agent,
+        extensions,
     );
 
     let mut modules = start_modules(&runtime, &config)?;

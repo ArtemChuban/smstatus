@@ -12,6 +12,7 @@ use x11rb::rust_connection::RustConnection;
 use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
+use crate::extension::ExtensionRegistry;
 use crate::host::HostState;
 use crate::version;
 
@@ -43,7 +44,16 @@ pub(crate) struct ModuleRuntime {
     fuel_per_tick: u64,
     connection: Arc<RustConnection>,
     http_agent: ureq::Agent,
+    extensions: Arc<ExtensionRegistry>,
     validated_kinds: RefCell<HashSet<String>>,
+}
+
+fn missing_extensions(required: &[String], registry: &ExtensionRegistry) -> Vec<String> {
+    required
+        .iter()
+        .filter(|name| !registry.is_installed(name))
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn wait_wasm_stable(path: &Path) {
@@ -66,6 +76,7 @@ impl ModuleRuntime {
         fuel_per_tick: u64,
         connection: Arc<RustConnection>,
         http_agent: ureq::Agent,
+        extensions: Arc<ExtensionRegistry>,
     ) -> Self {
         Self {
             engine,
@@ -74,6 +85,7 @@ impl ModuleRuntime {
             fuel_per_tick,
             connection,
             http_agent,
+            extensions,
             validated_kinds: RefCell::new(HashSet::new()),
         }
     }
@@ -89,7 +101,11 @@ impl ModuleRuntime {
     }
 
     fn instantiate(&self, component: &Component) -> Result<(Store<HostState>, GuestModule)> {
-        let state = HostState::new(Arc::clone(&self.connection), self.http_agent.clone());
+        let state = HostState::new(
+            Arc::clone(&self.connection),
+            self.http_agent.clone(),
+            Arc::clone(&self.extensions),
+        );
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(self.fuel_per_tick)?;
@@ -105,6 +121,18 @@ impl ModuleRuntime {
             .smstatus_module_guest()
             .call_required_host_api_version(&mut store)?;
         version::check_compatible(kind, (required.major, required.minor, required.patch))?;
+
+        let required_extensions = module
+            .smstatus_module_guest()
+            .call_required_extensions(&mut store)?;
+        let missing = missing_extensions(&required_extensions, &self.extensions);
+        if !missing.is_empty() {
+            let list = missing.join(", ");
+            return Err(format!(
+                "module `{kind}` requires extension(s) `{list}`; install extension(s) {list}"
+            )
+            .into());
+        }
 
         if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
             let schema = module
@@ -320,5 +348,60 @@ impl ModuleRuntime {
         }
 
         kept
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry_with_installed(names: &[&str]) -> ExtensionRegistry {
+        let dir = crate::extension::test_temp_dir("module");
+        let extensions_dir = dir.join("extensions");
+        std::fs::create_dir_all(&extensions_dir).unwrap();
+        for name in names {
+            std::fs::write(extensions_dir.join(name), "").unwrap();
+        }
+        ExtensionRegistry::new(extensions_dir, dir.join("sockets"))
+    }
+
+    #[test]
+    fn no_required_extensions_is_never_missing() {
+        let registry = registry_with_installed(&[]);
+        assert_eq!(missing_extensions(&[], &registry), Vec::<String>::new());
+    }
+
+    #[test]
+    fn all_required_extensions_installed_is_not_missing() {
+        let registry = registry_with_installed(&["docker"]);
+        assert_eq!(
+            missing_extensions(&["docker".to_string()], &registry),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn one_missing_extension_is_reported() {
+        let registry = registry_with_installed(&[]);
+        assert_eq!(
+            missing_extensions(&["docker".to_string()], &registry),
+            vec!["docker".to_string()]
+        );
+    }
+
+    #[test]
+    fn several_missing_extensions_are_all_reported() {
+        let registry = registry_with_installed(&["docker"]);
+        assert_eq!(
+            missing_extensions(
+                &[
+                    "docker".to_string(),
+                    "dbus".to_string(),
+                    "network".to_string(),
+                ],
+                &registry
+            ),
+            vec!["dbus".to_string(), "network".to_string()]
+        );
     }
 }

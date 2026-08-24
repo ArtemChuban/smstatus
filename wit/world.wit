@@ -26,6 +26,7 @@ interface host {
   read-mem-usage: func() -> result<mem-usage, string>;
   read-process-running: func(name: string) -> result<bool, string>;
   http-get: func(url: string, headers: list<tuple<string, string>>) -> result<string, string>;
+  call-extension: func(extension: string, method: string, payload: string) -> result<string, string>;
 }
 
 interface guest {
@@ -44,6 +45,8 @@ interface guest {
   update: func() -> output;
 
   required-host-api-version: func() -> host-api-version;
+
+  required-extensions: func() -> list<string>;
 
   record metadata {
     display-name: string,
