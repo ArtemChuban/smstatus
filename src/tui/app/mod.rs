@@ -3,9 +3,10 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::bindings::Metadata;
+use crate::bindings::{ConfigParam, Metadata};
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
 use crate::meta::MetadataProbe;
+use crate::schema_probe::SchemaProbe;
 
 mod daemon;
 mod help;
@@ -80,10 +81,23 @@ pub(super) enum ModuleParamsStatus {
     Entries,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ParamOrigin {
+    Explicit,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParamEntry {
+    pub(super) key: String,
+    pub(super) value: ModuleParamValue,
+    pub(super) origin: ParamOrigin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ModuleParamsState {
     pub(super) status: ModuleParamsStatus,
-    pub(super) entries: Vec<(String, ModuleParamValue)>,
+    pub(super) entries: Vec<ParamEntry>,
     pub(super) selected_index: Option<usize>,
     pub(super) scroll_offset: usize,
 }
@@ -105,6 +119,10 @@ pub(super) struct App {
     pub(super) metadata_failed: HashSet<String>,
     pub(super) metadata_needs_stable: HashSet<String>,
     pub(super) metadata_probe: Option<MetadataProbe>,
+    pub(super) schema_by_kind: HashMap<String, Vec<ConfigParam>>,
+    pub(super) schema_failed: HashSet<String>,
+    pub(super) schema_needs_stable: HashSet<String>,
+    pub(super) schema_probe: Option<SchemaProbe>,
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,

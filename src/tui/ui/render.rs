@@ -11,7 +11,8 @@ use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue};
 
 use super::super::app::{
-    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
+    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
+    ParamOrigin,
 };
 
 pub(super) const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
@@ -200,8 +201,8 @@ pub(super) fn selected_module_entry(app: &App) -> Option<&str> {
     app.modules.as_ref()?.get(idx).map(String::as_str)
 }
 
-pub(super) fn styled_list_lines(
-    entries: &[String],
+fn styled_dimmable_lines(
+    entries: &[(String, bool)],
     selected: Option<usize>,
     offset: usize,
     viewport_height: usize,
@@ -213,19 +214,37 @@ pub(super) fn styled_list_lines(
         .unwrap_or(&[])
         .iter()
         .enumerate()
-        .map(|(i, name)| {
+        .map(|(i, (text, dim))| {
+            let mut modifier = Modifier::empty();
+            if *dim {
+                modifier |= Modifier::DIM;
+            }
             if Some(start + i) == selected {
-                let display_width = name.width();
+                modifier |= Modifier::REVERSED;
+                let display_width = text.width();
                 let padding = " ".repeat((width as usize).saturating_sub(display_width));
                 Line::styled(
-                    format!("{name}{padding}"),
-                    Style::default().add_modifier(Modifier::REVERSED),
+                    format!("{text}{padding}"),
+                    Style::default().add_modifier(modifier),
                 )
+            } else if modifier.is_empty() {
+                Line::from(text.clone())
             } else {
-                Line::from(name.clone())
+                Line::styled(text.clone(), Style::default().add_modifier(modifier))
             }
         })
         .collect()
+}
+
+pub(super) fn styled_list_lines(
+    entries: &[String],
+    selected: Option<usize>,
+    offset: usize,
+    viewport_height: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let entries: Vec<(String, bool)> = entries.iter().map(|name| (name.clone(), false)).collect();
+    styled_dimmable_lines(&entries, selected, offset, viewport_height, width)
 }
 
 pub(super) fn visible_module_lines(
@@ -257,18 +276,24 @@ pub(super) fn visible_module_lines(
     )
 }
 
-pub(super) fn param_display_lines(state: &ModuleParamsState) -> Vec<String> {
+pub(super) fn param_display_lines(state: &ModuleParamsState) -> Vec<(String, bool)> {
     match &state.status {
         ModuleParamsStatus::Missing { section } => {
-            vec![format!("(no [{section}] section)")]
+            vec![(format!("(no [{section}] section)"), false)]
         }
-        ModuleParamsStatus::Empty => vec!["(empty)".to_string()],
+        ModuleParamsStatus::Empty => vec![("(empty)".to_string(), false)],
         ModuleParamsStatus::Entries => state
             .entries
             .iter()
-            .map(|(key, value)| match value {
-                ModuleParamValue::String(s) => format!("{key} = {s:?}"),
-                ModuleParamValue::NonString => format!("{key} = <non-string>"),
+            .map(|ParamEntry { key, value, origin }| {
+                let text = match value {
+                    ModuleParamValue::String(s) => format!("{key} = {s:?}"),
+                    ModuleParamValue::NonString => format!("{key} = <non-string>"),
+                };
+                match origin {
+                    ParamOrigin::Default => (format!("{text} (default)"), true),
+                    ParamOrigin::Explicit => (text, false),
+                }
             })
             .collect(),
     }
@@ -295,7 +320,7 @@ pub(super) fn visible_params_lines(
     } else {
         0
     };
-    styled_list_lines(&lines, selected, offset, viewport_height, width)
+    styled_dimmable_lines(&lines, selected, offset, viewport_height, width)
 }
 
 pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
@@ -404,6 +429,47 @@ mod label_tests {
         assert_eq!(
             params_title_text("cpu#home", Some(&sample_meta())),
             "config CPU (cpu#home)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod param_display_lines_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_entry_has_no_default_marker() {
+        let state = ModuleParamsState {
+            status: ModuleParamsStatus::Entries,
+            entries: vec![ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/sys".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+        };
+        assert_eq!(
+            param_display_lines(&state),
+            vec![("path = \"/sys\"".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn default_entry_is_marked_and_flagged() {
+        let state = ModuleParamsState {
+            status: ModuleParamsStatus::Entries,
+            entries: vec![ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/sys".to_string()),
+                origin: ParamOrigin::Default,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+        };
+        assert_eq!(
+            param_display_lines(&state),
+            vec![("path = \"/sys\" (default)".to_string(), true)]
         );
     }
 }

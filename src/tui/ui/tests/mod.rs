@@ -11,7 +11,8 @@ use crate::bindings::Metadata;
 use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
 use crate::tui::app::{
-    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
+    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
+    ParamOrigin,
 };
 
 pub(super) fn install_test_log() {
@@ -365,7 +366,7 @@ pub(super) fn params_empty() -> ModuleParamsState {
     }
 }
 
-pub(super) fn params_entries(entries: Vec<(String, ModuleParamValue)>) -> ModuleParamsState {
+pub(super) fn params_entries(entries: Vec<ParamEntry>) -> ModuleParamsState {
     let selected_index = if entries.is_empty() { None } else { Some(0) };
     ModuleParamsState {
         status: ModuleParamsStatus::Entries,
