@@ -171,9 +171,12 @@ pub(super) fn module_list_label(entry: &str, meta: Option<&Metadata>) -> String 
     };
     let kind = BarConfig::split_module_entry(entry).0;
     if entry == kind {
-        meta.display_name.clone()
+        format!("{} {} by {}", meta.display_name, meta.version, meta.author)
     } else {
-        format!("{} ({entry})", meta.display_name)
+        format!(
+            "{} ({entry}) {} by {}",
+            meta.display_name, meta.version, meta.author
+        )
     }
 }
 
@@ -183,15 +186,9 @@ pub(super) fn params_title_text(entry: &str, meta: Option<&Metadata>) -> String 
     };
     let kind = BarConfig::split_module_entry(entry).0;
     if entry == kind {
-        format!(
-            "config {} {} by {}",
-            meta.display_name, meta.version, meta.author
-        )
+        format!("config {}", meta.display_name)
     } else {
-        format!(
-            "config {} ({entry}) {} by {}",
-            meta.display_name, meta.version, meta.author
-        )
+        format!("config {} ({entry})", meta.display_name)
     }
 }
 
@@ -371,15 +368,18 @@ mod label_tests {
     }
 
     #[test]
-    fn module_list_label_undecorated_uses_display_name() {
-        assert_eq!(module_list_label("cpu", Some(&sample_meta())), "CPU");
+    fn module_list_label_undecorated_includes_version_and_author() {
+        assert_eq!(
+            module_list_label("cpu", Some(&sample_meta())),
+            "CPU 0.1.0 by ArtemChuban"
+        );
     }
 
     #[test]
     fn module_list_label_instance_keeps_entry_in_parens() {
         assert_eq!(
             module_list_label("cpu#home", Some(&sample_meta())),
-            "CPU (cpu#home)"
+            "CPU (cpu#home) 0.1.0 by ArtemChuban"
         );
     }
 
@@ -390,18 +390,15 @@ mod label_tests {
     }
 
     #[test]
-    fn params_title_text_undecorated_includes_version_and_author() {
-        assert_eq!(
-            params_title_text("cpu", Some(&sample_meta())),
-            "config CPU 0.1.0 by ArtemChuban"
-        );
+    fn params_title_text_undecorated_uses_display_name() {
+        assert_eq!(params_title_text("cpu", Some(&sample_meta())), "config CPU");
     }
 
     #[test]
-    fn params_title_text_instance_includes_entry_version_and_author() {
+    fn params_title_text_instance_includes_entry() {
         assert_eq!(
             params_title_text("cpu#home", Some(&sample_meta())),
-            "config CPU (cpu#home) 0.1.0 by ArtemChuban"
+            "config CPU (cpu#home)"
         );
     }
 }
