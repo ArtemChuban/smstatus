@@ -161,7 +161,6 @@ pub(crate) fn set_retain_days(days: u64) {
     }
 }
 
-#[allow(dead_code)] // consumed by the TUI logs panel in a follow-up change
 pub(crate) fn current_log_path() -> Option<PathBuf> {
     #[cfg(test)]
     {
@@ -215,7 +214,6 @@ pub(crate) fn prune_old_entries(path: &Path, retain_days: u64) -> Result<()> {
         .map_err(|err| format!("failed to write {}: {err}", path.display()).into())
 }
 
-#[allow(dead_code)] // consumed by the TUI logs panel in a follow-up change
 pub(crate) fn tail_lines(path: &Path, n: usize) -> Vec<String> {
     if n == 0 {
         return Vec::new();

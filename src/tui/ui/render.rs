@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::config::ModuleParamValue;
 
 use super::super::app::{
-    ACTION_LOG_CAPACITY, App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
+    App, LOGS_PANEL_LINES, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus,
 };
 
 pub(super) const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
@@ -299,10 +299,13 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
     lines
 }
 
-pub(super) fn action_log_lines(action_log: &[String]) -> Vec<String> {
-    let mut lines: Vec<String> = action_log.to_vec();
-    while lines.len() < ACTION_LOG_CAPACITY {
+pub(super) fn log_panel_lines(lines: Vec<String>) -> Vec<String> {
+    let mut lines = lines;
+    while lines.len() < LOGS_PANEL_LINES {
         lines.push(String::new());
+    }
+    if lines.len() > LOGS_PANEL_LINES {
+        lines = lines.split_off(lines.len() - LOGS_PANEL_LINES);
     }
     lines
 }
