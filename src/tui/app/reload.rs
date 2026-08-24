@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::config::{BarConfig, ModuleSectionView, ParamWriteExpect};
 
 use super::text::clamped_scroll_offset;
@@ -5,13 +7,17 @@ use super::{App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus};
 
 impl App {
     pub(in crate::tui) fn poll_config_changes(&mut self) {
-        let reloaded = self
+        let Some(batch) = self
             .config_watcher
             .as_mut()
-            .map(|watcher| watcher.try_reload())
-            .unwrap_or(false);
-        if reloaded {
+            .and_then(|watcher| watcher.try_reload())
+        else {
+            return;
+        };
+        if batch.config {
             self.refresh_config();
+        } else if !batch.wasm_kinds.is_empty() {
+            self.refresh_metadata_for_kinds(&batch.wasm_kinds);
         }
     }
 
@@ -39,6 +45,7 @@ impl App {
                         };
                         self.modules = Some(names);
                         self.last_modules_error = None;
+                        self.rebuild_metadata_by_kind();
                         self.ensure_selected_visible();
                         let new_entry = self
                             .selected_index
@@ -51,6 +58,7 @@ impl App {
                     }
                     Err(err) => {
                         self.modules = None;
+                        self.metadata_by_kind.clear();
                         self.selected_index = None;
                         self.module_params = None;
                         self.panel_focus = PanelFocus::Modules;
@@ -66,6 +74,7 @@ impl App {
             Err(err) => {
                 self.separator = None;
                 self.modules = None;
+                self.metadata_by_kind.clear();
                 self.selected_index = None;
                 self.module_params = None;
                 self.config_cache = None;
@@ -79,6 +88,55 @@ impl App {
         }
         self.drop_stale_confirming_remove_mode();
         self.drop_stale_param_modes();
+    }
+
+    fn rebuild_metadata_by_kind(&mut self) {
+        self.metadata_by_kind.clear();
+        let kinds = self.configured_kinds();
+        let Some(modules_dir) = self.modules_dir.clone() else {
+            return;
+        };
+        let Ok(probe) = crate::meta::MetadataProbe::new() else {
+            return;
+        };
+        for kind in kinds {
+            if let Ok(meta) = probe.read(&modules_dir, &kind) {
+                self.metadata_by_kind.insert(kind, meta);
+            }
+        }
+    }
+
+    fn refresh_metadata_for_kinds(&mut self, wasm_kinds: &[String]) {
+        let configured = self.configured_kinds();
+        let Some(modules_dir) = self.modules_dir.clone() else {
+            return;
+        };
+        let Ok(probe) = crate::meta::MetadataProbe::new() else {
+            return;
+        };
+        for kind in wasm_kinds {
+            if !configured.contains(kind) {
+                continue;
+            }
+            match probe.read_after_stable(&modules_dir, kind) {
+                Ok(meta) => {
+                    self.metadata_by_kind.insert(kind.clone(), meta);
+                }
+                Err(_) => {
+                    self.metadata_by_kind.remove(kind);
+                }
+            }
+        }
+    }
+
+    fn configured_kinds(&self) -> HashSet<String> {
+        let Some(modules) = &self.modules else {
+            return HashSet::new();
+        };
+        modules
+            .iter()
+            .map(|entry| BarConfig::split_module_entry(entry).0.to_string())
+            .collect()
     }
 
     pub(super) fn rebuild_module_params_from(&mut self, config: &BarConfig, reset_selection: bool) {

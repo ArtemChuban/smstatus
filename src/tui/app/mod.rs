@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
 
 mod daemon;
@@ -98,6 +100,7 @@ pub(super) struct App {
     pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
     pub(super) last_separator_error: Option<String>,
     pub(super) modules: Option<Vec<String>>,
+    pub(super) metadata_by_kind: HashMap<String, Metadata>,
     pub(super) last_modules_error: Option<String>,
     pub(super) module_scroll_offset: usize,
     pub(super) modules_viewport_height: usize,
