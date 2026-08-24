@@ -48,6 +48,14 @@ pub(crate) struct ModuleRuntime {
     validated_kinds: RefCell<HashSet<String>>,
 }
 
+fn missing_host_modules(required: &[String], registry: &HostModuleRegistry) -> Vec<String> {
+    required
+        .iter()
+        .filter(|name| !registry.is_installed(name))
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn wait_wasm_stable(path: &Path) {
     let mut last_size = None;
     for _ in 0..3 {
@@ -113,6 +121,18 @@ impl ModuleRuntime {
             .smstatus_module_guest()
             .call_required_host_api_version(&mut store)?;
         version::check_compatible(kind, (required.major, required.minor, required.patch))?;
+
+        let required_host_modules = module
+            .smstatus_module_guest()
+            .call_required_host_modules(&mut store)?;
+        let missing = missing_host_modules(&required_host_modules, &self.host_modules);
+        if !missing.is_empty() {
+            let list = missing.join(", ");
+            return Err(format!(
+                "module `{kind}` requires host module(s) `{list}`; install host module(s) {list}"
+            )
+            .into());
+        }
 
         if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
             let schema = module
@@ -328,5 +348,60 @@ impl ModuleRuntime {
         }
 
         kept
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry_with_installed(names: &[&str]) -> HostModuleRegistry {
+        let dir = crate::host_module::test_temp_dir("module");
+        let host_modules_dir = dir.join("host_modules");
+        std::fs::create_dir_all(&host_modules_dir).unwrap();
+        for name in names {
+            std::fs::write(host_modules_dir.join(name), "").unwrap();
+        }
+        HostModuleRegistry::new(host_modules_dir, dir.join("sockets"))
+    }
+
+    #[test]
+    fn no_required_host_modules_is_never_missing() {
+        let registry = registry_with_installed(&[]);
+        assert_eq!(missing_host_modules(&[], &registry), Vec::<String>::new());
+    }
+
+    #[test]
+    fn all_required_host_modules_installed_is_not_missing() {
+        let registry = registry_with_installed(&["docker"]);
+        assert_eq!(
+            missing_host_modules(&["docker".to_string()], &registry),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn one_missing_host_module_is_reported() {
+        let registry = registry_with_installed(&[]);
+        assert_eq!(
+            missing_host_modules(&["docker".to_string()], &registry),
+            vec!["docker".to_string()]
+        );
+    }
+
+    #[test]
+    fn several_missing_host_modules_are_all_reported() {
+        let registry = registry_with_installed(&["docker"]);
+        assert_eq!(
+            missing_host_modules(
+                &[
+                    "docker".to_string(),
+                    "dbus".to_string(),
+                    "network".to_string(),
+                ],
+                &registry
+            ),
+            vec!["dbus".to_string(), "network".to_string()]
+        );
     }
 }
