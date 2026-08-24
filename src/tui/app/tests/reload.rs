@@ -311,10 +311,11 @@ fn refresh_config_drops_key_absent_edit_when_key_appears_on_disk() {
         config_cache: Some(config),
         module_params: Some(ModuleParamsState {
             status: ModuleParamsStatus::Entries,
-            entries: vec![(
-                "other".to_string(),
-                ModuleParamValue::String("y".to_string()),
-            )],
+            entries: vec![ParamEntry {
+                key: "other".to_string(),
+                value: ModuleParamValue::String("y".to_string()),
+                origin: ParamOrigin::Explicit,
+            }],
             selected_index: Some(0),
             scroll_offset: 0,
         }),
@@ -338,4 +339,90 @@ fn refresh_config_drops_key_absent_edit_when_key_appears_on_disk() {
 
     assert_eq!(app.mode, Mode::Normal);
     assert!(action_log().is_empty());
+}
+
+#[test]
+fn rebuild_module_params_from_merges_schema_defaults_with_explicit_entries() {
+    let path = unique_temp_path("schema-merge");
+    std::fs::write(
+        &path,
+        "modules = [\"cpu\"]\n\n[cpu]\nformat = \"explicit\"\n",
+    )
+    .unwrap();
+    let config = BarConfig::load(&path).unwrap();
+    let mut app = App {
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        ..App::default()
+    };
+    app.schema_by_kind.insert(
+        "cpu".to_string(),
+        vec![
+            ConfigParam {
+                name: "format".to_string(),
+                param_type: "string".to_string(),
+                default: "schema-default".to_string(),
+            },
+            ConfigParam {
+                name: "path".to_string(),
+                param_type: "string".to_string(),
+                default: "/sys/default".to_string(),
+            },
+        ],
+    );
+
+    app.rebuild_module_params_from(&config, false);
+    let _ = std::fs::remove_file(&path);
+
+    let params = app.module_params.unwrap();
+    assert_eq!(params.status, ModuleParamsStatus::Entries);
+    assert_eq!(
+        params.entries,
+        vec![
+            ParamEntry {
+                key: "format".to_string(),
+                value: ModuleParamValue::String("explicit".to_string()),
+                origin: ParamOrigin::Explicit
+            },
+            ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/sys/default".to_string()),
+                origin: ParamOrigin::Default
+            },
+        ]
+    );
+}
+
+#[test]
+fn rebuild_module_params_from_shows_schema_defaults_when_section_missing() {
+    let path = unique_temp_path("schema-missing-section");
+    std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
+    let config = BarConfig::load(&path).unwrap();
+    let mut app = App {
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        ..App::default()
+    };
+    app.schema_by_kind.insert(
+        "cpu".to_string(),
+        vec![ConfigParam {
+            name: "path".to_string(),
+            param_type: "string".to_string(),
+            default: "/sys/default".to_string(),
+        }],
+    );
+
+    app.rebuild_module_params_from(&config, false);
+    let _ = std::fs::remove_file(&path);
+
+    let params = app.module_params.unwrap();
+    assert_eq!(params.status, ModuleParamsStatus::Entries);
+    assert_eq!(
+        params.entries,
+        vec![ParamEntry {
+            key: "path".to_string(),
+            value: ModuleParamValue::String("/sys/default".to_string()),
+            origin: ParamOrigin::Default
+        }]
+    );
 }

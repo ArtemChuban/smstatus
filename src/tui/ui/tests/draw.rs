@@ -482,11 +482,16 @@ fn draw_renders_string_and_non_string_param_entries() {
         modules: Some(vec!["disk#root".to_string()]),
         selected_index: Some(0),
         module_params: Some(params_entries(vec![
-            (
-                "path".to_string(),
-                ModuleParamValue::String("/".to_string()),
-            ),
-            ("interval".to_string(), ModuleParamValue::NonString),
+            ParamEntry {
+                key: "path".to_string(),
+                value: ModuleParamValue::String("/".to_string()),
+                origin: ParamOrigin::Explicit,
+            },
+            ParamEntry {
+                key: "interval".to_string(),
+                value: ModuleParamValue::NonString,
+                origin: ParamOrigin::Explicit,
+            },
         ])),
         ..App::default()
     };

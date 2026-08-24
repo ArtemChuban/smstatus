@@ -44,8 +44,16 @@ fn selected_param_row_reversed_only_when_params_focused() {
         selected_index: Some(0),
         panel_focus: PanelFocus::Modules,
         module_params: Some(params_entries(vec![
-            ("a".to_string(), ModuleParamValue::String("1".to_string())),
-            ("b".to_string(), ModuleParamValue::String("2".to_string())),
+            ParamEntry {
+                key: "a".to_string(),
+                value: ModuleParamValue::String("1".to_string()),
+                origin: ParamOrigin::Explicit,
+            },
+            ParamEntry {
+                key: "b".to_string(),
+                value: ModuleParamValue::String("2".to_string()),
+                origin: ParamOrigin::Explicit,
+            },
         ])),
         ..App::default()
     };
@@ -74,8 +82,16 @@ fn selected_param_row_reversed_only_when_params_focused() {
         selected_index: Some(0),
         panel_focus: PanelFocus::Params,
         module_params: Some(params_entries(vec![
-            ("a".to_string(), ModuleParamValue::String("1".to_string())),
-            ("b".to_string(), ModuleParamValue::String("2".to_string())),
+            ParamEntry {
+                key: "a".to_string(),
+                value: ModuleParamValue::String("1".to_string()),
+                origin: ParamOrigin::Explicit,
+            },
+            ParamEntry {
+                key: "b".to_string(),
+                value: ModuleParamValue::String("2".to_string()),
+                origin: ParamOrigin::Explicit,
+            },
         ])),
         ..App::default()
     };
