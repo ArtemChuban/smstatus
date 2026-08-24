@@ -2506,6 +2506,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-sysfs"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "extension-protocol",
+]
+
+[[package]]
 name = "smstatus-time"
 version = "0.1.0"
 dependencies = [
