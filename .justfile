@@ -107,7 +107,11 @@ test-app: build-echo
 
 test-all: test-packages test-modules test-extensions test-app
 
-cov-app:
+# Registry integration tests need the echo binary in the llvm-cov target dir.
+cov-echo-fixture:
+    cargo build -p echo --target-dir target/llvm-cov-target
+
+cov-app: cov-echo-fixture
     cargo llvm-cov -p smstatus --summary-only
 
 cov-fmt-common:
@@ -126,7 +130,7 @@ cov-modules:
 
 cov-extensions: cov-echo
 
-cov-all:
+cov-all: cov-echo-fixture
     cargo llvm-cov --workspace --summary-only
 
 # Pass --open to open the report in a browser after generation.
