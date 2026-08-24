@@ -258,7 +258,6 @@ pub(crate) fn count_non_empty_lines(path: &Path) -> usize {
     count
 }
 
-/// Non-empty lines in absolute range `[start, start + count)`.
 pub(crate) fn lines_in_range(path: &Path, start: usize, count: usize) -> Vec<String> {
     if count == 0 {
         return Vec::new();
@@ -268,7 +267,6 @@ pub(crate) fn lines_in_range(path: &Path, start: usize, count: usize) -> Vec<Str
         return Vec::new();
     }
     let want = count.min(total - start);
-    // Suffix reads can reuse the backward scanner.
     if start + want == total {
         return tail_lines(path, want);
     }
@@ -347,6 +345,131 @@ fn parse_leading_timestamp(line: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(token)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+pub(crate) fn parse_log_level(line: &str) -> Option<Level> {
+    let mut parts = line.splitn(3, ' ');
+    let _ts = parts.next()?;
+    let level = parts.next()?;
+    match level {
+        "ERROR" => Some(Level::Error),
+        "WARN" => Some(Level::Warn),
+        "INFO" => Some(Level::Info),
+        "DEBUG" => Some(Level::Debug),
+        "TRACE" => Some(Level::Trace),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LogLevelVisibility {
+    pub error: bool,
+    pub warn: bool,
+    pub info: bool,
+}
+
+impl Default for LogLevelVisibility {
+    fn default() -> Self {
+        Self {
+            error: true,
+            warn: true,
+            info: true,
+        }
+    }
+}
+
+impl LogLevelVisibility {
+    pub(crate) fn all_enabled(self) -> bool {
+        self.error && self.warn && self.info
+    }
+
+    pub(crate) fn permits(self, line: &str) -> bool {
+        match parse_log_level(line) {
+            None | Some(Level::Info) => self.info,
+            Some(Level::Error) => self.error,
+            Some(Level::Warn) => self.warn,
+            Some(Level::Debug) | Some(Level::Trace) => true,
+        }
+    }
+}
+
+fn for_each_matching_line(
+    path: &Path,
+    visibility: LogLevelVisibility,
+    mut f: impl FnMut(&str) -> bool,
+) {
+    let Ok(file) = File::open(path) else {
+        return;
+    };
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if !visibility.permits(&line) {
+            continue;
+        }
+        if !f(&line) {
+            break;
+        }
+    }
+}
+
+pub(crate) fn count_visible_and_file_lines(
+    path: &Path,
+    visibility: LogLevelVisibility,
+) -> (usize, usize) {
+    if visibility.all_enabled() {
+        let n = count_non_empty_lines(path);
+        return (n, n);
+    }
+    let Ok(file) = File::open(path) else {
+        return (0, 0);
+    };
+    let mut file_total = 0usize;
+    let mut visible = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        file_total += 1;
+        if visibility.permits(&line) {
+            visible += 1;
+        }
+    }
+    (visible, file_total)
+}
+
+pub(crate) fn lines_in_range_filtered(
+    path: &Path,
+    start: usize,
+    count: usize,
+    visibility: LogLevelVisibility,
+) -> Vec<String> {
+    if visibility.all_enabled() {
+        return lines_in_range(path, start, count);
+    }
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut idx = 0usize;
+    for_each_matching_line(path, visibility, |line| {
+        if idx >= start {
+            out.push(line.to_string());
+            if out.len() == count {
+                return false;
+            }
+        }
+        idx += 1;
+        true
+    });
+    out
 }
 
 #[cfg(test)]
@@ -495,6 +618,107 @@ mod tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "2026-08-24T08:41:00.000Z INFO hello\n");
         TEST_PATH.with(|cell| *cell.borrow_mut() = None);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn parse_log_level_reads_second_token() {
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z ERROR boom"),
+            Some(Level::Error)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z WARN careful"),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z INFO hello"),
+            Some(Level::Info)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z DEBUG detail"),
+            Some(Level::Debug)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z TRACE tiny"),
+            Some(Level::Trace)
+        );
+    }
+
+    #[test]
+    fn parse_log_level_rejects_garbage_and_missing_level() {
+        assert_eq!(parse_log_level("not a log line"), None);
+        assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z"), None);
+        assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z NOPE x"), None);
+        assert_eq!(parse_log_level(""), None);
+    }
+
+    #[test]
+    fn filtered_count_and_range_skip_hidden_levels() {
+        let path = temp_log_path("filter");
+        std::fs::write(
+            &path,
+            concat!(
+                "2026-08-24T08:41:00.000Z ERROR e1
+",
+                "2026-08-24T08:41:00.000Z INFO i1
+",
+                "2026-08-24T08:41:00.000Z WARN w1
+",
+                "2026-08-24T08:41:00.000Z INFO i2
+",
+                "plain line
+",
+            ),
+        )
+        .unwrap();
+        let vis = LogLevelVisibility {
+            error: true,
+            warn: true,
+            info: false,
+        };
+        assert_eq!(count_visible_and_file_lines(&path, vis), (2, 5));
+        assert_eq!(
+            lines_in_range_filtered(&path, 0, 10, vis),
+            vec![
+                "2026-08-24T08:41:00.000Z ERROR e1".to_string(),
+                "2026-08-24T08:41:00.000Z WARN w1".to_string(),
+            ]
+        );
+        assert_eq!(
+            lines_in_range_filtered(&path, 1, 1, vis),
+            vec!["2026-08-24T08:41:00.000Z WARN w1".to_string()]
+        );
+        let all = LogLevelVisibility::default();
+        assert_eq!(
+            count_visible_and_file_lines(&path, all).0,
+            count_non_empty_lines(&path)
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn bare_legacy_lines_follow_info_visibility() {
+        let path = temp_log_path("bare-legacy");
+        std::fs::write(
+            &path,
+            concat!(
+                "root window set to: CPU 1%\n",
+                "2026-08-24T08:41:00.000Z ERROR boom\n",
+                "root window set to: CPU 2%\n",
+            ),
+        )
+        .unwrap();
+        let hide_info = LogLevelVisibility {
+            error: true,
+            warn: true,
+            info: false,
+        };
+        assert_eq!(count_visible_and_file_lines(&path, hide_info), (1, 3));
+        assert_eq!(
+            lines_in_range_filtered(&path, 0, 10, hide_info),
+            vec!["2026-08-24T08:41:00.000Z ERROR boom".to_string()]
+        );
         cleanup(&path);
     }
 }
