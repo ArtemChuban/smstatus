@@ -281,9 +281,10 @@ pub(super) fn expected_param_text_overlay(
     buf
 }
 
-const NORMAL_HINT_MODULES: &str =
-    "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?";
-const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_LOGS: &str =
+    "Scroll: \u{2191}/\u{2193} | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?";
 const HELP_HINT: &str = "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";
 
 const BASELINE_HEIGHT: u16 = 13;
@@ -303,7 +304,11 @@ pub(super) fn render(app: &App, width: u16, height: u16) -> Buffer {
         .clone()
 }
 
-pub(super) fn render_with_log(app: &App, width: u16, height: u16) -> Buffer {
+pub(super) fn render_with_log(app: &mut App, width: u16, height: u16) -> Buffer {
+    app.refresh_log_history();
+    if app.logs_follow {
+        app.sync_logs_follow();
+    }
     render_terminal(app, width, height)
         .backend()
         .buffer()
@@ -326,6 +331,15 @@ pub(super) fn with_reversed_params_row(mut buffer: Buffer, y: u16, width: u16) -
     let content_w = (rw as u16).saturating_sub(2);
     buffer.set_style(
         Rect::new(x, y, content_w, 1),
+        Style::default().add_modifier(Modifier::REVERSED),
+    );
+    buffer
+}
+
+pub(super) fn with_reversed_logs_row(mut buffer: Buffer, y: u16, width: u16) -> Buffer {
+    let content_w = width.saturating_sub(4);
+    buffer.set_style(
+        Rect::new(2, y, content_w, 1),
         Style::default().add_modifier(Modifier::REVERSED),
     );
     buffer

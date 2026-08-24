@@ -33,6 +33,8 @@ fn run_inner() -> crate::error::Result<()> {
         app.refresh_daemon_status(crate::daemon::status());
         app.poll_pending_start();
         app.poll_config_changes();
+        app.refresh_log_history();
+        app.sync_logs_follow();
         let completed = guard.terminal.draw(|frame| ui::draw(frame, &app))?;
         app.modules_viewport_height = ui::modules_viewport_height(completed.area.height);
         app.overlay_viewport_height = ui::overlay_viewport_height(completed.area.height);

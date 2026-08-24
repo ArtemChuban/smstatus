@@ -176,3 +176,59 @@ fn no_module_row_is_reversed_styled_when_selection_is_none() {
         }
     }
 }
+
+#[test]
+fn draw_logs_scrolled_up_shows_older_seeded_lines() {
+    seed_log_lines(&["old0", "old1", "old2", "new3", "new4"]);
+    let mut app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        panel_focus: PanelFocus::Logs,
+        logs_follow: false,
+        logs_scroll_offset: 0,
+        logs_selected_index: Some(0),
+        ..App::default()
+    };
+    let buffer = render_with_log(&mut app, 70, BASELINE_HEIGHT);
+    let expected_buf = with_reversed_logs_row(
+        expected(
+            70,
+            BASELINE_HEIGHT,
+            Some(DaemonStatus::Stopped),
+            "separator: unknown",
+            "modules unknown",
+            &[],
+            "config",
+            &[],
+            &["old0", "old1", "old2"],
+            NORMAL_HINT_LOGS,
+        ),
+        7,
+        70,
+    );
+    assert_eq!(buffer, expected_buf);
+}
+
+#[test]
+fn draw_logs_follow_still_shows_newest_tail_when_unfocused() {
+    seed_log_lines(&["old0", "old1", "old2", "new3", "new4"]);
+    let mut app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        logs_follow: true,
+        ..App::default()
+    };
+    assert_eq!(
+        render_with_log(&mut app, 70, BASELINE_HEIGHT),
+        expected(
+            70,
+            BASELINE_HEIGHT,
+            Some(DaemonStatus::Stopped),
+            "separator: unknown",
+            "modules unknown",
+            &[],
+            "config",
+            &[],
+            &["old2", "new3", "new4"],
+            NORMAL_HINT_MODULES,
+        )
+    );
+}
