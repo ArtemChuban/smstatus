@@ -161,7 +161,7 @@ pub(super) fn modules_title(app: &App, viewport_height: usize) -> String {
 }
 
 pub(super) fn logs_title(app: &App, viewport_height: usize) -> String {
-    let total = app.log_history.len();
+    let total = app.logs_total;
     let text = if total == 0 {
         "logs".to_string()
     } else if viewport_height == 0 {
@@ -401,31 +401,25 @@ pub(super) fn logs_view_offset(app: &App, history_len: usize, viewport_height: u
     }
 }
 
-pub(super) fn logs_view_offset_and_selection(
-    app: &App,
-    history_len: usize,
-    viewport_height: usize,
-) -> (usize, Option<usize>) {
-    (
-        logs_view_offset(app, history_len, viewport_height),
-        app.logs_selected_index,
-    )
-}
-
 pub(super) fn visible_log_lines(
     app: &App,
     history: &[String],
     width: u16,
     viewport_height: usize,
 ) -> Vec<Line<'static>> {
-    let (offset, selected_in_history) =
-        logs_view_offset_and_selection(app, history.len(), viewport_height);
+    let total = app.logs_total;
+    let abs_offset = logs_view_offset(app, total, viewport_height);
+    let loaded_from = app.logs_loaded_from;
+    let rel_offset = abs_offset.saturating_sub(loaded_from);
     let selected = if app.panel_focus == PanelFocus::Logs {
-        selected_in_history
+        app.logs_selected_index.and_then(|abs| {
+            abs.checked_sub(loaded_from)
+                .filter(|rel| *rel < history.len())
+        })
     } else {
         None
     };
-    let mut lines = styled_list_lines(history, selected, offset, viewport_height, width);
+    let mut lines = styled_list_lines(history, selected, rel_offset, viewport_height, width);
     while lines.len() < viewport_height {
         lines.push(Line::from(String::new()));
     }

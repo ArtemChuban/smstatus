@@ -20,7 +20,7 @@ use render::{
 };
 
 #[cfg(test)]
-use layout::{LOGS_BORDER_ROWS, OUTER_BORDER_ROWS, overlay_rect};
+use layout::{OUTER_BORDER_ROWS, overlay_rect};
 #[cfg(test)]
 use overlay::{PARAM_TEXT_OVERLAY_HEIGHT, param_text_overlay_rect};
 #[cfg(test)]

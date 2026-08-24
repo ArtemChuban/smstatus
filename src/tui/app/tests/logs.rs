@@ -1,5 +1,5 @@
 use super::*;
-use crate::tui::app::PanelFocus;
+use crate::tui::app::{LOGS_CHUNK_LINES, PanelFocus};
 
 #[test]
 fn tab_focuses_logs_and_sets_follow() {
@@ -54,6 +54,7 @@ fn up_from_newest_clears_follow_and_down_restores_it() {
     app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
     assert!(app.logs_follow);
     assert_eq!(app.logs_selected_index, Some(4));
+    assert_eq!(app.logs_total, 5);
 
     app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
     assert!(!app.logs_follow);
@@ -126,6 +127,7 @@ fn refresh_keeps_selected_line_when_new_log_appended() {
 
     std::fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
     app.refresh_log_history();
+    assert_eq!(app.logs_total, 5);
     assert_eq!(app.logs_selected_index, Some(1));
     assert_eq!(app.log_history[1], selected);
 }
@@ -151,7 +153,39 @@ fn refresh_keeps_selected_line_when_history_drops_oldest() {
 
     std::fs::write(&path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
     app.refresh_log_history();
+    assert_eq!(app.logs_total, 5);
     assert_eq!(app.logs_selected_index, Some(0));
-    assert_eq!(app.log_history[0], selected);
+    let rel = app.logs_selected_index.unwrap() - app.logs_loaded_from;
+    assert_eq!(app.log_history[rel], selected);
     assert_eq!(app.logs_scroll_offset, 0);
+}
+
+#[test]
+fn scrolling_up_past_chunk_loads_older_lines_with_full_total() {
+    install_test_log();
+    let path = crate::logging::current_log_path().expect("test log path");
+    let mut content = String::new();
+    let total = LOGS_CHUNK_LINES + 50;
+    for i in 0..total {
+        content.push_str(&format!("line{i}\n"));
+    }
+    std::fs::write(&path, content).unwrap();
+
+    let mut app = App {
+        logs_viewport_height: 3,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.logs_total, total);
+    assert!(app.log_history.len() <= LOGS_CHUNK_LINES.max(6));
+    assert!(app.logs_loaded_from > 0);
+
+    // Walk up past the initially loaded window.
+    for _ in 0..(app.logs_selected_index.unwrap() + 1) {
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+    }
+    assert_eq!(app.logs_selected_index, Some(0));
+    assert_eq!(app.logs_loaded_from, 0);
+    assert_eq!(app.logs_total, total);
+    assert!(app.log_history.len() >= total.min(LOGS_CHUNK_LINES + 50));
 }
