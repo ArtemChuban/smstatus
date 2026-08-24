@@ -105,7 +105,7 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
                 "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Logs => Cow::Borrowed(
-                "Scroll: \u{2191}/\u{2193} | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?",
+                "Scroll: \u{2191}/\u{2193} | Levels: e/w/i | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?",
             ),
         },
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
@@ -165,16 +165,32 @@ pub(super) fn modules_title(app: &App, viewport_height: usize) -> String {
 pub(super) fn logs_title(app: &App, viewport_height: usize) -> String {
     let total = app.logs_total;
     let text = if total == 0 {
-        "logs".to_string()
+        if app.logs_filter_active() && app.logs_file_total > 0 {
+            format!("logs 0 of {}", app.logs_file_total)
+        } else {
+            "logs".to_string()
+        }
     } else if viewport_height == 0 {
-        format!("logs {total}")
+        if app.logs_filter_active() {
+            format!("logs {total} of {}", app.logs_file_total)
+        } else {
+            format!("logs {total}")
+        }
     } else {
         let (start, end, _) = module_window(
             total,
             logs_view_offset(app, total, viewport_height),
             viewport_height,
         );
-        format!("logs {}-{end}/{total}", start + 1)
+        if app.logs_filter_active() {
+            format!(
+                "logs {}-{end}/{total} of {}",
+                start + 1,
+                app.logs_file_total
+            )
+        } else {
+            format!("logs {}-{end}/{total}", start + 1)
+        }
     };
     boxed_title(&text)
 }
@@ -369,6 +385,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
             }
             PanelFocus::Logs => {
                 lines.push("Scroll logs: \u{2191}/\u{2193}".to_string());
+                lines.push("Toggle ERROR/WARN/INFO: e/w/i".to_string());
                 lines.push("Back to modules: Esc/\u{2190}/Tab".to_string());
             }
         },

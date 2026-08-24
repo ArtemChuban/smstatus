@@ -141,6 +141,10 @@ pub(super) struct App {
     pub(super) logs_loaded_from: usize,
     /// Total non-empty lines in the log file (not just the loaded window).
     pub(super) logs_total: usize,
+    pub(super) logs_file_total: usize,
+    pub(super) logs_show_error: bool,
+    pub(super) logs_show_warn: bool,
+    pub(super) logs_show_info: bool,
     pub(in crate::tui) log_history: Vec<String>,
 }
 
@@ -181,6 +185,10 @@ impl Default for App {
             logs_viewport_height: 0,
             logs_loaded_from: 0,
             logs_total: 0,
+            logs_file_total: 0,
+            logs_show_error: true,
+            logs_show_warn: true,
+            logs_show_info: true,
             log_history: Vec::new(),
         }
     }

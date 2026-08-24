@@ -363,6 +363,118 @@ pub(crate) fn parse_log_level(line: &str) -> Option<Level> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LogLevelVisibility {
+    pub error: bool,
+    pub warn: bool,
+    pub info: bool,
+}
+
+impl Default for LogLevelVisibility {
+    fn default() -> Self {
+        Self {
+            error: true,
+            warn: true,
+            info: true,
+        }
+    }
+}
+
+impl LogLevelVisibility {
+    pub(crate) fn all_enabled(self) -> bool {
+        self.error && self.warn && self.info
+    }
+
+    pub(crate) fn permits(self, line: &str) -> bool {
+        match parse_log_level(line) {
+            None => true,
+            Some(Level::Error) => self.error,
+            Some(Level::Warn) => self.warn,
+            Some(Level::Info) => self.info,
+            Some(Level::Debug) | Some(Level::Trace) => true,
+        }
+    }
+}
+
+fn for_each_matching_line(
+    path: &Path,
+    visibility: LogLevelVisibility,
+    mut f: impl FnMut(&str) -> bool,
+) {
+    let Ok(file) = File::open(path) else {
+        return;
+    };
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if !visibility.permits(&line) {
+            continue;
+        }
+        if !f(&line) {
+            break;
+        }
+    }
+}
+
+pub(crate) fn count_visible_and_file_lines(
+    path: &Path,
+    visibility: LogLevelVisibility,
+) -> (usize, usize) {
+    if visibility.all_enabled() {
+        let n = count_non_empty_lines(path);
+        return (n, n);
+    }
+    let Ok(file) = File::open(path) else {
+        return (0, 0);
+    };
+    let mut file_total = 0usize;
+    let mut visible = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        file_total += 1;
+        if visibility.permits(&line) {
+            visible += 1;
+        }
+    }
+    (visible, file_total)
+}
+
+pub(crate) fn lines_in_range_filtered(
+    path: &Path,
+    start: usize,
+    count: usize,
+    visibility: LogLevelVisibility,
+) -> Vec<String> {
+    if visibility.all_enabled() {
+        return lines_in_range(path, start, count);
+    }
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut idx = 0usize;
+    for_each_matching_line(path, visibility, |line| {
+        if idx >= start {
+            out.push(line.to_string());
+            if out.len() == count {
+                return false;
+            }
+        }
+        idx += 1;
+        true
+    });
+    out
+}
+
 #[cfg(test)]
 fn message_from_log_line(line: &str) -> String {
     let mut parts = line.splitn(3, ' ');
@@ -542,5 +654,51 @@ mod tests {
         assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z"), None);
         assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z NOPE x"), None);
         assert_eq!(parse_log_level(""), None);
+    }
+
+    #[test]
+    fn filtered_count_and_range_skip_hidden_levels() {
+        let path = temp_log_path("filter");
+        std::fs::write(
+            &path,
+            concat!(
+                "2026-08-24T08:41:00.000Z ERROR e1
+",
+                "2026-08-24T08:41:00.000Z INFO i1
+",
+                "2026-08-24T08:41:00.000Z WARN w1
+",
+                "2026-08-24T08:41:00.000Z INFO i2
+",
+                "plain line
+",
+            ),
+        )
+        .unwrap();
+        let vis = LogLevelVisibility {
+            error: true,
+            warn: true,
+            info: false,
+        };
+        assert_eq!(count_visible_and_file_lines(&path, vis), (3, 5));
+        assert_eq!(count_visible_and_file_lines(&path, vis).0, 3);
+        assert_eq!(
+            lines_in_range_filtered(&path, 0, 10, vis),
+            vec![
+                "2026-08-24T08:41:00.000Z ERROR e1".to_string(),
+                "2026-08-24T08:41:00.000Z WARN w1".to_string(),
+                "plain line".to_string(),
+            ]
+        );
+        assert_eq!(
+            lines_in_range_filtered(&path, 1, 1, vis),
+            vec!["2026-08-24T08:41:00.000Z WARN w1".to_string()]
+        );
+        let all = LogLevelVisibility::default();
+        assert_eq!(
+            count_visible_and_file_lines(&path, all).0,
+            count_non_empty_lines(&path)
+        );
+        cleanup(&path);
     }
 }

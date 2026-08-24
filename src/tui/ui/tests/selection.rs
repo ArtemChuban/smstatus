@@ -238,3 +238,53 @@ fn draw_logs_follow_still_shows_newest_tail_when_unfocused() {
         )
     );
 }
+
+#[test]
+fn logs_title_includes_file_total_when_filtered() {
+    seed_log_lines(&[
+        "2026-08-24T08:41:00.000Z ERROR e1",
+        "2026-08-24T08:41:00.000Z INFO i1",
+        "2026-08-24T08:41:00.000Z WARN w1",
+    ]);
+    let mut app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        panel_focus: PanelFocus::Logs,
+        logs_follow: true,
+        logs_show_info: false,
+        ..App::default()
+    };
+    let _ = render_with_log(&mut app, 70, BASELINE_HEIGHT);
+    assert_eq!(app.logs_total, 2);
+    assert_eq!(app.logs_file_total, 3);
+    let title = logs_title(&app, app.logs_viewport_height.max(1));
+    assert!(
+        title.contains("of 3"),
+        "expected file total in title, got {title}"
+    );
+}
+
+#[test]
+fn logs_title_shows_file_total_when_filter_hides_all_lines() {
+    seed_log_lines(&[
+        "2026-08-24T08:41:00.000Z ERROR e1",
+        "2026-08-24T08:41:00.000Z INFO i1",
+        "2026-08-24T08:41:00.000Z WARN w1",
+    ]);
+    let mut app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        panel_focus: PanelFocus::Logs,
+        logs_follow: true,
+        logs_show_error: false,
+        logs_show_warn: false,
+        logs_show_info: false,
+        ..App::default()
+    };
+    let _ = render_with_log(&mut app, 70, BASELINE_HEIGHT);
+    assert_eq!(app.logs_total, 0);
+    assert_eq!(app.logs_file_total, 3);
+    let title = logs_title(&app, app.logs_viewport_height.max(1));
+    assert!(
+        title.contains("0 of 3"),
+        "expected empty filtered title to keep file total, got {title}"
+    );
+}
