@@ -349,6 +349,20 @@ fn parse_leading_timestamp(line: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+pub(crate) fn parse_log_level(line: &str) -> Option<Level> {
+    let mut parts = line.splitn(3, ' ');
+    let _ts = parts.next()?;
+    let level = parts.next()?;
+    match level {
+        "ERROR" => Some(Level::Error),
+        "WARN" => Some(Level::Warn),
+        "INFO" => Some(Level::Info),
+        "DEBUG" => Some(Level::Debug),
+        "TRACE" => Some(Level::Trace),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 fn message_from_log_line(line: &str) -> String {
     let mut parts = line.splitn(3, ' ');
@@ -496,5 +510,37 @@ mod tests {
         assert_eq!(contents, "2026-08-24T08:41:00.000Z INFO hello\n");
         TEST_PATH.with(|cell| *cell.borrow_mut() = None);
         cleanup(&path);
+    }
+
+    #[test]
+    fn parse_log_level_reads_second_token() {
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z ERROR boom"),
+            Some(Level::Error)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z WARN careful"),
+            Some(Level::Warn)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z INFO hello"),
+            Some(Level::Info)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z DEBUG detail"),
+            Some(Level::Debug)
+        );
+        assert_eq!(
+            parse_log_level("2026-08-24T08:41:00.000Z TRACE tiny"),
+            Some(Level::Trace)
+        );
+    }
+
+    #[test]
+    fn parse_log_level_rejects_garbage_and_missing_level() {
+        assert_eq!(parse_log_level("not a log line"), None);
+        assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z"), None);
+        assert_eq!(parse_log_level("2026-08-24T08:41:00.000Z NOPE x"), None);
+        assert_eq!(parse_log_level(""), None);
     }
 }
