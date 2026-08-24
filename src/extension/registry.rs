@@ -29,7 +29,7 @@ fn backoff_for(count: u32) -> Duration {
     Duration::from_millis(u64::try_from(millis).unwrap_or(u64::MAX)).min(MAX_BACKOFF)
 }
 
-fn is_safe_module_name(name: &str) -> bool {
+fn is_safe_extension_name(name: &str) -> bool {
     if name.is_empty() || name.contains('\0') {
         return false;
     }
@@ -41,18 +41,18 @@ fn is_safe_module_name(name: &str) -> bool {
     }
 }
 
-pub(crate) struct HostModuleRegistry {
-    host_modules_dir: PathBuf,
+pub(crate) struct ExtensionRegistry {
+    extensions_dir: PathBuf,
     socket_dir: PathBuf,
     connections: Mutex<HashMap<String, UnixStream>>,
     children: Mutex<HashMap<String, Child>>,
     failures: Mutex<HashMap<String, FailureState>>,
 }
 
-impl HostModuleRegistry {
-    pub(crate) fn new(host_modules_dir: PathBuf, socket_dir: PathBuf) -> Self {
+impl ExtensionRegistry {
+    pub(crate) fn new(extensions_dir: PathBuf, socket_dir: PathBuf) -> Self {
         Self {
-            host_modules_dir,
+            extensions_dir,
             socket_dir,
             connections: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
@@ -61,10 +61,10 @@ impl HostModuleRegistry {
     }
 
     fn binary_path(&self, name: &str) -> Result<PathBuf, String> {
-        if !is_safe_module_name(name) {
-            return Err(format!("invalid host module name `{name}`"));
+        if !is_safe_extension_name(name) {
+            return Err(format!("invalid extension name `{name}`"));
         }
-        Ok(self.host_modules_dir.join(name))
+        Ok(self.extensions_dir.join(name))
     }
 
     fn socket_path(&self, name: &str) -> PathBuf {
@@ -87,7 +87,7 @@ impl HostModuleRegistry {
     fn spawn_and_connect(&self, name: &str) -> Result<UnixStream, String> {
         let binary = self.binary_path(name)?;
         if !binary.exists() {
-            return Err(format!("host module `{name}` is not installed"));
+            return Err(format!("extension `{name}` is not installed"));
         }
 
         let socket_path = self.socket_path(name);
@@ -99,7 +99,7 @@ impl HostModuleRegistry {
         let child = Command::new(&binary)
             .arg(&socket_path)
             .spawn()
-            .map_err(|e| format!("failed to spawn host module `{name}`: {e}"))?;
+            .map_err(|e| format!("failed to spawn extension `{name}`: {e}"))?;
         lock(&self.children).insert(name.to_string(), child);
 
         let deadline = Instant::now() + SPAWN_TIMEOUT;
@@ -107,7 +107,7 @@ impl HostModuleRegistry {
             if Instant::now() >= deadline {
                 self.kill_child(name);
                 return Err(format!(
-                    "host module `{name}` did not create its socket in time"
+                    "extension `{name}` did not create its socket in time"
                 ));
             }
             {
@@ -117,7 +117,7 @@ impl HostModuleRegistry {
                 {
                     children.remove(name);
                     return Err(format!(
-                        "host module `{name}` exited before creating its socket: {status}"
+                        "extension `{name}` exited before creating its socket: {status}"
                     ));
                 }
             }
@@ -144,15 +144,15 @@ impl HostModuleRegistry {
     }
 
     pub(crate) fn call(&self, name: &str, method: &str, payload: &str) -> Result<String, String> {
-        if !is_safe_module_name(name) {
-            return Err(format!("invalid host module name `{name}`"));
+        if !is_safe_extension_name(name) {
+            return Err(format!("invalid extension name `{name}`"));
         }
 
         if let Some(state) = lock(&self.failures).get(name)
             && Instant::now() < state.retry_after
         {
             return Err(format!(
-                "host module `{name}` is backing off after repeated failures"
+                "extension `{name}` is backing off after repeated failures"
             ));
         }
 
@@ -171,13 +171,13 @@ impl HostModuleRegistry {
             Ok((stream, value)) => Ok(self.on_success(name, stream, value)),
             Err(err) => {
                 self.record_failure(name);
-                Err(format!("host module `{name}` call failed: {err}"))
+                Err(format!("extension `{name}` call failed: {err}"))
             }
         }
     }
 }
 
-impl Drop for HostModuleRegistry {
+impl Drop for ExtensionRegistry {
     fn drop(&mut self) {
         let mut children = lock(&self.children);
         for (_, mut child) in children.drain() {
@@ -195,11 +195,11 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        crate::host_module::test_temp_dir("registry")
+        crate::extension::test_temp_dir("registry")
     }
 
-    fn echo_host_module_path() -> PathBuf {
-        if let Ok(path) = std::env::var("CARGO_BIN_EXE_echo_host_module") {
+    fn echo_extension_path() -> PathBuf {
+        if let Ok(path) = std::env::var("CARGO_BIN_EXE_echo") {
             return PathBuf::from(path);
         }
 
@@ -208,23 +208,23 @@ mod tests {
         if path.ends_with("deps") {
             path.pop();
         }
-        path.push("echo_host_module");
+        path.push("echo");
         assert!(
             path.exists(),
-            "echo_host_module fixture missing at {}; build with `cargo build -p smstatus --bin echo_host_module`",
+            "echo fixture missing at {}; build with `cargo build -p echo`",
             path.display()
         );
         path
     }
 
-    fn install_echo(host_modules_dir: &Path) {
-        std::fs::create_dir_all(host_modules_dir).unwrap();
-        symlink(echo_host_module_path(), host_modules_dir.join("echo")).unwrap();
+    fn install_echo(extensions_dir: &Path) {
+        std::fs::create_dir_all(extensions_dir).unwrap();
+        symlink(echo_extension_path(), extensions_dir.join("echo")).unwrap();
     }
 
-    fn install_failing(host_modules_dir: &Path, name: &str) {
-        std::fs::create_dir_all(host_modules_dir).unwrap();
-        let path = host_modules_dir.join(name);
+    fn install_failing(extensions_dir: &Path, name: &str) {
+        std::fs::create_dir_all(extensions_dir).unwrap();
+        let path = extensions_dir.join(name);
         std::fs::write(&path, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -232,11 +232,11 @@ mod tests {
     #[test]
     fn call_spawns_and_talks_to_the_echo_fixture() {
         let base = temp_dir();
-        let host_modules_dir = base.join("host_modules");
+        let extensions_dir = base.join("extensions");
         let socket_dir = base.join("sockets");
-        install_echo(&host_modules_dir);
+        install_echo(&extensions_dir);
 
-        let registry = HostModuleRegistry::new(host_modules_dir, socket_dir);
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
         let result = registry.call("echo", "ping", "hello").unwrap();
         assert_eq!(result, "hello");
     }
@@ -244,22 +244,22 @@ mod tests {
     #[test]
     fn call_reuses_a_live_connection_on_a_second_call() {
         let base = temp_dir();
-        let host_modules_dir = base.join("host_modules");
+        let extensions_dir = base.join("extensions");
         let socket_dir = base.join("sockets");
-        install_echo(&host_modules_dir);
+        install_echo(&extensions_dir);
 
-        let registry = HostModuleRegistry::new(host_modules_dir, socket_dir);
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
         assert_eq!(registry.call("echo", "ping", "one").unwrap(), "one");
         assert_eq!(registry.call("echo", "ping", "two").unwrap(), "two");
     }
 
     #[test]
-    fn call_on_uninstalled_module_fails_without_spawning() {
+    fn call_on_uninstalled_extension_fails_without_spawning() {
         let base = temp_dir();
-        let host_modules_dir = base.join("host_modules");
+        let extensions_dir = base.join("extensions");
         let socket_dir = base.join("sockets");
 
-        let registry = HostModuleRegistry::new(host_modules_dir, socket_dir.clone());
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir.clone());
         assert!(!registry.is_installed("missing"));
         let err = registry.call("missing", "ping", "hello").unwrap_err();
         assert!(err.contains("not installed"));
@@ -267,13 +267,13 @@ mod tests {
     }
 
     #[test]
-    fn call_rejects_path_escape_module_names() {
+    fn call_rejects_path_escape_extension_names() {
         let base = temp_dir();
-        let registry = HostModuleRegistry::new(base.join("host_modules"), base.join("sockets"));
+        let registry = ExtensionRegistry::new(base.join("extensions"), base.join("sockets"));
         for name in ["/usr/bin/id", "../etc/passwd", "a/b", ".", ".."] {
             let err = registry.call(name, "ping", "").unwrap_err();
             assert!(
-                err.contains("invalid host module name"),
+                err.contains("invalid extension name"),
                 "name {name:?} err {err}"
             );
             assert!(!registry.is_installed(name));
@@ -281,13 +281,13 @@ mod tests {
     }
 
     #[test]
-    fn call_on_a_module_that_exits_immediately_fails_instead_of_hanging() {
+    fn call_on_an_extension_that_exits_immediately_fails_instead_of_hanging() {
         let base = temp_dir();
-        let host_modules_dir = base.join("host_modules");
+        let extensions_dir = base.join("extensions");
         let socket_dir = base.join("sockets");
-        install_failing(&host_modules_dir, "broken");
+        install_failing(&extensions_dir, "broken");
 
-        let registry = HostModuleRegistry::new(host_modules_dir, socket_dir);
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
         let err = registry.call("broken", "ping", "hello").unwrap_err();
         assert!(!err.is_empty());
     }

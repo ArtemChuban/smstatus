@@ -5,7 +5,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiVie
 use x11rb::rust_connection::RustConnection;
 
 use crate::bindings::{DiskUsage, Host, MemUsage, TimeState, XkbState};
-use crate::host_module::HostModuleRegistry;
+use crate::extension::ExtensionRegistry;
 use crate::{sysinfo, x11};
 
 pub(crate) struct HostState {
@@ -14,29 +14,29 @@ pub(crate) struct HostState {
     limits: StoreLimits,
     connection: Option<Arc<RustConnection>>,
     http_agent: ureq::Agent,
-    host_modules: Arc<HostModuleRegistry>,
+    extensions: Arc<ExtensionRegistry>,
 }
 
 impl HostState {
     pub(crate) fn new(
         connection: Arc<RustConnection>,
         http_agent: ureq::Agent,
-        host_modules: Arc<HostModuleRegistry>,
+        extensions: Arc<ExtensionRegistry>,
     ) -> Self {
-        Self::with_connection(Some(connection), http_agent, host_modules)
+        Self::with_connection(Some(connection), http_agent, extensions)
     }
 
     pub(crate) fn new_without_display(
         http_agent: ureq::Agent,
-        host_modules: Arc<HostModuleRegistry>,
+        extensions: Arc<ExtensionRegistry>,
     ) -> Self {
-        Self::with_connection(None, http_agent, host_modules)
+        Self::with_connection(None, http_agent, extensions)
     }
 
     fn with_connection(
         connection: Option<Arc<RustConnection>>,
         http_agent: ureq::Agent,
-        host_modules: Arc<HostModuleRegistry>,
+        extensions: Arc<ExtensionRegistry>,
     ) -> Self {
         Self {
             wasi_ctx: WasiCtxBuilder::new().build(),
@@ -47,7 +47,7 @@ impl HostState {
                 .build(),
             connection,
             http_agent,
-            host_modules,
+            extensions,
         }
     }
 
@@ -99,13 +99,13 @@ impl Host for HostState {
             .map_err(|e| format!("failed to read response body: {e}"))
     }
 
-    fn call_host_module(
+    fn call_extension(
         &mut self,
-        module: String,
+        extension: String,
         method: String,
         payload: String,
     ) -> Result<String, String> {
-        self.host_modules.call(&module, &method, &payload)
+        self.extensions.call(&extension, &method, &payload)
     }
 }
 
@@ -130,26 +130,26 @@ mod tests {
         ureq::Agent::new_with_config(agent_config)
     }
 
-    fn host_modules() -> Arc<HostModuleRegistry> {
-        let dir = crate::host_module::test_temp_dir("host");
-        Arc::new(HostModuleRegistry::new(
-            dir.join("host_modules"),
+    fn extensions() -> Arc<ExtensionRegistry> {
+        let dir = crate::extension::test_temp_dir("host");
+        Arc::new(ExtensionRegistry::new(
+            dir.join("extensions"),
             dir.join("sockets"),
         ))
     }
 
     #[test]
     fn read_xkb_state_errors_without_display() {
-        let mut state = HostState::new_without_display(http_agent(), host_modules());
+        let mut state = HostState::new_without_display(http_agent(), extensions());
         let err = state.read_xkb_state().unwrap_err();
         assert!(err.contains("no display"));
     }
 
     #[test]
-    fn call_host_module_errors_when_not_installed() {
-        let mut state = HostState::new_without_display(http_agent(), host_modules());
+    fn call_extension_errors_when_not_installed() {
+        let mut state = HostState::new_without_display(http_agent(), extensions());
         let err = state
-            .call_host_module("missing".to_string(), "ping".to_string(), String::new())
+            .call_extension("missing".to_string(), "ping".to_string(), String::new())
             .unwrap_err();
         assert!(err.contains("not installed"));
     }

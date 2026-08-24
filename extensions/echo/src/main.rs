@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixListener;
 
-use smstatus::host_module::protocol;
+use smstatus::extension::protocol;
 
 fn main() {
     let socket_path = std::env::args()

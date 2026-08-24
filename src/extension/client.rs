@@ -49,7 +49,7 @@ mod tests {
 
     fn socket_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "smstatus-host-module-client-test-{}-{name}.sock",
+            "smstatus-extension-client-test-{}-{name}.sock",
             std::process::id()
         ))
     }
