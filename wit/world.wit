@@ -46,6 +46,8 @@ interface guest {
 
   required-host-api-version: func() -> host-api-version;
 
+  required-host-modules: func() -> list<string>;
+
   record metadata {
     display-name: string,
     version: string,
