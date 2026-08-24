@@ -44,6 +44,33 @@ jobs:
       - uses: taiki-e/install-action@just
       - run: just test-all
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ github.job }}
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage summary
+        run: |
+          just cov-all > coverage-summary.txt
+          {
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: HTML report
+        run: cargo llvm-cov report --html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: target/llvm-cov/html
+
   build:
     runs-on: ubuntu-latest
     steps:
