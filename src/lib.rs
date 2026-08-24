@@ -4,7 +4,7 @@ mod cli;
 mod config;
 mod daemon;
 mod error;
-pub mod extension;
+mod extension;
 mod host;
 mod lock;
 mod logging;

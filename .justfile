@@ -80,9 +80,12 @@ test-claude:
 test-fmt-common:
     cargo test -p fmt-common
 
+test-extension-protocol:
+    cargo test -p extension-protocol
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
-test-packages: test-fmt-common
+test-packages: test-fmt-common test-extension-protocol
 
 test-app:
     cargo build -p echo
@@ -96,7 +99,10 @@ cov-app:
 cov-fmt-common:
     cargo llvm-cov -p fmt-common --summary-only
 
-cov-packages: cov-fmt-common
+cov-extension-protocol:
+    cargo llvm-cov -p extension-protocol --summary-only
+
+cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
@@ -115,6 +121,6 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy -p fmt-common -- -D warnings
+    cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p smstatus -- -D warnings
+    cargo clippy -p smstatus -p echo -- -D warnings
