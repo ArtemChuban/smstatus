@@ -89,6 +89,24 @@ test-app:
 
 test-all: test-packages test-modules test-app
 
+cov-app:
+    cargo llvm-cov -p smstatus --summary-only
+
+cov-fmt-common:
+    cargo llvm-cov -p fmt-common --summary-only
+
+cov-packages: cov-fmt-common
+
+cov-modules:
+    cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
+
+cov-all:
+    cargo llvm-cov --workspace --summary-only
+
+# Pass --open to open the report in a browser after generation.
+cov-html *args:
+    cargo llvm-cov --workspace --html {{args}}
+
 fmt:
     cargo fmt --all
 
