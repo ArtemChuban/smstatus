@@ -62,9 +62,11 @@ impl App {
             self.push_action_message("cannot reorder modules: config path unknown".to_string());
             return;
         };
+        let Some(name) = modules.get(idx).cloned() else {
+            return;
+        };
         let mut new_order = modules.clone();
         new_order.swap(idx, target);
-        let name = modules[idx].clone();
         match crate::config::BarConfig::write_module_order(&path, &new_order) {
             Ok(()) => {
                 self.modules = Some(new_order);
@@ -213,10 +215,11 @@ impl App {
             self.push_action_message("no module selected to remove".to_string());
             return;
         };
-        self.mode = Mode::ConfirmingRemove {
-            index: idx,
-            name: modules[idx].clone(),
+        let Some(name) = modules.get(idx).cloned() else {
+            self.push_action_message("no module selected to remove".to_string());
+            return;
         };
+        self.mode = Mode::ConfirmingRemove { index: idx, name };
     }
 
     pub(super) fn handle_key_confirming_remove(&mut self, key: KeyEvent) {
@@ -239,7 +242,9 @@ impl App {
             self.push_action_message("cannot remove module: config path unknown".to_string());
             return;
         };
-        let name = modules[index].clone();
+        let Some(name) = modules.get(index).cloned() else {
+            return;
+        };
         match crate::config::BarConfig::write_module_remove(&path, &modules, index) {
             Ok(()) => {
                 let mut new_modules = modules;

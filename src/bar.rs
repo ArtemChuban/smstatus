@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,18 +11,14 @@ use crate::error::Result;
 use crate::host::HostState;
 use crate::logging;
 use crate::module::{ModuleRuntime, ModuleState};
-use crate::watcher::ReloadWatcher;
+use crate::watcher::{ReloadBatch, ReloadWatcher};
 use crate::x11::X11Bar;
 
 const FUEL_PER_TICK: u64 = 10_000_000;
 const DEFAULT_TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn run() -> Result<()> {
-    let mut wasm_config = Config::new();
-    wasm_config.wasm_component_model(true);
-    wasm_config.consume_fuel(true);
-    let engine = Engine::new(&wasm_config)?;
-
+    let engine = build_engine()?;
     let config_dir: PathBuf = crate::config::default_config_dir()?;
     let modules_dir = config_dir.join("modules");
     let config_path = config_dir.join("config.toml");
@@ -35,21 +31,9 @@ pub(crate) fn run() -> Result<()> {
         );
     }
 
-    let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    GuestModule::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
-        &mut linker,
-        |state: &mut HostState| state,
-    )?;
-
+    let linker = build_linker(&engine)?;
     let x11_bar = X11Bar::connect()?;
-
-    let http_agent = {
-        let agent_config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(10)))
-            .build();
-        ureq::Agent::new_with_config(agent_config)
-    };
+    let http_agent = build_http_agent();
 
     let runtime = ModuleRuntime::new(
         engine,
@@ -60,6 +44,64 @@ pub(crate) fn run() -> Result<()> {
         http_agent,
     );
 
+    let mut modules = start_modules(&runtime, &config)?;
+    let mut watcher = ReloadWatcher::new(&config_dir, config_path.clone(), modules_dir)?;
+    let mut last_logged = String::new();
+
+    loop {
+        let now = Instant::now();
+        for state in &mut modules {
+            runtime.tick(state, now)?;
+        }
+
+        let combined = combined_output(&modules, &separator);
+        x11_bar.set_status(&combined)?;
+
+        if combined != last_logged {
+            log::info!("root name set to: {combined}");
+            last_logged = combined;
+        }
+
+        let sleep_for = next_sleep_duration(&modules);
+
+        if let Some(batch) = watcher.wait_for_reload_or_timeout(sleep_for) {
+            modules = apply_reload_batch(
+                batch,
+                &runtime,
+                &config_path,
+                modules,
+                &mut config,
+                &mut separator,
+            );
+        }
+    }
+}
+
+fn build_engine() -> Result<Engine> {
+    let mut wasm_config = Config::new();
+    wasm_config.wasm_component_model(true);
+    wasm_config.consume_fuel(true);
+    Ok(Engine::new(&wasm_config)?)
+}
+
+fn build_linker(engine: &Engine) -> Result<Linker<HostState>> {
+    let mut linker = Linker::new(engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    GuestModule::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+        &mut linker,
+        |state: &mut HostState| state,
+    )?;
+    Ok(linker)
+}
+
+fn build_http_agent() -> ureq::Agent {
+    let agent_config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build();
+    ureq::Agent::new_with_config(agent_config)
+}
+
+fn start_modules(runtime: &ModuleRuntime, config: &BarConfig) -> Result<Vec<ModuleState>> {
     let mut modules = Vec::new();
     for entry in config.module_names()? {
         let (kind, name) = BarConfig::split_module_entry(&entry);
@@ -69,55 +111,51 @@ pub(crate) fn run() -> Result<()> {
             Err(err) => log::error!("failed to start module `{name}`: {err}"),
         }
     }
+    Ok(modules)
+}
 
-    let mut watcher = ReloadWatcher::new(&config_dir, config_path.clone(), modules_dir)?;
-    let mut last_logged = String::new();
+fn combined_output(modules: &[ModuleState], separator: &str) -> String {
+    modules
+        .iter()
+        .map(ModuleState::last_output)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(separator)
+}
 
-    loop {
-        let now = Instant::now();
+fn next_sleep_duration(modules: &[ModuleState]) -> Duration {
+    modules
+        .iter()
+        .map(|s| s.next_due().saturating_duration_since(Instant::now()))
+        .min()
+        .unwrap_or(DEFAULT_TICK_INTERVAL)
+}
 
-        for state in &mut modules {
-            runtime.tick(state, now)?;
-        }
-
-        let combined = modules
-            .iter()
-            .map(ModuleState::last_output)
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(&separator);
-
-        x11_bar.set_status(&combined)?;
-
-        if combined != last_logged {
-            log::info!("root name set to: {combined}");
-            last_logged = combined;
-        }
-
-        let sleep_for = modules
-            .iter()
-            .map(|s| s.next_due().saturating_duration_since(Instant::now()))
-            .min()
-            .unwrap_or(DEFAULT_TICK_INTERVAL);
-
-        if let Some(batch) = watcher.wait_for_reload_or_timeout(sleep_for) {
-            if batch.config {
-                match BarConfig::load(&config_path) {
-                    Ok(new_config) => {
-                        separator = new_config.separator();
-                        logging::set_retain_days(new_config.log_days());
-                        modules = runtime.reload(modules, &new_config, &batch.wasm_kinds);
-                        config = new_config;
-                    }
-                    Err(err) => {
-                        log::error!(
-                            "config reload failed ({err}); keeping previous configuration running"
-                        )
-                    }
-                }
-            } else if !batch.wasm_kinds.is_empty() {
-                modules = runtime.reload_wasm(modules, &batch.wasm_kinds, &config);
+fn apply_reload_batch(
+    batch: ReloadBatch,
+    runtime: &ModuleRuntime,
+    config_path: &Path,
+    modules: Vec<ModuleState>,
+    config: &mut BarConfig,
+    separator: &mut String,
+) -> Vec<ModuleState> {
+    if batch.config {
+        match BarConfig::load(config_path) {
+            Ok(new_config) => {
+                *separator = new_config.separator();
+                logging::set_retain_days(new_config.log_days());
+                let modules = runtime.reload(modules, &new_config, &batch.wasm_kinds);
+                *config = new_config;
+                modules
+            }
+            Err(err) => {
+                log::error!("config reload failed ({err}); keeping previous configuration running");
+                modules
             }
         }
+    } else if !batch.wasm_kinds.is_empty() {
+        runtime.reload_wasm(modules, &batch.wasm_kinds, config)
+    } else {
+        modules
     }
 }

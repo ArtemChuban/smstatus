@@ -12,7 +12,7 @@ impl BarConfig {
         let mut doc = content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-        doc["separator"] = toml_edit::value(new_value);
+        doc.insert("separator", toml_edit::value(new_value));
         atomic_write(path, &doc.to_string())
     }
 
@@ -59,10 +59,21 @@ impl BarConfig {
                         Some(indices.remove(0))
                     }
                 })
-                .expect("the content-equality check above guarantees a matching original index");
-            let value = originals[idx]
-                .take()
-                .expect("each original index is drained exactly once");
+                .ok_or_else(|| {
+                    format!(
+                        "{}: no remaining original position for module `{target_name}`",
+                        path.display()
+                    )
+                })?;
+            let value = originals
+                .get_mut(idx)
+                .and_then(Option::take)
+                .ok_or_else(|| {
+                    format!(
+                        "{}: original entry for module `{target_name}` already consumed",
+                        path.display()
+                    )
+                })?;
             array.push_formatted(value);
         }
 

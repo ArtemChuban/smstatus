@@ -129,14 +129,16 @@ impl BarConfig {
         let pos = order
             .iter()
             .position(|k| k == old_key)
-            .expect("contains_key just verified old_key");
+            .ok_or_else(|| format!("{}: key `{old_key}` missing in [{section}]", path.display()))?;
         let (old_fmt_key, item) = table
             .remove_entry(old_key)
-            .expect("contains_key just verified old_key");
+            .ok_or_else(|| format!("{}: key `{old_key}` missing in [{section}]", path.display()))?;
         let mut new_fmt_key = toml_edit::Key::new(new_key);
         *new_fmt_key.leaf_decor_mut() = old_fmt_key.leaf_decor().clone();
         *new_fmt_key.dotted_decor_mut() = old_fmt_key.dotted_decor().clone();
-        let trailing: Vec<(toml_edit::Key, toml_edit::Item)> = order[pos + 1..]
+        let trailing: Vec<(toml_edit::Key, toml_edit::Item)> = order
+            .get(pos + 1..)
+            .unwrap_or(&[])
             .iter()
             .filter_map(|k| table.remove_entry(k))
             .collect();
