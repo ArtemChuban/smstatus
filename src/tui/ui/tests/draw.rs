@@ -221,12 +221,12 @@ fn draw_renders_empty_action_log_as_blank_rows() {
 #[test]
 fn draw_renders_single_action_message_padded_to_capacity() {
     seed_log_lines(&["Starting smstatus..."]);
-    let app = App {
+    let mut app = App {
         daemon_status: Some(DaemonStatus::Running { pid: 42 }),
         ..App::default()
     };
     assert_eq!(
-        render_with_log(&app, 70, BASELINE_HEIGHT),
+        render_with_log(&mut app, 70, BASELINE_HEIGHT),
         expected(
             70,
             BASELINE_HEIGHT,
@@ -249,12 +249,12 @@ fn draw_renders_action_log_at_capacity() {
         "smstatus is already running",
         "Sent stop signal to smstatus (pid 42)",
     ]);
-    let app = App {
+    let mut app = App {
         daemon_status: Some(DaemonStatus::Stopped),
         ..App::default()
     };
     assert_eq!(
-        render_with_log(&app, 70, BASELINE_HEIGHT),
+        render_with_log(&mut app, 70, BASELINE_HEIGHT),
         expected(
             70,
             BASELINE_HEIGHT,

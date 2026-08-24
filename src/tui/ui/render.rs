@@ -98,10 +98,13 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
     match &app.mode {
         Mode::Normal => match app.panel_focus {
             PanelFocus::Modules => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Params => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
+            ),
+            PanelFocus::Logs => Cow::Borrowed(
+                "Scroll: \u{2191}/\u{2193} | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?",
             ),
         },
         Mode::EditingSeparator { .. } => Cow::Borrowed("Save: Enter | Cancel: Esc"),
@@ -335,6 +338,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Remove module: d".to_string());
                 lines.push("Edit separator: e".to_string());
                 lines.push("Focus params: Enter/\u{2192}".to_string());
+                lines.push("Focus logs: Tab".to_string());
             }
             PanelFocus::Params => {
                 lines.push("Select param: \u{2191}/\u{2193}".to_string());
@@ -342,7 +346,12 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Add param: a".to_string());
                 lines.push("Remove param: d".to_string());
                 lines.push("Rename key: r".to_string());
+                lines.push("Focus logs: Tab".to_string());
                 lines.push("Back to modules: Esc/\u{2190}".to_string());
+            }
+            PanelFocus::Logs => {
+                lines.push("Scroll logs: \u{2191}/\u{2193}".to_string());
+                lines.push("Back to modules: Esc/\u{2190}/Tab".to_string());
             }
         },
         Mode::Help => {
@@ -367,13 +376,29 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
     lines
 }
 
-pub(super) fn log_panel_lines(lines: Vec<String>) -> Vec<String> {
-    let mut lines = lines;
+pub(super) fn logs_view_offset_and_selection(
+    app: &App,
+    history_len: usize,
+) -> (usize, Option<usize>) {
+    let offset = if history_len == 0 {
+        0
+    } else {
+        app.logs_scroll_offset
+            .min(history_len.saturating_sub(LOGS_PANEL_LINES))
+    };
+    (offset, app.logs_selected_index)
+}
+
+pub(super) fn visible_log_lines(app: &App, history: &[String], width: u16) -> Vec<Line<'static>> {
+    let (offset, selected_in_history) = logs_view_offset_and_selection(app, history.len());
+    let selected = if app.panel_focus == PanelFocus::Logs {
+        selected_in_history
+    } else {
+        None
+    };
+    let mut lines = styled_list_lines(history, selected, offset, LOGS_PANEL_LINES, width);
     while lines.len() < LOGS_PANEL_LINES {
-        lines.push(String::new());
-    }
-    if lines.len() > LOGS_PANEL_LINES {
-        lines = lines.split_off(lines.len() - LOGS_PANEL_LINES);
+        lines.push(Line::from(String::new()));
     }
     lines
 }
