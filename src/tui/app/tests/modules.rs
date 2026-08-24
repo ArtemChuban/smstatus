@@ -95,6 +95,7 @@ fn select_previous_module_pulls_scroll_offset_up_when_selection_moves_above_view
 
 #[test]
 fn move_module_up_swaps_with_previous_and_persists() {
+    install_test_log();
     let path = unique_temp_path("move-up");
     std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
     let mut app = App {
@@ -120,7 +121,7 @@ fn move_module_up_swaps_with_previous_and_persists() {
         ])
     );
     assert_eq!(app.selected_index, Some(0));
-    assert_eq!(app.action_log, vec!["Moved disk up"]);
+    assert_eq!(action_log(), vec!["Moved disk up"]);
     let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
     let names: Vec<&str> = doc["modules"]
         .as_array()
@@ -133,6 +134,7 @@ fn move_module_up_swaps_with_previous_and_persists() {
 
 #[test]
 fn move_module_down_swaps_with_next_and_persists() {
+    install_test_log();
     let path = unique_temp_path("move-down");
     std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
     let mut app = App {
@@ -157,11 +159,12 @@ fn move_module_down_swaps_with_next_and_persists() {
         ])
     );
     assert_eq!(app.selected_index, Some(2));
-    assert_eq!(app.action_log, vec!["Moved disk down"]);
+    assert_eq!(action_log(), vec!["Moved disk down"]);
 }
 
 #[test]
 fn move_module_up_at_top_is_noop_no_write_no_log() {
+    install_test_log();
     let path = unique_temp_path("move-up-top-noop");
     let mut app = App {
         config_path: Some(path),
@@ -171,11 +174,12 @@ fn move_module_up_at_top_is_noop_no_write_no_log() {
     };
     app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
     assert_eq!(app.selected_index, Some(0));
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn move_module_down_at_bottom_is_noop_no_write_no_log() {
+    install_test_log();
     let path = unique_temp_path("move-down-bottom-noop");
     let mut app = App {
         config_path: Some(path),
@@ -185,11 +189,12 @@ fn move_module_down_at_bottom_is_noop_no_write_no_log() {
     };
     app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL));
     assert_eq!(app.selected_index, Some(1));
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn move_module_without_config_path_logs_failure() {
+    install_test_log();
     let mut app = App {
         config_path: None,
         modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
@@ -198,7 +203,7 @@ fn move_module_without_config_path_logs_failure() {
     };
     app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
     assert_eq!(
-        app.action_log,
+        action_log(),
         vec!["cannot reorder modules: config path unknown"]
     );
     assert_eq!(
@@ -210,6 +215,7 @@ fn move_module_without_config_path_logs_failure() {
 
 #[test]
 fn move_module_when_write_fails_logs_failure_and_leaves_state_unchanged() {
+    install_test_log();
     let path = unique_temp_path("move-write-fails");
     let mut app = App {
         config_path: Some(path),
@@ -218,11 +224,11 @@ fn move_module_when_write_fails_logs_failure_and_leaves_state_unchanged() {
         ..App::default()
     };
     app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
-    assert_eq!(app.action_log.len(), 1);
+    assert_eq!(action_log().len(), 1);
     assert!(
-        app.action_log[0].starts_with("Failed to reorder modules:"),
+        action_log()[0].starts_with("Failed to reorder modules:"),
         "unexpected message: {}",
-        app.action_log[0]
+        action_log()[0]
     );
     assert_eq!(
         app.modules,
@@ -233,17 +239,19 @@ fn move_module_when_write_fails_logs_failure_and_leaves_state_unchanged() {
 
 #[test]
 fn move_module_is_noop_when_modules_is_none() {
+    install_test_log();
     let mut app = App {
         modules: None,
         selected_index: None,
         ..App::default()
     };
     app.handle_key(key(KeyCode::Up, KeyModifiers::CONTROL));
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn begin_add_module_without_modules_dir_pushes_message_and_stays_normal() {
+    install_test_log();
     let mut app = App {
         modules_dir: None,
         ..App::default()
@@ -251,13 +259,14 @@ fn begin_add_module_without_modules_dir_pushes_message_and_stays_normal() {
     app.begin_add_module();
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(
-        app.action_log,
+        action_log(),
         vec!["cannot add module: modules directory unknown"]
     );
 }
 
 #[test]
 fn begin_add_module_when_directory_missing_opens_empty_picker_without_message() {
+    install_test_log();
     let dir = unique_temp_path("modules-dir-missing");
     let mut app = App {
         modules_dir: Some(dir),
@@ -272,11 +281,12 @@ fn begin_add_module_when_directory_missing_opens_empty_picker_without_message() 
             scroll_offset: 0,
         }
     );
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn begin_add_module_lists_available_wasm_kinds_sorted_and_enters_adding_mode() {
+    install_test_log();
     let dir = unique_temp_path("modules-dir-with-kinds");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(dir.join("ram.wasm"), b"").unwrap();
@@ -295,7 +305,7 @@ fn begin_add_module_lists_available_wasm_kinds_sorted_and_enters_adding_mode() {
             scroll_offset: 0,
         }
     );
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
@@ -402,6 +412,7 @@ fn adding_module_enter_on_empty_list_is_a_noop() {
 
 #[test]
 fn esc_cancels_adding_module_without_log_message() {
+    install_test_log();
     let mut app = App {
         mode: Mode::AddingModule {
             available: vec!["a".to_string()],
@@ -412,7 +423,7 @@ fn esc_cancels_adding_module_without_log_message() {
     };
     app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
@@ -510,6 +521,7 @@ fn naming_module_instance_left_right_backspace_edit_buffer_like_separator_editin
 
 #[test]
 fn commit_add_module_with_empty_buffer_inserts_bare_kind() {
+    install_test_log();
     let path = unique_temp_path("add-empty-buffer");
     std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
     let mut app = App {
@@ -532,11 +544,12 @@ fn commit_add_module_with_empty_buffer_inserts_bare_kind() {
         Some(vec!["cpu".to_string(), "disk".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(app.action_log, vec!["Added disk"]);
+    assert_eq!(action_log(), vec!["Added disk"]);
 }
 
 #[test]
 fn commit_add_module_with_buffer_inserts_kind_hash_instance() {
+    install_test_log();
     let path = unique_temp_path("add-with-buffer");
     std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
     let mut app = App {
@@ -559,11 +572,12 @@ fn commit_add_module_with_buffer_inserts_kind_hash_instance() {
         Some(vec!["cpu".to_string(), "disk#root".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(app.action_log, vec!["Added disk#root"]);
+    assert_eq!(action_log(), vec!["Added disk#root"]);
 }
 
 #[test]
 fn commit_add_module_failure_logs_error_and_returns_to_normal_mode() {
+    install_test_log();
     let path = unique_temp_path("add-write-fails");
     let mut app = App {
         mode: Mode::NamingModuleInstance {
@@ -579,17 +593,18 @@ fn commit_add_module_failure_logs_error_and_returns_to_normal_mode() {
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.action_log.len(), 1);
+    assert_eq!(action_log().len(), 1);
     assert!(
-        app.action_log[0].starts_with("Failed to add module:"),
+        action_log()[0].starts_with("Failed to add module:"),
         "unexpected message: {}",
-        app.action_log[0]
+        action_log()[0]
     );
     assert_eq!(app.modules, Some(vec!["cpu".to_string()]));
 }
 
 #[test]
 fn esc_cancels_naming_module_instance_without_log_message() {
+    install_test_log();
     let mut app = App {
         mode: Mode::NamingModuleInstance {
             kind: "disk".to_string(),
@@ -600,11 +615,12 @@ fn esc_cancels_naming_module_instance_without_log_message() {
     };
     app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn begin_remove_module_with_no_selection_pushes_message_and_stays_normal() {
+    install_test_log();
     let mut app = App {
         modules: None,
         selected_index: None,
@@ -612,11 +628,12 @@ fn begin_remove_module_with_no_selection_pushes_message_and_stays_normal() {
     };
     app.begin_remove_module();
     assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.action_log, vec!["no module selected to remove"]);
+    assert_eq!(action_log(), vec!["no module selected to remove"]);
 }
 
 #[test]
 fn begin_remove_module_arms_confirming_remove_without_log_message() {
+    install_test_log();
     let mut app = App {
         modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
         selected_index: Some(1),
@@ -630,11 +647,12 @@ fn begin_remove_module_arms_confirming_remove_without_log_message() {
             name: "disk".to_string(),
         }
     );
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
 }
 
 #[test]
 fn confirming_remove_any_other_key_cancels_silently() {
+    install_test_log();
     let mut app = App {
         modules: Some(vec!["cpu".to_string(), "disk".to_string()]),
         selected_index: Some(1),
@@ -646,7 +664,7 @@ fn confirming_remove_any_other_key_cancels_silently() {
     };
     app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
-    assert!(app.action_log.is_empty());
+    assert!(action_log().is_empty());
     assert_eq!(
         app.modules,
         Some(vec!["cpu".to_string(), "disk".to_string()])
@@ -655,6 +673,7 @@ fn confirming_remove_any_other_key_cancels_silently() {
 
 #[test]
 fn confirming_remove_second_d_removes_and_keeps_selection_on_shifted_entry() {
+    install_test_log();
     let path = unique_temp_path("remove-shift");
     std::fs::write(&path, "modules = [\"cpu\", \"disk\", \"battery\"]\n").unwrap();
     let mut app = App {
@@ -680,11 +699,12 @@ fn confirming_remove_second_d_removes_and_keeps_selection_on_shifted_entry() {
         Some(vec!["cpu".to_string(), "battery".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(app.action_log, vec!["Removed disk"]);
+    assert_eq!(action_log(), vec!["Removed disk"]);
 }
 
 #[test]
 fn confirming_remove_on_the_only_remaining_entry_clears_selection() {
+    install_test_log();
     let path = unique_temp_path("remove-only-entry");
     std::fs::write(&path, "modules = [\"cpu\"]\n").unwrap();
     let mut app = App {
@@ -703,11 +723,12 @@ fn confirming_remove_on_the_only_remaining_entry_clears_selection() {
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.modules, Some(vec![]));
     assert_eq!(app.selected_index, None);
-    assert_eq!(app.action_log, vec!["Removed cpu"]);
+    assert_eq!(action_log(), vec!["Removed cpu"]);
 }
 
 #[test]
 fn confirming_remove_failure_pushes_message_and_leaves_modules_unchanged() {
+    install_test_log();
     let path = unique_temp_path("remove-write-fails");
     let mut app = App {
         config_path: Some(path),
@@ -722,11 +743,11 @@ fn confirming_remove_failure_pushes_message_and_leaves_modules_unchanged() {
     app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
 
     assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.action_log.len(), 1);
+    assert_eq!(action_log().len(), 1);
     assert!(
-        app.action_log[0].starts_with("Failed to remove module:"),
+        action_log()[0].starts_with("Failed to remove module:"),
         "unexpected message: {}",
-        app.action_log[0]
+        action_log()[0]
     );
     assert_eq!(
         app.modules,

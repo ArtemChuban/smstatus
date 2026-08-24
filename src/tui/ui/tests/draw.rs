@@ -196,9 +196,9 @@ fn draw_renders_editing_prompt_with_empty_buffer() {
 
 #[test]
 fn draw_renders_empty_action_log_as_blank_rows() {
+    install_test_log();
     let app = App {
         daemon_status: Some(DaemonStatus::Stopped),
-        action_log: vec![],
         ..App::default()
     };
     assert_eq!(
@@ -220,13 +220,13 @@ fn draw_renders_empty_action_log_as_blank_rows() {
 
 #[test]
 fn draw_renders_single_action_message_padded_to_capacity() {
+    seed_log_lines(&["Starting smstatus..."]);
     let app = App {
         daemon_status: Some(DaemonStatus::Running { pid: 42 }),
-        action_log: vec!["Starting smstatus...".to_string()],
         ..App::default()
     };
     assert_eq!(
-        render(&app, 70, BASELINE_HEIGHT),
+        render_with_log(&app, 70, BASELINE_HEIGHT),
         expected(
             70,
             BASELINE_HEIGHT,
@@ -244,17 +244,17 @@ fn draw_renders_single_action_message_padded_to_capacity() {
 
 #[test]
 fn draw_renders_action_log_at_capacity() {
+    seed_log_lines(&[
+        "Starting smstatus...",
+        "smstatus is already running",
+        "Sent stop signal to smstatus (pid 42)",
+    ]);
     let app = App {
         daemon_status: Some(DaemonStatus::Stopped),
-        action_log: vec![
-            "Starting smstatus...".to_string(),
-            "smstatus is already running".to_string(),
-            "Sent stop signal to smstatus (pid 42)".to_string(),
-        ],
         ..App::default()
     };
     assert_eq!(
-        render(&app, 70, BASELINE_HEIGHT),
+        render_with_log(&app, 70, BASELINE_HEIGHT),
         expected(
             70,
             BASELINE_HEIGHT,
