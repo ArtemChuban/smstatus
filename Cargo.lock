@@ -2506,6 +2506,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-time"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "extension-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
