@@ -9,6 +9,7 @@ mod host;
 mod install;
 mod lock;
 mod logging;
+mod manifest;
 mod meta;
 mod module;
 mod probe;
