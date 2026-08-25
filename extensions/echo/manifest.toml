@@ -1,4 +1,4 @@
 name = "echo"
 version = "0.1.0"
 author = "ArtemChuban"
-required_host_api_version = { major = 2, minor = 0 }
+extensions-api = { major = 0, minor = 1 }

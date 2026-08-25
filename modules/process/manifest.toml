@@ -2,5 +2,5 @@ name = "process"
 display_name = "Process"
 version = "0.1.0"
 author = "ArtemChuban"
-required_host_api_version = { major = 2, minor = 0 }
+modules-api = { major = 0, minor = 1 }
 required_extensions = ["process"]

@@ -642,13 +642,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "name = \"{name}\"\ndisplay_name = \"{display_name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\nrequired_extensions = [{exts}]\n"
+            "name = \"{name}\"\ndisplay_name = \"{display_name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nmodules-api = {{ major = 0, minor = 1 }}\nrequired_extensions = [{exts}]\n"
         )
     }
 
     fn extension_manifest_toml(name: &str, version: &str) -> String {
         format!(
-            "name = \"{name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\n"
+            "name = \"{name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nextensions-api = {{ major = 0, minor = 1 }}\n"
         )
     }
 
