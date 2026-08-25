@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_FORMAT: &str = "{used}/{total} used, {free} free";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -62,7 +62,7 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let text = match host::call_extension("mem", "read-mem-usage", "") {
+        let text = match host::call_extension("mem", "usage", "") {
             Ok(json) => match logic::parse_mem_usage_json(&json) {
                 Ok((total_bytes, used_bytes, free_bytes)) => FORMAT
                     .with(|f| logic::format_ram(&f.borrow(), total_bytes, used_bytes, free_bytes)),
