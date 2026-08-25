@@ -240,6 +240,76 @@ pub(crate) fn install_module(source: &str) -> Result<ModuleInstallOutcome> {
     install_module_into(&modules_dir, source)
 }
 
+#[derive(Debug)]
+pub(crate) enum ExtensionInstallOutcome {
+    Fresh { name: String },
+    Replace { name: String },
+}
+
+fn set_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)
+            .map_err(|e| format!("failed to read permissions for `{}`: {e}", path.display()))?
+            .permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(path, perms)
+            .map_err(|e| format!("failed to set executable bit on `{}`: {e}", path.display()))?;
+    }
+    let _ = path;
+    Ok(())
+}
+
+pub(crate) fn format_extension_outcome(outcome: &ExtensionInstallOutcome) -> String {
+    match outcome {
+        ExtensionInstallOutcome::Fresh { name } => {
+            format!("installed extension `{name}`")
+        }
+        ExtensionInstallOutcome::Replace { name } => {
+            format!("replaced extension `{name}`")
+        }
+    }
+}
+
+pub(crate) fn install_extension_into(
+    extensions_dir: &Path,
+    source: &str,
+) -> Result<ExtensionInstallOutcome> {
+    let resolved = resolve_source(source)?;
+    let name = artifact_stem(resolved.label())?;
+    let dest = extensions_dir.join(&name);
+    let replaced = dest.exists();
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create extensions dir `{}`: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::copy(resolved.path(), &dest).map_err(|e| {
+        format!(
+            "failed to install extension from `{}` to `{}`: {e}",
+            resolved.path().display(),
+            dest.display()
+        )
+    })?;
+    set_executable(&dest)?;
+
+    if replaced {
+        Ok(ExtensionInstallOutcome::Replace { name })
+    } else {
+        Ok(ExtensionInstallOutcome::Fresh { name })
+    }
+}
+
+pub(crate) fn install_extension(source: &str) -> Result<ExtensionInstallOutcome> {
+    let extensions_dir = crate::config::default_config_dir()?.join("extensions");
+    install_extension_into(&extensions_dir, source)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +505,68 @@ mod tests {
     fn resolve_source_rejects_missing_local_path() {
         let err = resolve_source("/no/such/smstatus-module.wasm").unwrap_err();
         assert!(err.to_string().contains("does not exist"));
+    }
+
+    fn find_or_build_echo() -> PathBuf {
+        static ECHO: OnceLock<PathBuf> = OnceLock::new();
+        ECHO.get_or_init(|| {
+            if let Ok(path) = std::env::var("CARGO_BIN_EXE_echo") {
+                let path = PathBuf::from(path);
+                if path.exists() {
+                    return path;
+                }
+            }
+
+            let mut dir = std::env::current_exe().unwrap();
+            dir.pop();
+            if dir.ends_with("deps") {
+                dir.pop();
+            }
+            let bin = dir.join("echo");
+            if bin.exists() {
+                return bin;
+            }
+
+            let target_dir = dir.parent().expect("debug dir has a target-dir parent");
+            let status = std::process::Command::new(env!("CARGO"))
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["build", "-p", "echo", "--target-dir"])
+                .arg(target_dir)
+                .status()
+                .expect("failed to spawn cargo build -p echo");
+            assert!(
+                status.success() && bin.exists(),
+                "echo fixture missing at {}; build with `cargo build -p echo --target-dir {}`",
+                bin.display(),
+                target_dir.display()
+            );
+            bin
+        })
+        .clone()
+    }
+
+    #[test]
+    fn install_extension_into_places_binary_where_is_installed_sees_it() {
+        use crate::extension::ExtensionRegistry;
+
+        let base = temp_modules_dir("ext-install");
+        let extensions_dir = base.join("extensions");
+        let echo = find_or_build_echo();
+
+        let outcome = install_extension_into(&extensions_dir, echo.to_str().unwrap()).unwrap();
+        match outcome {
+            ExtensionInstallOutcome::Fresh { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+
+        let registry = ExtensionRegistry::new(extensions_dir.clone(), base.join("sockets"));
+        assert!(registry.is_installed("echo"));
+
+        let again = install_extension_into(&extensions_dir, echo.to_str().unwrap()).unwrap();
+        match again {
+            ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        assert!(registry.is_installed("echo"));
     }
 }

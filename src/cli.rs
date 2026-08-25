@@ -27,9 +27,18 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ModuleCommands,
     },
+    Extension {
+        #[command(subcommand)]
+        command: ExtensionCommands,
+    },
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ModuleCommands {
+    Install { source: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ExtensionCommands {
     Install { source: String },
 }
