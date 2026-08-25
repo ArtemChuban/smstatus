@@ -199,7 +199,7 @@ fn fetch_usage_text(credentials_path: &str, url: &str, format: &str) -> Result<S
     let token = logic::extract_access_token(&credentials)?;
     let headers = logic::build_headers(&token);
     let payload = logic::http_get_payload(url, &headers);
-    let body = host::call_extension("http", "http-get", &payload)?;
+    let body = host::call_extension("http", "get", &payload)?;
     let usage = logic::parse_usage(&body)?;
     let session_reset_secs = logic::seconds_until(usage.session_resets_at.as_deref(), now_ms);
     let week_reset_secs = logic::seconds_until(usage.week_resets_at.as_deref(), now_ms);
