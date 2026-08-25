@@ -9,7 +9,7 @@ extension-protocol = { path = "packages/extension-protocol" }
 
 [package]
 name = "smstatus"
-version = "0.1.0"
+version = "2026.8.25"
 edition = "2024"
 
 [lib]
