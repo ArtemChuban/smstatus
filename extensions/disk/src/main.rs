@@ -56,7 +56,7 @@ fn disk_usage_json(usage: &DiskUsage) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
-    if request.method == "read-disk-usage" {
+    if request.method == "usage" {
         match disk_usage(&request.payload) {
             Ok(usage) => Response::Ok(disk_usage_json(&usage)),
             Err(msg) => Response::Err(msg),
@@ -140,9 +140,9 @@ mod tests {
     }
 
     #[test]
-    fn read_disk_usage_returns_err_for_missing_device() {
+    fn usage_returns_err_for_missing_device() {
         let response = handle_request(&Request {
-            method: "read-disk-usage".to_string(),
+            method: "usage".to_string(),
             payload: "/dev/smstatus-disk-missing-device".to_string(),
         });
         match response {
