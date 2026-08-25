@@ -10,26 +10,8 @@ interface guest {
     interval-ms: u32,
   }
 
-  record host-api-version {
-    major: u32,
-    minor: u32,
-    patch: u32,
-  }
-
   init: func(config: string);
   update: func() -> output;
-
-  required-host-api-version: func() -> host-api-version;
-
-  required-extensions: func() -> list<string>;
-
-  record metadata {
-    display-name: string,
-    version: string,
-    author: string,
-  }
-
-  get-metadata: func() -> metadata;
 
   record config-param {
     name: string,

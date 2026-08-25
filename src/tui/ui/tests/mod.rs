@@ -7,9 +7,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use super::*;
-use crate::bindings::Metadata;
 use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
+use crate::manifest::Metadata;
 use crate::tui::app::{
     App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
 };
