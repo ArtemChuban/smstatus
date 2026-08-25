@@ -84,7 +84,7 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let text = match host::call_extension("xkb", "read-xkb-state", "") {
+        let text = match host::call_extension("xkb", "state", "") {
             Ok(json) => match logic::parse_xkb_state_json(&json) {
                 Ok((active_group, symbols)) => {
                     match logic::extract_layout(&symbols, active_group) {
