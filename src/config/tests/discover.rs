@@ -1,12 +1,19 @@
 use super::*;
 
+fn write_module_pkg(dir: &std::path::Path, name: &str) {
+    let pkg = dir.join(name);
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("manifest.toml"), b"").unwrap();
+    std::fs::write(pkg.join("module.wasm"), b"").unwrap();
+}
+
 #[test]
 fn discover_module_kinds_lists_wasm_stems_sorted() {
     let dir = unique_temp_path("discover-sorted-dir");
     std::fs::create_dir(&dir).unwrap();
-    std::fs::write(dir.join("ram.wasm"), b"").unwrap();
-    std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
-    std::fs::write(dir.join("battery.wasm"), b"").unwrap();
+    write_module_pkg(&dir, "ram");
+    write_module_pkg(&dir, "cpu");
+    write_module_pkg(&dir, "battery");
 
     let result = discover_module_kinds(&dir).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -18,9 +25,12 @@ fn discover_module_kinds_lists_wasm_stems_sorted() {
 fn discover_module_kinds_ignores_non_wasm_files() {
     let dir = unique_temp_path("discover-ignores-non-wasm");
     std::fs::create_dir(&dir).unwrap();
-    std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
+    write_module_pkg(&dir, "cpu");
     std::fs::write(dir.join("README.md"), b"").unwrap();
     std::fs::write(dir.join("notes.txt"), b"").unwrap();
+    let incomplete = dir.join("ram");
+    std::fs::create_dir(&incomplete).unwrap();
+    std::fs::write(incomplete.join("manifest.toml"), b"").unwrap();
 
     let result = discover_module_kinds(&dir).unwrap();
     let _ = std::fs::remove_dir_all(&dir);

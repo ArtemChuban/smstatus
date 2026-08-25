@@ -64,7 +64,10 @@ impl ExtensionRegistry {
         if !is_safe_extension_name(name) {
             return Err(format!("invalid extension name `{name}`"));
         }
-        Ok(self.extensions_dir.join(name))
+        Ok(crate::manifest::extension_binary_path(
+            &self.extensions_dir,
+            name,
+        ))
     }
 
     fn socket_path(&self, name: &str) -> PathBuf {
@@ -239,15 +242,29 @@ mod tests {
     }
 
     fn install_echo(extensions_dir: &Path) {
-        std::fs::create_dir_all(extensions_dir).unwrap();
-        symlink(echo_extension_path(), extensions_dir.join("echo")).unwrap();
+        let pkg = extensions_dir.join("echo");
+        std::fs::create_dir_all(&pkg).unwrap();
+        symlink(echo_extension_path(), pkg.join("extension")).unwrap();
+        std::fs::write(
+            pkg.join("manifest.toml"),
+            "name = \"echo\"\nversion = \"0.1.0\"\nauthor = \"ArtemChuban\"\nrequired_host_api_version = { major = 2, minor = 0 }\n",
+        )
+        .unwrap();
     }
 
     fn install_failing(extensions_dir: &Path, name: &str) {
-        std::fs::create_dir_all(extensions_dir).unwrap();
-        let path = extensions_dir.join(name);
+        let pkg = extensions_dir.join(name);
+        std::fs::create_dir_all(&pkg).unwrap();
+        let path = pkg.join("extension");
         std::fs::write(&path, "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            pkg.join("manifest.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\n"
+            ),
+        )
+        .unwrap();
     }
 
     #[test]
