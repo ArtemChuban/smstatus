@@ -76,7 +76,7 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let text = match host::call_extension("time", "read-time-state", "") {
+        let text = match host::call_extension("time", "now", "") {
             Ok(json) => match logic::parse_time_state_json(&json) {
                 Ok((now_ms, offset_seconds)) => {
                     let dt = logic::to_local_datetime(now_ms, offset_seconds);
