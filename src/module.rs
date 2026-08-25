@@ -84,7 +84,7 @@ impl ModuleRuntime {
     }
 
     fn wasm_path(&self, kind: &str) -> PathBuf {
-        self.modules_dir.join(format!("{kind}.wasm"))
+        crate::manifest::module_wasm_path(&self.modules_dir, kind)
     }
 
     fn start_after_stable(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
@@ -103,18 +103,17 @@ impl ModuleRuntime {
     }
 
     pub(crate) fn start(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
-        let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
-        let (mut store, module) = self.instantiate(&component)?;
+        let manifest = crate::manifest::read_module_manifest(&self.modules_dir, kind)?;
+        version::check_compatible(
+            kind,
+            (
+                manifest.required_host_api_version.major,
+                manifest.required_host_api_version.minor,
+                0,
+            ),
+        )?;
 
-        let required = module
-            .smstatus_module_guest()
-            .call_required_host_api_version(&mut store)?;
-        version::check_compatible(kind, (required.major, required.minor, required.patch))?;
-
-        let required_extensions = module
-            .smstatus_module_guest()
-            .call_required_extensions(&mut store)?;
-        let missing = missing_extensions(&required_extensions, &self.extensions);
+        let missing = missing_extensions(&manifest.required_extensions, &self.extensions);
         if !missing.is_empty() {
             let list = missing.join(", ");
             return Err(format!(
@@ -122,6 +121,9 @@ impl ModuleRuntime {
             )
             .into());
         }
+
+        let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
+        let (mut store, module) = self.instantiate(&component)?;
 
         if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
             let schema = module
@@ -349,7 +351,16 @@ mod tests {
         let extensions_dir = dir.join("extensions");
         std::fs::create_dir_all(&extensions_dir).unwrap();
         for name in names {
-            std::fs::write(extensions_dir.join(name), "").unwrap();
+            let pkg = extensions_dir.join(name);
+            std::fs::create_dir_all(&pkg).unwrap();
+            std::fs::write(pkg.join("extension"), "").unwrap();
+            std::fs::write(
+                pkg.join("manifest.toml"),
+                format!(
+                    "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\n"
+                ),
+            )
+            .unwrap();
         }
         ExtensionRegistry::new(extensions_dir, dir.join("sockets"))
     }

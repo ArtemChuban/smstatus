@@ -5,4 +5,4 @@ wasmtime::component::bindgen!({
 
 pub(crate) use self::smstatus::module::host::Host;
 pub(crate) use Module as GuestModule;
-pub(crate) use exports::smstatus::module::guest::{ConfigParam, Metadata};
+pub(crate) use exports::smstatus::module::guest::ConfigParam;

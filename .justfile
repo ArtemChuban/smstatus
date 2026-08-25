@@ -221,3 +221,67 @@ clippy:
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
     cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
     cargo clippy -p smstatus -- -D warnings
+
+profile := "debug"
+target-dir := "target"
+wasm-out := target-dir / wasm-target / profile
+native-out := target-dir / profile
+dist-dir := "dist"
+
+pack-module name: (build-module-by-name name)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staging="{{dist-dir}}/staging/modules/{{name}}"
+    archive="{{dist-dir}}/{{name}}.tar.gz"
+    mkdir -p "$staging"
+    cp "modules/{{name}}/manifest.toml" "$staging/manifest.toml"
+    cp "{{wasm-out}}/{{name}}.wasm" "$staging/module.wasm"
+    tar -czf "$archive" -C "$staging" manifest.toml module.wasm
+    echo "packed $archive"
+
+[private]
+build-module-by-name name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flags=""
+    if [ "{{profile}}" = "release" ]; then flags="--release"; fi
+    cargo build -p "{{name}}" --target {{wasm-target}} $flags
+
+pack-extension name bin: (build-extension-by-package name)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    staging="{{dist-dir}}/staging/extensions/{{bin}}"
+    archive="{{dist-dir}}/{{bin}}.tar.gz"
+    mkdir -p "$staging"
+    cp "extensions/{{bin}}/manifest.toml" "$staging/manifest.toml"
+    cp "{{native-out}}/{{bin}}" "$staging/extension"
+    chmod +x "$staging/extension"
+    tar -czf "$archive" -C "$staging" manifest.toml extension
+    echo "packed $archive"
+
+[private]
+build-extension-by-package name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flags=""
+    if [ "{{profile}}" = "release" ]; then flags="--release"; fi
+    cargo build -p "{{name}}" $flags
+
+pack-modules: (pack-module "battery") (pack-module "datetime") (pack-module "keyboard") (pack-module "disk") (pack-module "ram") (pack-module "cpu") (pack-module "process") (pack-module "claude")
+
+pack-extensions: (pack-extension "echo" "echo") (pack-extension "smstatus-time" "time") (pack-extension "smstatus-fs" "fs") (pack-extension "smstatus-mem" "mem") (pack-extension "smstatus-xkb" "xkb") (pack-extension "smstatus-disk" "disk") (pack-extension "smstatus-process" "process") (pack-extension "smstatus-http" "http")
+
+stage-module name dest: (pack-module name)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{dest}}/{{name}}"
+    cp "modules/{{name}}/manifest.toml" "{{dest}}/{{name}}/manifest.toml"
+    cp "{{wasm-out}}/{{name}}.wasm" "{{dest}}/{{name}}/module.wasm"
+
+stage-extension package bin dest: (pack-extension package bin)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{dest}}/{{bin}}"
+    cp "extensions/{{bin}}/manifest.toml" "{{dest}}/{{bin}}/manifest.toml"
+    cp "{{native-out}}/{{bin}}" "{{dest}}/{{bin}}/extension"
+    chmod +x "{{dest}}/{{bin}}/extension"

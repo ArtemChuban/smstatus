@@ -29,15 +29,21 @@ mod logic {
 
     pub(super) fn wasm_kind_from_path(path: &Path, modules_dir: &Path) -> Option<String> {
         let parent = path.parent()?;
-        if parent != modules_dir {
+        let grandparent = parent.parent()?;
+        if grandparent != modules_dir {
+            return None;
+        }
+        let kind = parent.file_name()?.to_str()?;
+        if kind.is_empty() {
             return None;
         }
         let file_name = path.file_name()?.to_str()?;
-        let (stem, ext) = file_name.rsplit_once('.')?;
-        if !ext.eq_ignore_ascii_case("wasm") || stem.is_empty() {
-            return None;
+        if file_name.eq_ignore_ascii_case("module.wasm")
+            || file_name.eq_ignore_ascii_case("manifest.toml")
+        {
+            return Some(kind.to_string());
         }
-        Some(stem.to_string())
+        None
     }
 }
 
@@ -235,12 +241,16 @@ mod tests {
     fn wasm_kind_from_path_reads_stem_under_modules_dir() {
         let modules = Path::new("/home/user/.config/smstatus/modules");
         assert_eq!(
-            wasm_kind_from_path(&modules.join("cpu.wasm"), modules).as_deref(),
+            wasm_kind_from_path(&modules.join("cpu/module.wasm"), modules).as_deref(),
             Some("cpu")
         );
         assert_eq!(
-            wasm_kind_from_path(&modules.join("disk.wasm"), modules).as_deref(),
+            wasm_kind_from_path(&modules.join("disk/module.wasm"), modules).as_deref(),
             Some("disk")
+        );
+        assert_eq!(
+            wasm_kind_from_path(&modules.join("cpu/manifest.toml"), modules).as_deref(),
+            Some("cpu")
         );
     }
 
@@ -248,12 +258,16 @@ mod tests {
     fn wasm_kind_from_path_accepts_case_insensitive_extension() {
         let modules = Path::new("/home/user/.config/smstatus/modules");
         assert_eq!(
-            wasm_kind_from_path(&modules.join("cpu.WASM"), modules).as_deref(),
+            wasm_kind_from_path(&modules.join("cpu/module.WASM"), modules).as_deref(),
             Some("cpu")
         );
         assert_eq!(
-            wasm_kind_from_path(&modules.join("disk.Wasm"), modules).as_deref(),
+            wasm_kind_from_path(&modules.join("disk/module.Wasm"), modules).as_deref(),
             Some("disk")
+        );
+        assert_eq!(
+            wasm_kind_from_path(&modules.join("cpu/Manifest.TOML"), modules).as_deref(),
+            Some("cpu")
         );
     }
 
@@ -261,13 +275,16 @@ mod tests {
     fn wasm_kind_from_path_rejects_non_wasm_and_wrong_dir() {
         let modules = Path::new("/home/user/.config/smstatus/modules");
         assert_eq!(
-            wasm_kind_from_path(&modules.join("cpu.toml"), modules),
+            wasm_kind_from_path(&modules.join("cpu/other.toml"), modules),
             None
         );
         assert_eq!(
-            wasm_kind_from_path(Path::new("/tmp/cpu.wasm"), modules),
+            wasm_kind_from_path(Path::new("/tmp/cpu/module.wasm"), modules),
             None
         );
-        assert_eq!(wasm_kind_from_path(&modules.join(".wasm"), modules), None);
+        assert_eq!(
+            wasm_kind_from_path(&modules.join("cpu.wasm"), modules),
+            None
+        );
     }
 }

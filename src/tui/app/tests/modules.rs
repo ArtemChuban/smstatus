@@ -289,8 +289,12 @@ fn begin_add_module_lists_available_wasm_kinds_sorted_and_enters_adding_mode() {
     install_test_log();
     let dir = unique_temp_path("modules-dir-with-kinds");
     std::fs::create_dir(&dir).unwrap();
-    std::fs::write(dir.join("ram.wasm"), b"").unwrap();
-    std::fs::write(dir.join("cpu.wasm"), b"").unwrap();
+    for name in ["ram", "cpu"] {
+        let pkg = dir.join(name);
+        std::fs::create_dir(&pkg).unwrap();
+        std::fs::write(pkg.join("manifest.toml"), b"").unwrap();
+        std::fs::write(pkg.join("module.wasm"), b"").unwrap();
+    }
     let mut app = App {
         modules_dir: Some(dir.clone()),
         ..App::default()
