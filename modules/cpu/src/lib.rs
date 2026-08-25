@@ -111,7 +111,7 @@ impl Guest for Component {
 
     fn update() -> Output {
         let path = PATH.with(|p| p.borrow().clone());
-        let text = match host::read_sysfs(&path) {
+        let text = match host::call_extension("sysfs", "read-sysfs", &path) {
             Ok(content) => match logic::parse_cpu_line(&content) {
                 Some(curr) => {
                     let prev = PREV.with(|p| p.borrow_mut().replace(curr));
@@ -158,7 +158,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["sysfs".to_string()]
     }
 }
 
@@ -366,10 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_sysfs() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["sysfs".to_string()]
         );
     }
 }
