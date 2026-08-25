@@ -74,9 +74,14 @@ build-disk-extension flags="":
 
 build-disk-extension-release: (build-disk-extension "--release")
 
-build-extensions: build-echo build-time build-sysfs build-mem build-xkb build-disk-extension
+build-smstatus-process flags="":
+    cargo build -p smstatus-process {{flags}}
 
-build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release build-xkb-release build-disk-extension-release
+build-smstatus-process-release: (build-smstatus-process "--release")
+
+build-extensions: build-echo build-time build-sysfs build-mem build-xkb build-disk-extension build-smstatus-process
+
+build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release build-xkb-release build-disk-extension-release build-smstatus-process-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -135,11 +140,14 @@ test-xkb:
 test-disk-extension:
     cargo test -p smstatus-disk
 
+test-smstatus-process:
+    cargo test -p smstatus-process
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-extensions: test-echo test-time test-sysfs test-mem test-xkb test-disk-extension
+test-extensions: test-echo test-time test-sysfs test-mem test-xkb test-disk-extension test-smstatus-process
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -174,12 +182,15 @@ cov-xkb:
 cov-disk-extension:
     cargo llvm-cov -p smstatus-disk --summary-only
 
+cov-smstatus-process:
+    cargo llvm-cov -p smstatus-process --summary-only
+
 cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo cov-time cov-sysfs cov-mem cov-xkb cov-disk-extension
+cov-extensions: cov-echo cov-time cov-sysfs cov-mem cov-xkb cov-disk-extension cov-smstatus-process
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -197,5 +208,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -- -D warnings
+    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -- -D warnings
     cargo clippy -p smstatus -- -D warnings
