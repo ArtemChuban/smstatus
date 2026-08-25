@@ -14,7 +14,7 @@ pub(crate) struct Metadata {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub(crate) struct HostApiVersionReq {
+pub(crate) struct ApiVersionReq {
     pub major: u32,
     pub minor: u32,
 }
@@ -25,7 +25,8 @@ pub(crate) struct ModuleManifest {
     pub version: String,
     pub author: String,
     pub display_name: String,
-    pub required_host_api_version: HostApiVersionReq,
+    #[serde(rename = "modules-api")]
+    pub modules_api: ApiVersionReq,
     #[serde(default)]
     pub required_extensions: Vec<String>,
 }
@@ -35,7 +36,8 @@ pub(crate) struct ExtensionManifest {
     pub name: String,
     pub version: String,
     pub author: String,
-    pub required_host_api_version: HostApiVersionReq,
+    #[serde(rename = "extensions-api")]
+    pub extensions_api: ApiVersionReq,
 }
 
 impl ModuleManifest {

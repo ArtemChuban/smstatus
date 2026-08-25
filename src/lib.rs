@@ -22,8 +22,6 @@ mod x11;
 
 use std::process::ExitCode;
 
-use clap::Parser;
-
 use cli::{Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands};
 
 fn cli_ok_line(message: &str) -> ExitCode {
@@ -48,7 +46,7 @@ pub fn run() -> ExitCode {
         return daemon::run_daemon();
     }
 
-    match Cli::parse().command {
+    match Cli::parse_cli().command {
         Some(Commands::Start) => daemon::cmd_start(),
         Some(Commands::Stop) => daemon::cmd_stop(),
         Some(Commands::Run) => daemon::cmd_run(),
