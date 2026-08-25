@@ -23,11 +23,24 @@ thread_local! {
 
 mod logic {
     use super::Config;
+    use serde::Deserialize;
 
     const INVALID_PREFIXES: [&str; 4] = ["evdev", "inet", "pc", "base"];
 
+    #[derive(Deserialize)]
+    struct XkbStateJson {
+        active_group: u8,
+        symbols: String,
+    }
+
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
+    }
+
+    pub fn parse_xkb_state_json(json: &str) -> Result<(u8, String), String> {
+        serde_json::from_str::<XkbStateJson>(json)
+            .map(|s| (s.active_group, s.symbols))
+            .map_err(|e| format!("malformed xkb state: {e}"))
     }
 
     fn is_layout_token(tok: &str) -> bool {
@@ -71,9 +84,14 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let text = match host::read_xkb_state() {
-            Ok(state) => match logic::extract_layout(&state.symbols, state.active_group) {
-                Ok(layout) => FORMAT.with(|f| logic::format_layout(&f.borrow(), &layout)),
+        let text = match host::call_extension("xkb", "read-xkb-state", "") {
+            Ok(json) => match logic::parse_xkb_state_json(&json) {
+                Ok((active_group, symbols)) => {
+                    match logic::extract_layout(&symbols, active_group) {
+                        Ok(layout) => FORMAT.with(|f| logic::format_layout(&f.borrow(), &layout)),
+                        Err(err) => logic::format_error(&err),
+                    }
+                }
                 Err(err) => logic::format_error(&err),
             },
             Err(err) => logic::format_error(&err),
@@ -106,7 +124,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["xkb".to_string()]
     }
 }
 
@@ -292,10 +310,28 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_xkb() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["xkb".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_xkb_state_json_success() {
+        assert_eq!(
+            parse_xkb_state_json(r#"{"active_group":1,"symbols":"pc+us+ru:2"}"#),
+            Ok((1, "pc+us+ru:2".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_xkb_state_json_missing_fields() {
+        assert!(parse_xkb_state_json(r#"{"active_group":1}"#).is_err());
+    }
+
+    #[test]
+    fn parse_xkb_state_json_garbage() {
+        assert!(parse_xkb_state_json("not json").is_err());
     }
 }
