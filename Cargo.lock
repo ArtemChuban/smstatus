@@ -2525,6 +2525,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-process"
+version = "0.1.0"
+dependencies = [
+ "extension-protocol",
+]
+
+[[package]]
 name = "smstatus-sysfs"
 version = "0.1.0"
 dependencies = [

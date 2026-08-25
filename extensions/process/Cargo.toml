@@ -1,0 +1,12 @@
+[package]
+name = "smstatus-process"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "process"
+path = "src/main.rs"
+
+[dependencies]
+extension-protocol = { workspace = true }

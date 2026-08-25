@@ -80,14 +80,19 @@ impl Guest for Component {
         let text = if process.is_empty() {
             logic::format_error("no process configured")
         } else {
-            match host::read_process_running(&process) {
-                Ok(running) => FORMAT.with(|f| {
-                    ACTIVE_LABEL.with(|a| {
-                        INACTIVE_LABEL.with(|i| {
-                            logic::format_status(&f.borrow(), running, &a.borrow(), &i.borrow())
+            match host::call_extension("process", "read-process-running", &process) {
+                Ok(body) => match body.parse::<bool>() {
+                    Ok(running) => FORMAT.with(|f| {
+                        ACTIVE_LABEL.with(|a| {
+                            INACTIVE_LABEL.with(|i| {
+                                logic::format_status(&f.borrow(), running, &a.borrow(), &i.borrow())
+                            })
                         })
-                    })
-                }),
+                    }),
+                    Err(err) => {
+                        logic::format_error(&format!("malformed process-running response: {err}"))
+                    }
+                },
                 Err(err) => logic::format_error(&err),
             }
         };
@@ -125,7 +130,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["process".to_string()]
     }
 }
 
@@ -312,10 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_process() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["process".to_string()]
         );
     }
 }
