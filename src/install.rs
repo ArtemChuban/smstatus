@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::extension::is_safe_extension_name;
 use crate::manifest;
 use crate::manifest::Metadata;
-use crate::meta::MetadataProbe;
+use crate::meta;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -160,7 +160,7 @@ pub(crate) fn format_module_outcome(outcome: &ModuleInstallOutcome) -> String {
     }
 }
 
-fn unique_temp_dir(label: &str) -> PathBuf {
+fn unique_temp_dir(label: &str) -> Result<PathBuf> {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -169,8 +169,9 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         "smstatus-install-{label}-{}-{id}",
         std::process::id()
     ));
-    fs::create_dir_all(&dir).unwrap_or(());
-    dir
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create temp dir `{}`: {e}", dir.display()))?;
+    Ok(dir)
 }
 
 struct ScratchDir(PathBuf);
@@ -234,27 +235,22 @@ fn require_extension_files(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn place_package_dir(src: &Path, dest: &Path) -> Result<()> {
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "failed to create package parent `{}`: {e}",
-                parent.display()
-            )
-        })?;
+fn copy_install_file(src: &Path, dest: &Path) -> Result<()> {
+    let file_meta = fs::symlink_metadata(src)
+        .map_err(|e| format!("failed to stat `{}`: {e}", src.display()))?;
+    if file_meta.file_type().is_symlink() {
+        return Err(format!("refusing to install symlink `{}`", src.display()).into());
     }
-    if dest.exists() {
-        fs::remove_dir_all(dest).map_err(|e| {
-            format!(
-                "failed to remove existing package `{}`: {e}",
-                dest.display()
-            )
-        })?;
+    if !file_meta.is_file() {
+        return Err(format!("expected a regular file at `{}`", src.display()).into());
     }
-    if fs::rename(src, dest).is_err() {
-        copy_dir_all(src, dest)?;
-        let _ = fs::remove_dir_all(src);
-    }
+    fs::copy(src, dest).map_err(|e| {
+        format!(
+            "failed to copy `{}` to `{}`: {e}",
+            src.display(),
+            dest.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -264,9 +260,14 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<()> {
         let entry = entry.map_err(|e| format!("cannot read entry in `{}`: {e}", src.display()))?;
         let from = entry.path();
         let to = dest.join(entry.file_name());
-        if from.is_dir() {
+        let file_meta = fs::symlink_metadata(&from)
+            .map_err(|e| format!("failed to stat `{}`: {e}", from.display()))?;
+        if file_meta.file_type().is_symlink() {
+            return Err(format!("refusing to copy symlink `{}`", from.display()).into());
+        }
+        if file_meta.is_dir() {
             copy_dir_all(&from, &to)?;
-        } else {
+        } else if file_meta.is_file() {
             fs::copy(&from, &to).map_err(|e| {
                 format!(
                     "failed to copy `{}` to `{}`: {e}",
@@ -274,15 +275,92 @@ fn copy_dir_all(src: &Path, dest: &Path) -> Result<()> {
                     to.display()
                 )
             })?;
+        } else {
+            return Err(format!("unsupported file type at `{}`", from.display()).into());
         }
     }
     Ok(())
 }
 
-fn stage_from_package_root(root: &Path) -> Result<(ScratchDir, PathBuf)> {
-    let scratch = ScratchDir(unique_temp_dir("stage"));
+fn move_or_copy_dir(src: &Path, dest: &Path) -> Result<()> {
+    if fs::rename(src, dest).is_ok() {
+        return Ok(());
+    }
+    copy_dir_all(src, dest)?;
+    let _ = fs::remove_dir_all(src);
+    Ok(())
+}
+
+fn unique_backup_path(dest: &Path) -> Result<PathBuf> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("package path `{}` has no parent", dest.display()))?;
+    let name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("package path `{}` has no file name", dest.display()))?;
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(".{name}.bak-{}-{id}", std::process::id())))
+}
+
+fn place_package_dir(src: &Path, dest: &Path) -> Result<()> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("package path `{}` has no parent", dest.display()))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "failed to create package parent `{}`: {e}",
+            parent.display()
+        )
+    })?;
+
+    if !dest.exists() {
+        return move_or_copy_dir(src, dest);
+    }
+
+    let backup = unique_backup_path(dest)?;
+    fs::rename(dest, &backup).map_err(|e| {
+        format!(
+            "failed to move aside existing package `{}`: {e}",
+            dest.display()
+        )
+    })?;
+
+    match move_or_copy_dir(src, dest) {
+        Ok(()) => {
+            let _ = fs::remove_dir_all(&backup);
+            Ok(())
+        }
+        Err(err) => {
+            let _ = fs::remove_dir_all(dest);
+            if fs::rename(&backup, dest).is_err() {
+                let _ = copy_dir_all(&backup, dest);
+            }
+            Err(err)
+        }
+    }
+}
+
+fn stage_module_package(root: &Path) -> Result<(ScratchDir, PathBuf)> {
+    let scratch = ScratchDir(unique_temp_dir("stage")?);
     let staged = scratch.0.join("pkg");
-    copy_dir_all(root, &staged)?;
+    fs::create_dir_all(&staged)
+        .map_err(|e| format!("failed to create stage dir `{}`: {e}", staged.display()))?;
+    copy_install_file(&root.join("manifest.toml"), &staged.join("manifest.toml"))?;
+    copy_install_file(&root.join("module.wasm"), &staged.join("module.wasm"))?;
+    Ok((scratch, staged))
+}
+
+fn stage_extension_package(root: &Path) -> Result<(ScratchDir, PathBuf)> {
+    let scratch = ScratchDir(unique_temp_dir("stage")?);
+    let staged = scratch.0.join("pkg");
+    fs::create_dir_all(&staged)
+        .map_err(|e| format!("failed to create stage dir `{}`: {e}", staged.display()))?;
+    copy_install_file(&root.join("manifest.toml"), &staged.join("manifest.toml"))?;
+    copy_install_file(&root.join("extension"), &staged.join("extension"))?;
     Ok((scratch, staged))
 }
 
@@ -300,7 +378,7 @@ pub(crate) fn install_module_into(
         .into());
     }
 
-    let unpack = ScratchDir(unique_temp_dir("mod-unpack"));
+    let unpack = ScratchDir(unique_temp_dir("mod-unpack")?);
     unpack_archive(resolved.path(), &unpack.0)?;
     let root = package_root(&unpack.0)?;
     require_module_files(&root)?;
@@ -321,7 +399,7 @@ pub(crate) fn install_module_into(
                         });
                     }
                     ModuleInstallAction::Replace => {
-                        let (_scratch, staged) = stage_from_package_root(&root)?;
+                        let (_scratch, staged) = stage_module_package(&root)?;
                         place_package_dir(&staged, &dest)?;
                         return Ok(ModuleInstallOutcome::Replace {
                             kind,
@@ -334,7 +412,7 @@ pub(crate) fn install_module_into(
                 }
             }
             Err(_) => {
-                let (_scratch, staged) = stage_from_package_root(&root)?;
+                let (_scratch, staged) = stage_module_package(&root)?;
                 place_package_dir(&staged, &dest)?;
                 return Ok(ModuleInstallOutcome::Replace {
                     kind,
@@ -344,7 +422,7 @@ pub(crate) fn install_module_into(
         }
     }
 
-    let (_scratch, staged) = stage_from_package_root(&root)?;
+    let (_scratch, staged) = stage_module_package(&root)?;
     place_package_dir(&staged, &dest)?;
     Ok(ModuleInstallOutcome::Fresh {
         kind,
@@ -403,7 +481,7 @@ pub(crate) fn install_extension_into(
         .into());
     }
 
-    let unpack = ScratchDir(unique_temp_dir("ext-unpack"));
+    let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
     unpack_archive(resolved.path(), &unpack.0)?;
     let root = package_root(&unpack.0)?;
     require_extension_files(&root)?;
@@ -412,7 +490,7 @@ pub(crate) fn install_extension_into(
     let dest = manifest::extension_dir(extensions_dir, &name);
     let replaced = dest.exists();
 
-    let (_scratch, staged) = stage_from_package_root(&root)?;
+    let (_scratch, staged) = stage_extension_package(&root)?;
     place_package_dir(&staged, &dest)?;
     set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
     let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
@@ -431,10 +509,9 @@ pub(crate) fn install_extension(source: &str) -> Result<ExtensionInstallOutcome>
 
 pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
     let kinds = crate::config::discover_module_kinds(modules_dir)?;
-    let probe = MetadataProbe::new()?;
     let mut lines = Vec::with_capacity(kinds.len());
     for kind in kinds {
-        match probe.read(modules_dir, &kind) {
+        match meta::read(modules_dir, &kind) {
             Ok(metadata) => lines.push(format!(
                 "{kind}\t{}\t{}\t{}",
                 metadata.display_name, metadata.version, metadata.author
@@ -534,7 +611,7 @@ mod tests {
     }
 
     fn temp_modules_dir(label: &str) -> PathBuf {
-        let dir = unique_temp_dir(label);
+        let dir = unique_temp_dir(label).unwrap();
         fs::create_dir_all(&dir).unwrap();
         dir
     }

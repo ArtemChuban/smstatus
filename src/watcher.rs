@@ -38,7 +38,9 @@ mod logic {
             return None;
         }
         let file_name = path.file_name()?.to_str()?;
-        if file_name.eq_ignore_ascii_case("module.wasm") || file_name == "manifest.toml" {
+        if file_name.eq_ignore_ascii_case("module.wasm")
+            || file_name.eq_ignore_ascii_case("manifest.toml")
+        {
             return Some(kind.to_string());
         }
         None
@@ -262,6 +264,10 @@ mod tests {
         assert_eq!(
             wasm_kind_from_path(&modules.join("disk/module.Wasm"), modules).as_deref(),
             Some("disk")
+        );
+        assert_eq!(
+            wasm_kind_from_path(&modules.join("cpu/Manifest.TOML"), modules).as_deref(),
+            Some("cpu")
         );
     }
 
