@@ -2516,6 +2516,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-fs"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "extension-protocol",
+]
+
+[[package]]
 name = "smstatus-http"
 version = "0.1.0"
 dependencies = [
@@ -2538,14 +2546,6 @@ dependencies = [
 name = "smstatus-process"
 version = "0.1.0"
 dependencies = [
- "extension-protocol",
-]
-
-[[package]]
-name = "smstatus-sysfs"
-version = "0.1.0"
-dependencies = [
- "dirs",
  "extension-protocol",
 ]
 
