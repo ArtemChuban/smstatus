@@ -5,12 +5,11 @@ wit_bindgen::generate!({
 });
 
 use crate::smstatus::module::host;
-use exports::smstatus::module::guest::{ConfigParam, Guest, HostApiVersion, Metadata, Output};
+use exports::smstatus::module::guest::{ConfigParam, Guest, Output};
 use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_FORMAT: &str = "{}";
-const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -102,29 +101,8 @@ impl Guest for Component {
         }
     }
 
-    fn required_host_api_version() -> HostApiVersion {
-        let (major, minor, patch) = REQUIRED_HOST_API;
-        HostApiVersion {
-            major,
-            minor,
-            patch,
-        }
-    }
-
     fn config_schema() -> Vec<ConfigParam> {
         fmt_common::config_schema![ConfigParam, ("format", DEFAULT_FORMAT),]
-    }
-
-    fn get_metadata() -> Metadata {
-        Metadata {
-            display_name: "Keyboard".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            author: "ArtemChuban".to_string(),
-        }
-    }
-
-    fn required_extensions() -> Vec<String> {
-        vec!["xkb".to_string()]
     }
 }
 
@@ -294,26 +272,6 @@ mod tests {
                 param_type: "string".to_string(),
                 default: super::DEFAULT_FORMAT.to_string(),
             }]
-        );
-    }
-
-    #[test]
-    fn get_metadata_reports_display_name_version_and_author() {
-        assert_eq!(
-            super::Component::get_metadata(),
-            super::Metadata {
-                display_name: "Keyboard".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                author: "ArtemChuban".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn required_extensions_is_xkb() {
-        assert_eq!(
-            super::Component::required_extensions(),
-            vec!["xkb".to_string()]
         );
     }
 

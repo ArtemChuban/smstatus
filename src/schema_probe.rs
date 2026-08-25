@@ -17,7 +17,7 @@ impl SchemaProbe {
     }
 
     pub(crate) fn read(&self, modules_dir: &Path, kind: &str) -> Result<Vec<ConfigParam>> {
-        self.read_path(&modules_dir.join(format!("{kind}.wasm")), false)
+        self.read_path(&crate::manifest::module_wasm_path(modules_dir, kind), false)
     }
 
     pub(crate) fn read_after_stable(
@@ -25,7 +25,7 @@ impl SchemaProbe {
         modules_dir: &Path,
         kind: &str,
     ) -> Result<Vec<ConfigParam>> {
-        self.read_path(&modules_dir.join(format!("{kind}.wasm")), true)
+        self.read_path(&crate::manifest::module_wasm_path(modules_dir, kind), true)
     }
 
     fn read_path(&self, path: &Path, wait_stable: bool) -> Result<Vec<ConfigParam>> {

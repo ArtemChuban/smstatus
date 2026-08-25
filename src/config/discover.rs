@@ -13,10 +13,14 @@ pub(crate) fn discover_module_kinds(modules_dir: &Path) -> Result<Vec<String>> {
         let entry =
             entry.map_err(|e| format!("cannot read entry in {}: {e}", modules_dir.display()))?;
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("wasm")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-        {
-            kinds.push(stem.to_string());
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if path.join("manifest.toml").is_file() && path.join("module.wasm").is_file() {
+            kinds.push(name.to_string());
         }
     }
     kinds.sort_unstable();

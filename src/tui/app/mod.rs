@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::bindings::{ConfigParam, Metadata};
+use crate::bindings::ConfigParam;
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
-use crate::meta::MetadataProbe;
+use crate::manifest::Metadata;
 use crate::schema_probe::SchemaProbe;
 
 mod daemon;
@@ -119,7 +119,6 @@ pub(super) struct App {
     pub(super) metadata_by_kind: HashMap<String, Metadata>,
     pub(super) metadata_failed: HashSet<String>,
     pub(super) metadata_needs_stable: HashSet<String>,
-    pub(super) metadata_probe: Option<MetadataProbe>,
     pub(super) schema_by_kind: HashMap<String, Vec<ConfigParam>>,
     pub(super) schema_failed: HashSet<String>,
     pub(super) schema_needs_stable: HashSet<String>,
@@ -163,7 +162,6 @@ impl Default for App {
             metadata_by_kind: HashMap::new(),
             metadata_failed: HashSet::new(),
             metadata_needs_stable: HashSet::new(),
-            metadata_probe: None,
             schema_by_kind: HashMap::new(),
             schema_failed: HashSet::new(),
             schema_needs_stable: HashSet::new(),
