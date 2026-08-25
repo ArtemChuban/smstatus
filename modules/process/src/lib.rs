@@ -80,7 +80,7 @@ impl Guest for Component {
         let text = if process.is_empty() {
             logic::format_error("no process configured")
         } else {
-            match host::call_extension("process", "read-process-running", &process) {
+            match host::call_extension("process", "is-running", &process) {
                 Ok(body) => match body.parse::<bool>() {
                     Ok(running) => FORMAT.with(|f| {
                         ACTIVE_LABEL.with(|a| {

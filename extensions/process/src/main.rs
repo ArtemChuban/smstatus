@@ -41,7 +41,7 @@ fn process_running(name: &str) -> Result<bool, String> {
 }
 
 fn handle_request(request: &Request) -> Response {
-    if request.method == "read-process-running" {
+    if request.method == "is-running" {
         match process_running(&request.payload) {
             Ok(running) => Response::Ok(running.to_string()),
             Err(msg) => Response::Err(msg),
@@ -121,9 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn read_process_running_returns_ok_bool_string() {
+    fn is_running_returns_ok_bool_string() {
         let response = handle_request(&Request {
-            method: "read-process-running".to_string(),
+            method: "is-running".to_string(),
             payload: "definitely-not-a-real-process-name-xyzzy".to_string(),
         });
         match response {
@@ -136,13 +136,13 @@ mod tests {
     }
 
     #[test]
-    fn read_process_running_finds_self() {
+    fn is_running_finds_self() {
         let self_name = std::fs::read_to_string(format!("/proc/{}/comm", std::process::id()))
             .unwrap()
             .trim()
             .to_string();
         let response = handle_request(&Request {
-            method: "read-process-running".to_string(),
+            method: "is-running".to_string(),
             payload: self_name,
         });
         match response {
