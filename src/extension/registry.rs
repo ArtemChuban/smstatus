@@ -29,7 +29,7 @@ fn backoff_for(count: u32) -> Duration {
     Duration::from_millis(u64::try_from(millis).unwrap_or(u64::MAX)).min(MAX_BACKOFF)
 }
 
-fn is_safe_extension_name(name: &str) -> bool {
+pub(crate) fn is_safe_extension_name(name: &str) -> bool {
     if name.is_empty() || name.contains('\0') {
         return false;
     }

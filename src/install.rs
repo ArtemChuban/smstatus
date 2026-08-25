@@ -1,0 +1,439 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::bindings::Metadata;
+use crate::error::Result;
+use crate::extension::is_safe_extension_name;
+use crate::meta::MetadataProbe;
+
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceKind {
+    Local,
+    Url,
+}
+
+/// Local path or downloaded temp file. URL temps are removed on drop.
+#[derive(Debug)]
+pub(crate) struct ResolvedSource {
+    path: PathBuf,
+    kind: SourceKind,
+    label: PathBuf,
+}
+
+impl ResolvedSource {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn label(&self) -> &Path {
+        &self.label
+    }
+}
+
+impl Drop for ResolvedSource {
+    fn drop(&mut self) {
+        if self.kind == SourceKind::Url {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModuleInstallAction {
+    Fresh,
+    Skip,
+    Replace,
+}
+
+#[derive(Debug)]
+pub(crate) enum ModuleInstallOutcome {
+    Fresh { kind: String, metadata: Metadata },
+    Skip { kind: String, metadata: Metadata },
+    Replace { kind: String, metadata: Metadata },
+}
+
+pub(crate) fn decide_module_install(
+    installed: Option<&Metadata>,
+    candidate: &Metadata,
+) -> ModuleInstallAction {
+    match installed {
+        None => ModuleInstallAction::Fresh,
+        Some(existing) if existing.version == candidate.version => ModuleInstallAction::Skip,
+        Some(_) => ModuleInstallAction::Replace,
+    }
+}
+
+pub(crate) fn artifact_stem(path: &Path) -> Result<String> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("cannot determine artifact name from `{}`", path.display()))?;
+    if !is_safe_extension_name(stem) {
+        return Err(format!("invalid artifact name `{stem}`").into());
+    }
+    Ok(stem.to_string())
+}
+
+fn has_wasm_extension(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("wasm")
+}
+
+fn url_basename(source: &str) -> &str {
+    let without_query = source.split('?').next().unwrap_or(source);
+    without_query.rsplit('/').next().unwrap_or(without_query)
+}
+
+pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let basename = url_basename(source);
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(DOWNLOAD_TIMEOUT))
+                .build(),
+        );
+        let bytes = {
+            let mut response = agent
+                .get(source)
+                .call()
+                .map_err(|e| format!("failed to download `{source}`: {e}"))?;
+            response
+                .body_mut()
+                .read_to_vec()
+                .map_err(|e| format!("failed to read download body for `{source}`: {e}"))?
+        };
+        let label = if basename.is_empty() {
+            PathBuf::from(format!("smstatus-download-{}.bin", std::process::id()))
+        } else {
+            PathBuf::from(basename)
+        };
+        let file_name = if basename.is_empty() {
+            format!("smstatus-download-{}.bin", std::process::id())
+        } else {
+            format!("smstatus-download-{}-{basename}", std::process::id())
+        };
+        let temp_path = std::env::temp_dir().join(file_name);
+        fs::write(&temp_path, bytes).map_err(|e| {
+            format!(
+                "failed to write temp download `{}`: {e}",
+                temp_path.display()
+            )
+        })?;
+        Ok(ResolvedSource {
+            path: temp_path,
+            kind: SourceKind::Url,
+            label,
+        })
+    } else {
+        let path = PathBuf::from(source);
+        if !path.exists() {
+            return Err(format!("source path `{}` does not exist", path.display()).into());
+        }
+        Ok(ResolvedSource {
+            label: path.clone(),
+            path,
+            kind: SourceKind::Local,
+        })
+    }
+}
+
+fn place_module_bytes(src: &Path, dest: &Path) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create modules dir `{}`: {e}", parent.display()))?;
+    }
+    fs::copy(src, dest).map_err(|e| {
+        format!(
+            "failed to install module from `{}` to `{}`: {e}",
+            src.display(),
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn format_meta(metadata: &Metadata) -> String {
+    format!(
+        "{} {} by {}",
+        metadata.display_name, metadata.version, metadata.author
+    )
+}
+
+pub(crate) fn format_module_outcome(outcome: &ModuleInstallOutcome) -> String {
+    match outcome {
+        ModuleInstallOutcome::Fresh { kind, metadata } => {
+            format!("installed module `{kind}` ({})", format_meta(metadata))
+        }
+        ModuleInstallOutcome::Skip { kind, metadata } => {
+            format!(
+                "module `{kind}` already installed ({})",
+                format_meta(metadata)
+            )
+        }
+        ModuleInstallOutcome::Replace { kind, metadata } => {
+            format!("replaced module `{kind}` ({})", format_meta(metadata))
+        }
+    }
+}
+
+pub(crate) fn install_module_into(
+    modules_dir: &Path,
+    source: &str,
+) -> Result<ModuleInstallOutcome> {
+    let resolved = resolve_source(source)?;
+    let check_path = resolved.label();
+    if !has_wasm_extension(check_path) {
+        return Err(format!(
+            "module source must be a `.wasm` file, got `{}`",
+            check_path.display()
+        )
+        .into());
+    }
+    let kind = artifact_stem(check_path)?;
+    let dest = modules_dir.join(format!("{kind}.wasm"));
+
+    let probe = MetadataProbe::new()?;
+    let candidate = probe.read_path(resolved.path(), false)?;
+
+    if dest.exists() {
+        match probe.read(modules_dir, &kind) {
+            Ok(installed) => match decide_module_install(Some(&installed), &candidate) {
+                ModuleInstallAction::Skip => {
+                    return Ok(ModuleInstallOutcome::Skip {
+                        kind,
+                        metadata: installed,
+                    });
+                }
+                ModuleInstallAction::Replace => {
+                    place_module_bytes(resolved.path(), &dest)?;
+                    return Ok(ModuleInstallOutcome::Replace {
+                        kind,
+                        metadata: candidate,
+                    });
+                }
+                ModuleInstallAction::Fresh => {
+                    unreachable!("dest exists implies installed is Some")
+                }
+            },
+            Err(_) => {
+                place_module_bytes(resolved.path(), &dest)?;
+                return Ok(ModuleInstallOutcome::Replace {
+                    kind,
+                    metadata: candidate,
+                });
+            }
+        }
+    }
+
+    place_module_bytes(resolved.path(), &dest)?;
+    Ok(ModuleInstallOutcome::Fresh {
+        kind,
+        metadata: candidate,
+    })
+}
+
+pub(crate) fn install_module(source: &str) -> Result<ModuleInstallOutcome> {
+    let modules_dir = crate::config::default_config_dir()?.join("modules");
+    install_module_into(&modules_dir, source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::OnceLock;
+
+    fn meta(version: &str) -> Metadata {
+        Metadata {
+            display_name: "Test".to_string(),
+            version: version.to_string(),
+            author: "Author".to_string(),
+        }
+    }
+
+    fn temp_modules_dir(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "smstatus-install-{label}-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn find_or_build_guest_wasm(package: &str) -> PathBuf {
+        static BATTERY: OnceLock<PathBuf> = OnceLock::new();
+        static CPU: OnceLock<PathBuf> = OnceLock::new();
+
+        let cache = match package {
+            "battery" => &BATTERY,
+            "cpu" => &CPU,
+            other => panic!("unsupported guest fixture `{other}`"),
+        };
+
+        cache
+            .get_or_init(|| {
+                let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let wasm = manifest_dir
+                    .join("target/wasm32-wasip2/debug")
+                    .join(format!("{package}.wasm"));
+                if wasm.exists() {
+                    return wasm;
+                }
+
+                let status = std::process::Command::new(env!("CARGO"))
+                    .current_dir(&manifest_dir)
+                    .args([
+                        "build",
+                        "-p",
+                        package,
+                        "--target",
+                        "wasm32-wasip2",
+                    ])
+                    .status()
+                    .unwrap_or_else(|e| panic!("failed to spawn cargo build -p {package}: {e}"));
+                assert!(
+                    status.success() && wasm.exists(),
+                    "guest wasm missing at {}; build with `cargo build -p {package} --target wasm32-wasip2`",
+                    wasm.display()
+                );
+                wasm
+            })
+            .clone()
+    }
+
+    #[test]
+    fn artifact_stem_rejects_unsafe_names() {
+        assert!(artifact_stem(Path::new("..wasm")).is_err());
+        assert!(artifact_stem(Path::new(".")).is_err());
+        assert_eq!(artifact_stem(Path::new("cpu.wasm")).unwrap(), "cpu");
+    }
+
+    #[test]
+    fn decide_module_install_fresh_when_missing() {
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_module_install(None, &candidate),
+            ModuleInstallAction::Fresh
+        );
+    }
+
+    #[test]
+    fn decide_module_install_skip_when_same_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_module_install(Some(&installed), &candidate),
+            ModuleInstallAction::Skip
+        );
+    }
+
+    #[test]
+    fn decide_module_install_replace_when_different_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("2.0.0");
+        assert_eq!(
+            decide_module_install(Some(&installed), &candidate),
+            ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
+    fn install_module_into_fresh_and_skip_same_version() {
+        let modules_dir = temp_modules_dir("fresh-skip");
+        let battery = find_or_build_guest_wasm("battery");
+
+        let first = install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        match &first {
+            ModuleInstallOutcome::Fresh { kind, .. } => assert_eq!(kind, "battery"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        assert!(modules_dir.join("battery.wasm").exists());
+
+        let second = install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        match second {
+            ModuleInstallOutcome::Skip { kind, .. } => assert_eq!(kind, "battery"),
+            other => panic!("expected Skip, got {other:?}"),
+        }
+    }
+
+    fn guest_wasm_with_patched_version(package: &str, new_version: &[u8; 5]) -> PathBuf {
+        let original = find_or_build_guest_wasm(package);
+        let bytes = fs::read(&original).unwrap();
+        let Some(idx) = bytes.windows(5).position(|w| w == b"0.1.0") else {
+            panic!("{} wasm missing version string 0.1.0 to patch", package);
+        };
+        let mut patched = bytes;
+        patched[idx..idx + 5].copy_from_slice(new_version);
+        let dir = temp_modules_dir(&format!("patched-{package}"));
+        let path = dir.join(format!("{package}.wasm"));
+        fs::write(&path, patched).unwrap();
+        path
+    }
+
+    #[test]
+    fn install_module_into_replaces_different_version() {
+        let modules_dir = temp_modules_dir("replace-version");
+        let battery = find_or_build_guest_wasm("battery");
+        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+
+        let newer = guest_wasm_with_patched_version("battery", b"9.9.9");
+        let outcome = install_module_into(&modules_dir, newer.to_str().unwrap()).unwrap();
+        match outcome {
+            ModuleInstallOutcome::Replace { kind, metadata } => {
+                assert_eq!(kind, "battery");
+                assert_eq!(metadata.version, "9.9.9");
+            }
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read(modules_dir.join("battery.wasm")).unwrap(),
+            fs::read(&newer).unwrap()
+        );
+    }
+
+    #[test]
+    fn install_module_into_replaces_unreadable_installed() {
+        let modules_dir = temp_modules_dir("replace-corrupt");
+        let battery = find_or_build_guest_wasm("battery");
+        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+
+        let dest = modules_dir.join("battery.wasm");
+        fs::write(&dest, b"not a wasm module").unwrap();
+
+        let outcome = install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        match outcome {
+            ModuleInstallOutcome::Replace { kind, .. } => assert_eq!(kind, "battery"),
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        assert_eq!(fs::read(&dest).unwrap(), fs::read(&battery).unwrap());
+    }
+
+    #[test]
+    fn place_module_bytes_overwrites_dest_contents() {
+        let modules_dir = temp_modules_dir("replace-bytes");
+        let battery = find_or_build_guest_wasm("battery");
+        let cpu = find_or_build_guest_wasm("cpu");
+        let dest = modules_dir.join("battery.wasm");
+
+        place_module_bytes(&battery, &dest).unwrap();
+        let before = fs::read(&dest).unwrap();
+        assert_eq!(before, fs::read(&battery).unwrap());
+
+        place_module_bytes(&cpu, &dest).unwrap();
+        let after = fs::read(&dest).unwrap();
+        assert_eq!(after, fs::read(&cpu).unwrap());
+        assert_ne!(after, before);
+    }
+
+    #[test]
+    fn resolve_source_rejects_missing_local_path() {
+        let err = resolve_source("/no/such/smstatus-module.wasm").unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+}
