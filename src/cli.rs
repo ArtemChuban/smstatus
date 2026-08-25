@@ -36,9 +36,13 @@ pub(crate) enum Commands {
 #[derive(Subcommand)]
 pub(crate) enum ModuleCommands {
     Install { source: String },
+    List,
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ExtensionCommands {
     Install { source: String },
+    List,
+    Remove { name: String },
 }
