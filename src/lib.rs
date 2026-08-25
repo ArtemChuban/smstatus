@@ -45,6 +45,28 @@ pub fn run() -> ExitCode {
                     ExitCode::FAILURE
                 }
             },
+            ModuleCommands::List => match install::list_modules() {
+                Ok(lines) => {
+                    for line in lines {
+                        logging::to_stdout(log::Level::Info, &line);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
+            ModuleCommands::Remove { name } => match install::remove_module(&name) {
+                Ok(()) => {
+                    logging::to_stdout(log::Level::Info, &format!("removed module `{name}`"));
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
         },
         Some(Commands::Extension { command }) => match command {
             ExtensionCommands::Install { source } => match install::install_extension(&source) {
@@ -53,6 +75,28 @@ pub fn run() -> ExitCode {
                         log::Level::Info,
                         &install::format_extension_outcome(&outcome),
                     );
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
+            ExtensionCommands::List => match install::list_extensions() {
+                Ok(lines) => {
+                    for line in lines {
+                        logging::to_stdout(log::Level::Info, &line);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
+            ExtensionCommands::Remove { name } => match install::remove_extension(&name) {
+                Ok(()) => {
+                    logging::to_stdout(log::Level::Info, &format!("removed extension `{name}`"));
                     ExitCode::SUCCESS
                 }
                 Err(err) => {

@@ -310,6 +310,91 @@ pub(crate) fn install_extension(source: &str) -> Result<ExtensionInstallOutcome>
     install_extension_into(&extensions_dir, source)
 }
 
+pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
+    let kinds = crate::config::discover_module_kinds(modules_dir)?;
+    let probe = MetadataProbe::new()?;
+    let mut lines = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        match probe.read(modules_dir, &kind) {
+            Ok(metadata) => lines.push(format!(
+                "{kind}\t{}\t{}\t{}",
+                metadata.display_name, metadata.version, metadata.author
+            )),
+            Err(_) => lines.push(kind),
+        }
+    }
+    Ok(lines)
+}
+
+pub(crate) fn list_modules() -> Result<Vec<String>> {
+    let modules_dir = crate::config::default_config_dir()?.join("modules");
+    list_modules_in(&modules_dir)
+}
+
+pub(crate) fn remove_module_from(modules_dir: &Path, name: &str) -> Result<()> {
+    if !is_safe_extension_name(name) {
+        return Err(format!("invalid module name `{name}`").into());
+    }
+    let path = modules_dir.join(format!("{name}.wasm"));
+    if !path.exists() {
+        return Err(format!("module `{name}` is not installed").into());
+    }
+    fs::remove_file(&path).map_err(|e| format!("failed to remove module `{name}`: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn remove_module(name: &str) -> Result<()> {
+    let modules_dir = crate::config::default_config_dir()?.join("modules");
+    remove_module_from(&modules_dir, name)
+}
+
+pub(crate) fn list_extensions_in(extensions_dir: &Path) -> Result<Vec<String>> {
+    if !extensions_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(extensions_dir)
+        .map_err(|e| format!("cannot read {}: {e}", extensions_dir.display()))?
+    {
+        let entry =
+            entry.map_err(|e| format!("cannot read entry in {}: {e}", extensions_dir.display()))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if is_safe_extension_name(name) {
+            names.push(name.to_string());
+        }
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
+pub(crate) fn list_extensions() -> Result<Vec<String>> {
+    let extensions_dir = crate::config::default_config_dir()?.join("extensions");
+    list_extensions_in(&extensions_dir)
+}
+
+pub(crate) fn remove_extension_from(extensions_dir: &Path, name: &str) -> Result<()> {
+    if !is_safe_extension_name(name) {
+        return Err(format!("invalid extension name `{name}`").into());
+    }
+    let path = extensions_dir.join(name);
+    if !path.exists() {
+        return Err(format!("extension `{name}` is not installed").into());
+    }
+    fs::remove_file(&path).map_err(|e| format!("failed to remove extension `{name}`: {e}"))?;
+    Ok(())
+}
+
+pub(crate) fn remove_extension(name: &str) -> Result<()> {
+    let extensions_dir = crate::config::default_config_dir()?.join("extensions");
+    remove_extension_from(&extensions_dir, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +653,41 @@ mod tests {
             other => panic!("expected Replace, got {other:?}"),
         }
         assert!(registry.is_installed("echo"));
+    }
+
+    #[test]
+    fn list_and_remove_module_round_trip() {
+        let modules_dir = temp_modules_dir("mod-list-rm");
+        let battery = find_or_build_guest_wasm("battery");
+        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+
+        let listed = list_modules_in(&modules_dir).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].starts_with("battery\t"));
+
+        remove_module_from(&modules_dir, "battery").unwrap();
+        assert!(!modules_dir.join("battery.wasm").exists());
+        assert!(list_modules_in(&modules_dir).unwrap().is_empty());
+        let err = remove_module_from(&modules_dir, "battery").unwrap_err();
+        assert!(err.to_string().contains("not installed"));
+    }
+
+    #[test]
+    fn list_and_remove_extension_round_trip() {
+        let base = temp_modules_dir("ext-list-rm");
+        let extensions_dir = base.join("extensions");
+        let echo = find_or_build_echo();
+        install_extension_into(&extensions_dir, echo.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            list_extensions_in(&extensions_dir).unwrap(),
+            vec!["echo".to_string()]
+        );
+
+        remove_extension_from(&extensions_dir, "echo").unwrap();
+        assert!(!extensions_dir.join("echo").exists());
+        assert!(list_extensions_in(&extensions_dir).unwrap().is_empty());
+        let err = remove_extension_from(&extensions_dir, "echo").unwrap_err();
+        assert!(err.to_string().contains("not installed"));
     }
 }
