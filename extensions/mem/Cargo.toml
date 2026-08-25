@@ -1,0 +1,14 @@
+[package]
+name = "smstatus-mem"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "mem"
+path = "src/main.rs"
+
+[dependencies]
+extension-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
