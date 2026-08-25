@@ -23,4 +23,13 @@ pub(crate) enum Commands {
     Start,
     Stop,
     Run,
+    Module {
+        #[command(subcommand)]
+        command: ModuleCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ModuleCommands {
+    Install { source: String },
 }

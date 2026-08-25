@@ -6,6 +6,7 @@ mod daemon;
 mod error;
 mod extension;
 mod host;
+mod install;
 mod lock;
 mod logging;
 mod meta;
@@ -22,7 +23,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Commands, DAEMON_ENV_VAR};
+use cli::{Cli, Commands, DAEMON_ENV_VAR, ModuleCommands};
 
 pub fn run() -> ExitCode {
     if std::env::var_os(DAEMON_ENV_VAR).is_some() {
@@ -33,6 +34,18 @@ pub fn run() -> ExitCode {
         Some(Commands::Start) => daemon::cmd_start(),
         Some(Commands::Stop) => daemon::cmd_stop(),
         Some(Commands::Run) => daemon::cmd_run(),
+        Some(Commands::Module { command }) => match command {
+            ModuleCommands::Install { source } => match install::install_module(&source) {
+                Ok(outcome) => {
+                    logging::to_stdout(log::Level::Info, &install::format_module_outcome(&outcome));
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
+        },
         None => tui::run(),
     }
 }
