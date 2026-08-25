@@ -26,9 +26,23 @@ thread_local! {
 
 mod logic {
     use super::Config;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct DiskUsageJson {
+        total_bytes: u64,
+        used_bytes: u64,
+        free_bytes: u64,
+    }
 
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
+    }
+
+    pub fn parse_disk_usage_json(json: &str) -> Result<(u64, u64, u64), String> {
+        serde_json::from_str::<DiskUsageJson>(json)
+            .map(|u| (u.total_bytes, u.used_bytes, u.free_bytes))
+            .map_err(|e| format!("malformed disk usage: {e}"))
     }
 
     pub fn format_disk(format: &str, total_bytes: u64, used_bytes: u64, free_bytes: u64) -> String {
@@ -54,15 +68,12 @@ impl Guest for Component {
 
     fn update() -> Output {
         let device = DEVICE.with(|d| d.borrow().clone());
-        let text = match host::read_disk_usage(&device) {
-            Ok(usage) => FORMAT.with(|f| {
-                logic::format_disk(
-                    &f.borrow(),
-                    usage.total_bytes,
-                    usage.used_bytes,
-                    usage.free_bytes,
-                )
-            }),
+        let text = match host::call_extension("disk", "read-disk-usage", &device) {
+            Ok(json) => match logic::parse_disk_usage_json(&json) {
+                Ok((total_bytes, used_bytes, free_bytes)) => FORMAT
+                    .with(|f| logic::format_disk(&f.borrow(), total_bytes, used_bytes, free_bytes)),
+                Err(err) => logic::format_error(&err),
+            },
             Err(err) => logic::format_error(&err),
         };
         Output {
@@ -97,7 +108,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["disk".to_string()]
     }
 }
 
@@ -257,10 +268,28 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_disk() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["disk".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_disk_usage_json_success() {
+        assert_eq!(
+            parse_disk_usage_json(r#"{"total_bytes":1000,"used_bytes":400,"free_bytes":600}"#),
+            Ok((1000, 400, 600))
+        );
+    }
+
+    #[test]
+    fn parse_disk_usage_json_missing_fields() {
+        assert!(parse_disk_usage_json(r#"{"total_bytes":1000}"#).is_err());
+    }
+
+    #[test]
+    fn parse_disk_usage_json_garbage() {
+        assert!(parse_disk_usage_json("not json").is_err());
     }
 }
