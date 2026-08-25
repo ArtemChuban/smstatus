@@ -47,7 +47,7 @@ fn mem_usage_json(usage: &MemUsageJson) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
-    if request.method == "read-mem-usage" {
+    if request.method == "usage" {
         match mem_usage() {
             Ok(usage) => Response::Ok(mem_usage_json(&usage)),
             Err(msg) => Response::Err(msg),
@@ -134,9 +134,9 @@ mod tests {
     }
 
     #[test]
-    fn read_mem_usage_returns_ok_json() {
+    fn usage_returns_ok_json() {
         let response = handle_request(&Request {
-            method: "read-mem-usage".to_string(),
+            method: "usage".to_string(),
             payload: String::new(),
         });
         match response {
