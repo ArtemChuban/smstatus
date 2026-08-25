@@ -193,7 +193,7 @@ mod logic {
 }
 
 fn fetch_usage_text(credentials_path: &str, url: &str, format: &str) -> Result<String, String> {
-    let time_json = host::call_extension("time", "read-time-state", "")?;
+    let time_json = host::call_extension("time", "now", "")?;
     let now_ms = logic::parse_time_now_ms(&time_json)?;
     let credentials = host::call_extension("fs", "read", credentials_path)?;
     let token = logic::extract_access_token(&credentials)?;
