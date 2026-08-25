@@ -1,7 +1,7 @@
 mod client;
 mod registry;
 
-pub(crate) use registry::ExtensionRegistry;
+pub(crate) use registry::{ExtensionRegistry, is_safe_extension_name};
 
 #[cfg(test)]
 pub(crate) fn test_temp_dir(label: &str) -> std::path::PathBuf {

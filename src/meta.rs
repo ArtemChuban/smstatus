@@ -24,7 +24,7 @@ impl MetadataProbe {
         self.read_path(&modules_dir.join(format!("{kind}.wasm")), true)
     }
 
-    fn read_path(&self, path: &Path, wait_stable: bool) -> Result<Metadata> {
+    pub(crate) fn read_path(&self, path: &Path, wait_stable: bool) -> Result<Metadata> {
         if wait_stable {
             wait_wasm_stable(path);
         }
