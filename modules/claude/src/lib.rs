@@ -90,6 +90,25 @@ mod logic {
         ]
     }
 
+    pub fn http_get_payload(url: &str, headers: &[(String, String)]) -> String {
+        serde_json::json!({
+            "url": url,
+            "headers": headers,
+        })
+        .to_string()
+    }
+
+    #[derive(Deserialize)]
+    struct TimeStateJson {
+        now_ms: u64,
+    }
+
+    pub fn parse_time_now_ms(json: &str) -> Result<u64, String> {
+        serde_json::from_str::<TimeStateJson>(json)
+            .map(|s| s.now_ms)
+            .map_err(|e| format!("malformed time state: {e}"))
+    }
+
     #[derive(Deserialize)]
     struct UsageResponse {
         five_hour: Window,
@@ -173,16 +192,14 @@ mod logic {
     }
 }
 
-fn fetch_usage_text(
-    credentials_path: &str,
-    url: &str,
-    format: &str,
-    now_ms: u64,
-) -> Result<String, String> {
-    let credentials = host::read_sysfs(credentials_path)?;
+fn fetch_usage_text(credentials_path: &str, url: &str, format: &str) -> Result<String, String> {
+    let time_json = host::call_extension("time", "read-time-state", "")?;
+    let now_ms = logic::parse_time_now_ms(&time_json)?;
+    let credentials = host::call_extension("sysfs", "read-sysfs", credentials_path)?;
     let token = logic::extract_access_token(&credentials)?;
     let headers = logic::build_headers(&token);
-    let body = host::http_get(url, &headers)?;
+    let payload = logic::http_get_payload(url, &headers);
+    let body = host::call_extension("http", "http-get", &payload)?;
     let usage = logic::parse_usage(&body)?;
     let session_reset_secs = logic::seconds_until(usage.session_resets_at.as_deref(), now_ms);
     let week_reset_secs = logic::seconds_until(usage.week_resets_at.as_deref(), now_ms);
@@ -217,8 +234,7 @@ impl Guest for Component {
         let credentials_path = CREDENTIALS_PATH.with(|p| p.borrow().clone());
         let url = URL.with(|u| u.borrow().clone());
         let format = FORMAT.with(|f| f.borrow().clone());
-        let now_ms = host::read_time_state().now_ms;
-        let text = match fetch_usage_text(&credentials_path, &url, &format, now_ms) {
+        let text = match fetch_usage_text(&credentials_path, &url, &format) {
             Ok(t) => t,
             Err(err) => logic::format_error(&err),
         };
@@ -256,7 +272,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["sysfs".to_string(), "http".to_string(), "time".to_string()]
     }
 }
 
@@ -440,6 +456,40 @@ mod tests {
                 ("anthropic-beta".to_string(), "oauth-2025-04-20".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn http_get_payload_round_trips_url_and_headers() {
+        let headers = build_headers("tok-123");
+        let payload = http_get_payload("https://example.com/usage", &headers);
+        let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(value["url"], "https://example.com/usage");
+        assert_eq!(
+            value["headers"],
+            serde_json::json!([
+                ["Authorization", "Bearer tok-123"],
+                ["anthropic-beta", "oauth-2025-04-20"],
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_time_now_ms_success() {
+        assert_eq!(
+            parse_time_now_ms(r#"{"now_ms":123,"offset_seconds":3600}"#),
+            Ok(123)
+        );
+        assert_eq!(parse_time_now_ms(r#"{"now_ms":123}"#), Ok(123));
+    }
+
+    #[test]
+    fn parse_time_now_ms_missing_now_ms() {
+        assert!(parse_time_now_ms(r#"{"offset_seconds":3600}"#).is_err());
+    }
+
+    #[test]
+    fn parse_time_now_ms_garbage() {
+        assert!(parse_time_now_ms("not json").is_err());
     }
 
     #[test]
@@ -702,10 +752,10 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_sysfs_http_time() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["sysfs".to_string(), "http".to_string(), "time".to_string(),]
         );
     }
 }

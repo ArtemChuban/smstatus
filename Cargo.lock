@@ -2516,6 +2516,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-http"
+version = "0.1.0"
+dependencies = [
+ "extension-protocol",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "smstatus-mem"
 version = "0.1.0"
 dependencies = [
