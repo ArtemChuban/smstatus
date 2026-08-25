@@ -7,15 +7,25 @@ pub(crate) const EXIT_ALREADY_RUNNING: u8 = 3;
 #[command(
     name = "smstatus",
     about = "suckmore status",
-    version = env!("CARGO_PKG_VERSION"),
     disable_version_flag = true
 )]
 pub(crate) struct Cli {
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
-    version: (),
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::SetTrue)]
+    version: bool,
 
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
+}
+
+impl Cli {
+    pub(crate) fn parse_cli() -> Self {
+        let cli = Self::parse();
+        if cli.version {
+            println!("smstatus {}", crate::version::cli_version_info());
+            std::process::exit(0);
+        }
+        cli
+    }
 }
 
 #[derive(Subcommand)]
