@@ -11,7 +11,7 @@ use std::cell::RefCell;
 
 const DEFAULT_DEVICE: &str = "/dev/sda1";
 const DEFAULT_FORMAT: &str = "{used}/{total} used, {free} free";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {

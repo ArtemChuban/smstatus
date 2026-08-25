@@ -2499,7 +2499,6 @@ dependencies = [
  "toml",
  "toml_edit",
  "unicode-width",
- "ureq",
  "wasmtime",
  "wasmtime-wasi",
  "x11rb",

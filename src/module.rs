@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Engine, Store};
-use x11rb::rust_connection::RustConnection;
 
 use crate::bindings::GuestModule;
 use crate::config::BarConfig;
@@ -42,8 +41,6 @@ pub(crate) struct ModuleRuntime {
     linker: Linker<HostState>,
     modules_dir: PathBuf,
     fuel_per_tick: u64,
-    connection: Arc<RustConnection>,
-    http_agent: ureq::Agent,
     extensions: Arc<ExtensionRegistry>,
     validated_kinds: RefCell<HashSet<String>>,
 }
@@ -74,8 +71,6 @@ impl ModuleRuntime {
         linker: Linker<HostState>,
         modules_dir: PathBuf,
         fuel_per_tick: u64,
-        connection: Arc<RustConnection>,
-        http_agent: ureq::Agent,
         extensions: Arc<ExtensionRegistry>,
     ) -> Self {
         Self {
@@ -83,8 +78,6 @@ impl ModuleRuntime {
             linker,
             modules_dir,
             fuel_per_tick,
-            connection,
-            http_agent,
             extensions,
             validated_kinds: RefCell::new(HashSet::new()),
         }
@@ -101,11 +94,7 @@ impl ModuleRuntime {
     }
 
     fn instantiate(&self, component: &Component) -> Result<(Store<HostState>, GuestModule)> {
-        let state = HostState::new(
-            Arc::clone(&self.connection),
-            self.http_agent.clone(),
-            Arc::clone(&self.extensions),
-        );
+        let state = HostState::new(Arc::clone(&self.extensions));
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(self.fuel_per_tick)?;
