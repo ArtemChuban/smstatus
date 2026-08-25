@@ -707,10 +707,7 @@ mod tests {
         )
         .unwrap();
         fs::copy(&wasm, staging.join("module.wasm")).unwrap();
-        let archive = staging.parent().unwrap().join(format!(
-            "smstatus-pack-{package}-{version}-{}.tar.gz",
-            std::process::id()
-        ));
+        let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
         write_tar_gz(&staging, &archive).unwrap();
         archive
     }
@@ -762,10 +759,7 @@ mod tests {
         )
         .unwrap();
         fs::copy(&echo, staging.join("extension")).unwrap();
-        let archive = staging
-            .parent()
-            .unwrap()
-            .join(format!("smstatus-pack-echo-{}.tar.gz", std::process::id()));
+        let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
         write_tar_gz(&staging, &archive).unwrap();
         archive
     }
