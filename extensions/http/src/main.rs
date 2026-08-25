@@ -36,7 +36,7 @@ fn http_get(agent: &ureq::Agent, payload: &HttpGetPayload) -> Result<String, Str
 }
 
 fn handle_request(agent: &ureq::Agent, request: &Request) -> Response {
-    if request.method == "http-get" {
+    if request.method == "get" {
         match parse_http_get_payload(&request.payload) {
             Ok(payload) => match http_get(agent, &payload) {
                 Ok(body) => Response::Ok(body),
@@ -116,7 +116,7 @@ mod tests {
         let response = handle_request(
             &agent,
             &Request {
-                method: "http-get".to_string(),
+                method: "get".to_string(),
                 payload: r#"{"url":"not-a-valid-url","headers":[]}"#.to_string(),
             },
         );
