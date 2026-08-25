@@ -2533,6 +2533,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-xkb"
+version = "0.1.0"
+dependencies = [
+ "extension-protocol",
+ "serde",
+ "serde_json",
+ "x11rb",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
