@@ -3,9 +3,15 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::bindings::Metadata;
 use crate::error::Result;
 use crate::extension::is_safe_extension_name;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Metadata {
+    pub display_name: String,
+    pub version: String,
+    pub author: String,
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(crate) struct HostApiVersionReq {

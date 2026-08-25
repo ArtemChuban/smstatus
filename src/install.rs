@@ -2,14 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flate2::Compression;
 use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
 
-use crate::bindings::Metadata;
 use crate::error::Result;
 use crate::extension::is_safe_extension_name;
 use crate::manifest;
+use crate::manifest::Metadata;
 use crate::meta::MetadataProbe;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -417,6 +415,7 @@ pub(crate) fn install_extension_into(
     let (_scratch, staged) = stage_from_package_root(&root)?;
     place_package_dir(&staged, &dest)?;
     set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
+    let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
 
     if replaced {
         Ok(ExtensionInstallOutcome::Replace { name })
@@ -486,8 +485,8 @@ pub(crate) fn list_extensions_in(extensions_dir: &Path) -> Result<Vec<String>> {
             continue;
         };
         if is_safe_extension_name(name)
-            && path.join("manifest.toml").is_file()
-            && path.join("extension").is_file()
+            && manifest::extension_manifest_path(extensions_dir, name).is_file()
+            && manifest::extension_binary_path(extensions_dir, name).is_file()
         {
             names.push(name.to_string());
         }
@@ -522,6 +521,9 @@ pub(crate) fn remove_extension(name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::sync::OnceLock;
+
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
 
     fn meta(version: &str) -> Metadata {
         Metadata {

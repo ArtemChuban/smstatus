@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::bindings::{ConfigParam, Metadata};
+use crate::bindings::ConfigParam;
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
+use crate::manifest::Metadata;
 use crate::meta::MetadataProbe;
 use crate::schema_probe::SchemaProbe;
 

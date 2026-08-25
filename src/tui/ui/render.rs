@@ -8,9 +8,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::bindings::Metadata;
 use crate::config::{BarConfig, ModuleParamValue};
 use crate::logging::parse_log_level;
+use crate::manifest::Metadata;
 
 use super::super::app::{
     App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
@@ -477,7 +477,7 @@ pub(super) fn visible_log_lines(
 #[cfg(test)]
 mod label_tests {
     use super::{module_list_label, params_title_text};
-    use crate::bindings::Metadata;
+    use crate::manifest::Metadata;
 
     fn sample_meta() -> Metadata {
         Metadata {

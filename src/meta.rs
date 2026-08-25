@@ -1,8 +1,7 @@
 use std::path::Path;
 
-use crate::bindings::Metadata;
 use crate::error::Result;
-use crate::manifest;
+use crate::manifest::{self, Metadata};
 use crate::module::wait_wasm_stable;
 
 pub(crate) struct MetadataProbe;
