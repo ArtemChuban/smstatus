@@ -151,20 +151,11 @@ impl App {
         let Some(modules_dir) = self.modules_dir.clone() else {
             return;
         };
-        if self.metadata_probe.is_none() {
-            match crate::meta::MetadataProbe::new() {
-                Ok(probe) => self.metadata_probe = Some(probe),
-                Err(_) => return,
-            }
-        }
-        let Some(probe) = self.metadata_probe.as_ref() else {
-            return;
-        };
         let wait_stable = self.metadata_needs_stable.remove(&kind);
         let result = if wait_stable {
-            probe.read_after_stable(&modules_dir, &kind)
+            crate::meta::read_after_stable(&modules_dir, &kind)
         } else {
-            probe.read(&modules_dir, &kind)
+            crate::meta::read(&modules_dir, &kind)
         };
         match result {
             Ok(meta) => {
