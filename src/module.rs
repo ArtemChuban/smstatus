@@ -104,13 +104,9 @@ impl ModuleRuntime {
 
     pub(crate) fn start(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {
         let manifest = crate::manifest::read_module_manifest(&self.modules_dir, kind)?;
-        version::check_compatible(
+        version::check_modules_api_compatible(
             kind,
-            (
-                manifest.required_host_api_version.major,
-                manifest.required_host_api_version.minor,
-                0,
-            ),
+            (manifest.modules_api.major, manifest.modules_api.minor, 0),
         )?;
 
         let missing = missing_extensions(&manifest.required_extensions, &self.extensions);
@@ -357,7 +353,7 @@ mod tests {
             std::fs::write(
                 pkg.join("manifest.toml"),
                 format!(
-                    "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\n"
+                    "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nextensions-api = {{ major = 0, minor = 1 }}\n"
                 ),
             )
             .unwrap();

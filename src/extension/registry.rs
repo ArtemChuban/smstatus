@@ -93,6 +93,18 @@ impl ExtensionRegistry {
             return Err(format!("extension `{name}` is not installed"));
         }
 
+        let manifest = crate::manifest::read_extension_manifest(&self.extensions_dir, name)
+            .map_err(|e| e.to_string())?;
+        crate::version::check_extensions_api_compatible(
+            name,
+            (
+                manifest.extensions_api.major,
+                manifest.extensions_api.minor,
+                0,
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+
         let socket_path = self.socket_path(name);
         std::fs::create_dir_all(&self.socket_dir).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(&socket_path);
@@ -247,24 +259,38 @@ mod tests {
         symlink(echo_extension_path(), pkg.join("extension")).unwrap();
         std::fs::write(
             pkg.join("manifest.toml"),
-            "name = \"echo\"\nversion = \"0.1.0\"\nauthor = \"ArtemChuban\"\nrequired_host_api_version = { major = 2, minor = 0 }\n",
+            "name = \"echo\"\nversion = \"0.1.0\"\nauthor = \"ArtemChuban\"\nextensions-api = { major = 0, minor = 1 }\n",
+        )
+        .unwrap();
+    }
+
+    fn install_script_extension(
+        extensions_dir: &Path,
+        name: &str,
+        script: &str,
+        api_major: u32,
+        api_minor: u32,
+    ) {
+        let pkg = extensions_dir.join(name);
+        std::fs::create_dir_all(&pkg).unwrap();
+        let path = pkg.join("extension");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            pkg.join("manifest.toml"),
+            format!(
+                "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nextensions-api = {{ major = {api_major}, minor = {api_minor} }}\n"
+            ),
         )
         .unwrap();
     }
 
     fn install_failing(extensions_dir: &Path, name: &str) {
-        let pkg = extensions_dir.join(name);
-        std::fs::create_dir_all(&pkg).unwrap();
-        let path = pkg.join("extension");
-        std::fs::write(&path, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::write(
-            pkg.join("manifest.toml"),
-            format!(
-                "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nrequired_host_api_version = {{ major = 2, minor = 0 }}\n"
-            ),
-        )
-        .unwrap();
+        install_script_extension(extensions_dir, name, "#!/bin/sh\nexit 1\n", 0, 1);
+    }
+
+    fn install_incompatible(extensions_dir: &Path, name: &str) {
+        install_script_extension(extensions_dir, name, "#!/bin/sh\nexit 0\n", 9, 0);
     }
 
     #[test]
@@ -328,5 +354,21 @@ mod tests {
         let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
         let err = registry.call("broken", "ping", "hello").unwrap_err();
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn call_rejects_incompatible_extensions_api_before_spawn() {
+        let base = temp_dir();
+        let extensions_dir = base.join("extensions");
+        let socket_dir = base.join("sockets");
+        install_incompatible(&extensions_dir, "oldapi");
+
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir.clone());
+        let err = registry.call("oldapi", "ping", "hello").unwrap_err();
+        assert!(
+            err.contains("extensions-api"),
+            "expected extensions-api mismatch, got {err}"
+        );
+        assert!(!socket_dir.exists());
     }
 }
