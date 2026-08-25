@@ -68,7 +68,7 @@ impl Guest for Component {
 
     fn update() -> Output {
         let device = DEVICE.with(|d| d.borrow().clone());
-        let text = match host::call_extension("disk", "read-disk-usage", &device) {
+        let text = match host::call_extension("disk", "usage", &device) {
             Ok(json) => match logic::parse_disk_usage_json(&json) {
                 Ok((total_bytes, used_bytes, free_bytes)) => FORMAT
                     .with(|f| logic::format_disk(&f.borrow(), total_bytes, used_bytes, free_bytes)),
