@@ -54,10 +54,10 @@ build-time flags="":
 
 build-time-release: (build-time "--release")
 
-build-sysfs flags="":
-    cargo build -p smstatus-sysfs {{flags}}
+build-fs flags="":
+    cargo build -p smstatus-fs {{flags}}
 
-build-sysfs-release: (build-sysfs "--release")
+build-fs-release: (build-fs "--release")
 
 build-mem flags="":
     cargo build -p smstatus-mem {{flags}}
@@ -84,9 +84,9 @@ build-http flags="":
 
 build-http-release: (build-http "--release")
 
-build-extensions: build-echo build-time build-sysfs build-mem build-xkb build-disk-extension build-smstatus-process build-http
+build-extensions: build-echo build-time build-fs build-mem build-xkb build-disk-extension build-smstatus-process build-http
 
-build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release build-xkb-release build-disk-extension-release build-smstatus-process-release build-http-release
+build-extensions-release: build-echo-release build-time-release build-fs-release build-mem-release build-xkb-release build-disk-extension-release build-smstatus-process-release build-http-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -133,8 +133,8 @@ test-echo:
 test-time:
     cargo test -p smstatus-time
 
-test-sysfs:
-    cargo test -p smstatus-sysfs
+test-fs:
+    cargo test -p smstatus-fs
 
 test-mem:
     cargo test -p smstatus-mem
@@ -155,7 +155,7 @@ test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-c
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-extensions: test-echo test-time test-sysfs test-mem test-xkb test-disk-extension test-smstatus-process test-http
+test-extensions: test-echo test-time test-fs test-mem test-xkb test-disk-extension test-smstatus-process test-http
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -178,8 +178,8 @@ cov-echo:
 cov-time:
     cargo llvm-cov -p smstatus-time --summary-only
 
-cov-sysfs:
-    cargo llvm-cov -p smstatus-sysfs --summary-only
+cov-fs:
+    cargo llvm-cov -p smstatus-fs --summary-only
 
 cov-mem:
     cargo llvm-cov -p smstatus-mem --summary-only
@@ -201,7 +201,7 @@ cov-packages: cov-fmt-common cov-extension-protocol
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo cov-time cov-sysfs cov-mem cov-xkb cov-disk-extension cov-smstatus-process cov-http
+cov-extensions: cov-echo cov-time cov-fs cov-mem cov-xkb cov-disk-extension cov-smstatus-process cov-http
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -219,5 +219,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
+    cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
     cargo clippy -p smstatus -- -D warnings
