@@ -27,7 +27,7 @@ fn time_state_json(state: &TimeStateJson) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
-    if request.method == "read-time-state" {
+    if request.method == "now" {
         Response::Ok(time_state_json(&wall_clock_state()))
     } else {
         Response::Err(format!("unknown method: {}", request.method))
@@ -87,9 +87,9 @@ mod tests {
     }
 
     #[test]
-    fn read_time_state_returns_ok_json() {
+    fn now_returns_ok_json() {
         let response = handle_request(&Request {
-            method: "read-time-state".to_string(),
+            method: "now".to_string(),
             payload: String::new(),
         });
         match response {

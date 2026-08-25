@@ -1,31 +1,6 @@
 package smstatus:module;
 
 interface host {
-  read-sysfs: func(path: string) -> result<string, string>;
-  record time-state {
-    now-ms: u64,
-    offset-seconds: s32,
-  }
-  read-time-state: func() -> time-state;
-  record xkb-state {
-    active-group: u8,
-    symbols: string,
-  }
-  read-xkb-state: func() -> result<xkb-state, string>;
-  record disk-usage {
-    total-bytes: u64,
-    used-bytes: u64,
-    free-bytes: u64,
-  }
-  read-disk-usage: func(device: string) -> result<disk-usage, string>;
-  record mem-usage {
-    total-bytes: u64,
-    used-bytes: u64,
-    free-bytes: u64,
-  }
-  read-mem-usage: func() -> result<mem-usage, string>;
-  read-process-running: func(name: string) -> result<bool, string>;
-  http-get: func(url: string, headers: list<tuple<string, string>>) -> result<string, string>;
   call-extension: func(extension: string, method: string, payload: string) -> result<string, string>;
 }
 

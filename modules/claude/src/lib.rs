@@ -14,7 +14,7 @@ const DEFAULT_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_FORMAT: &str = "5h:{session}%({session_reset}) 7d:{week}%({week_reset})";
 const DEFAULT_INTERVAL_MS: u32 = 300_000;
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -193,13 +193,13 @@ mod logic {
 }
 
 fn fetch_usage_text(credentials_path: &str, url: &str, format: &str) -> Result<String, String> {
-    let time_json = host::call_extension("time", "read-time-state", "")?;
+    let time_json = host::call_extension("time", "now", "")?;
     let now_ms = logic::parse_time_now_ms(&time_json)?;
-    let credentials = host::call_extension("sysfs", "read-sysfs", credentials_path)?;
+    let credentials = host::call_extension("fs", "read", credentials_path)?;
     let token = logic::extract_access_token(&credentials)?;
     let headers = logic::build_headers(&token);
     let payload = logic::http_get_payload(url, &headers);
-    let body = host::call_extension("http", "http-get", &payload)?;
+    let body = host::call_extension("http", "get", &payload)?;
     let usage = logic::parse_usage(&body)?;
     let session_reset_secs = logic::seconds_until(usage.session_resets_at.as_deref(), now_ms);
     let week_reset_secs = logic::seconds_until(usage.week_resets_at.as_deref(), now_ms);
@@ -272,7 +272,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec!["sysfs".to_string(), "http".to_string(), "time".to_string()]
+        vec!["fs".to_string(), "http".to_string(), "time".to_string()]
     }
 }
 
@@ -752,10 +752,10 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_sysfs_http_time() {
+    fn required_extensions_is_fs_http_time() {
         assert_eq!(
             super::Component::required_extensions(),
-            vec!["sysfs".to_string(), "http".to_string(), "time".to_string(),]
+            vec!["fs".to_string(), "http".to_string(), "time".to_string(),]
         );
     }
 }

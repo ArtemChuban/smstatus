@@ -2499,7 +2499,6 @@ dependencies = [
  "toml",
  "toml_edit",
  "unicode-width",
- "ureq",
  "wasmtime",
  "wasmtime-wasi",
  "x11rb",
@@ -2513,6 +2512,14 @@ dependencies = [
  "nix",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "smstatus-fs"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "extension-protocol",
 ]
 
 [[package]]
@@ -2538,14 +2545,6 @@ dependencies = [
 name = "smstatus-process"
 version = "0.1.0"
 dependencies = [
- "extension-protocol",
-]
-
-[[package]]
-name = "smstatus-sysfs"
-version = "0.1.0"
-dependencies = [
- "dirs",
  "extension-protocol",
 ]
 

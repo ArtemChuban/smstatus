@@ -76,7 +76,7 @@ fn handle_request_with(
     request: &Request,
     mut read: impl FnMut() -> Result<XkbStateJson, String>,
 ) -> Response {
-    if request.method == "read-xkb-state" {
+    if request.method == "state" {
         match read() {
             Ok(state) => Response::Ok(xkb_state_json(&state)),
             Err(msg) => Response::Err(msg),
@@ -137,10 +137,10 @@ mod tests {
     }
 
     #[test]
-    fn read_xkb_state_returns_ok_json_when_injected_ok() {
+    fn state_returns_ok_json_when_injected_ok() {
         let response = handle_request_with(
             &Request {
-                method: "read-xkb-state".to_string(),
+                method: "state".to_string(),
                 payload: String::new(),
             },
             || {
@@ -161,10 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn read_xkb_state_returns_err_when_injected_err() {
+    fn state_returns_err_when_injected_err() {
         let response = handle_request_with(
             &Request {
-                method: "read-xkb-state".to_string(),
+                method: "state".to_string(),
                 payload: String::new(),
             },
             || Err("no display".to_string()),

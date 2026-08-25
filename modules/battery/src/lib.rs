@@ -11,7 +11,7 @@ use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/sys/class/power_supply/BAT0/capacity";
 const DEFAULT_FORMAT: &str = "BAT {:3}%";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -54,7 +54,7 @@ impl Guest for Component {
 
     fn update() -> Output {
         let path = PATH.with(|p| p.borrow().clone());
-        let text = match host::call_extension("sysfs", "read-sysfs", &path) {
+        let text = match host::call_extension("fs", "read", &path) {
             Ok(content) => FORMAT.with(|f| logic::format_battery(&f.borrow(), &content)),
             Err(err) => logic::format_error(&err),
         };
@@ -90,7 +90,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec!["sysfs".to_string()]
+        vec!["fs".to_string()]
     }
 }
 
@@ -276,10 +276,10 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_sysfs() {
+    fn required_extensions_is_fs() {
         assert_eq!(
             super::Component::required_extensions(),
-            vec!["sysfs".to_string()]
+            vec!["fs".to_string()]
         );
     }
 }
