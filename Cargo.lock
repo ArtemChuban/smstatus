@@ -2506,6 +2506,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-disk"
+version = "0.1.0"
+dependencies = [
+ "extension-protocol",
+ "nix",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "smstatus-mem"
 version = "0.1.0"
 dependencies = [
