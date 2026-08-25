@@ -23,7 +23,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Commands, DAEMON_ENV_VAR, ModuleCommands};
+use cli::{Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands};
 
 pub fn run() -> ExitCode {
     if std::env::var_os(DAEMON_ENV_VAR).is_some() {
@@ -38,6 +38,21 @@ pub fn run() -> ExitCode {
             ModuleCommands::Install { source } => match install::install_module(&source) {
                 Ok(outcome) => {
                     logging::to_stdout(log::Level::Info, &install::format_module_outcome(&outcome));
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    logging::to_stderr(log::Level::Error, &err.to_string());
+                    ExitCode::FAILURE
+                }
+            },
+        },
+        Some(Commands::Extension { command }) => match command {
+            ExtensionCommands::Install { source } => match install::install_extension(&source) {
+                Ok(outcome) => {
+                    logging::to_stdout(
+                        log::Level::Info,
+                        &install::format_extension_outcome(&outcome),
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(err) => {
