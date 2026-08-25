@@ -35,7 +35,6 @@ pub(crate) fn run() -> Result<()> {
 
     let linker = build_linker(&engine)?;
     let x11_bar = X11Bar::connect()?;
-    let http_agent = build_http_agent();
     let extensions = Arc::new(ExtensionRegistry::new(
         config_dir.join("extensions"),
         lock::lock_dir()?.join("extensions"),
@@ -46,8 +45,6 @@ pub(crate) fn run() -> Result<()> {
         linker,
         modules_dir.clone(),
         FUEL_PER_TICK,
-        Arc::clone(x11_bar.connection()),
-        http_agent,
         extensions,
     );
 
@@ -99,13 +96,6 @@ fn build_linker(engine: &Engine) -> Result<Linker<HostState>> {
         |state: &mut HostState| state,
     )?;
     Ok(linker)
-}
-
-fn build_http_agent() -> ureq::Agent {
-    let agent_config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .build();
-    ureq::Agent::new_with_config(agent_config)
 }
 
 fn start_modules(runtime: &ModuleRuntime, config: &BarConfig) -> Result<Vec<ModuleState>> {

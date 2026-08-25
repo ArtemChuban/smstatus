@@ -14,7 +14,7 @@ const DEFAULT_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_FORMAT: &str = "5h:{session}%({session_reset}) 7d:{week}%({week_reset})";
 const DEFAULT_INTERVAL_MS: u32 = 300_000;
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {

@@ -13,7 +13,6 @@ mod module;
 mod probe;
 mod schema;
 mod schema_probe;
-mod sysinfo;
 mod tui;
 mod version;
 mod watcher;

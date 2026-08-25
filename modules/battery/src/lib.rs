@@ -11,7 +11,7 @@ use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/sys/class/power_supply/BAT0/capacity";
 const DEFAULT_FORMAT: &str = "BAT {:3}%";
-const REQUIRED_HOST_API: (u32, u32, u32) = (1, 0, 0);
+const REQUIRED_HOST_API: (u32, u32, u32) = (2, 0, 0);
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
