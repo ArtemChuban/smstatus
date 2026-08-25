@@ -64,9 +64,14 @@ build-mem flags="":
 
 build-mem-release: (build-mem "--release")
 
-build-extensions: build-echo build-time build-sysfs build-mem
+build-xkb flags="":
+    cargo build -p smstatus-xkb {{flags}}
 
-build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release
+build-xkb-release: (build-xkb "--release")
+
+build-extensions: build-echo build-time build-sysfs build-mem build-xkb
+
+build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release build-xkb-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -119,11 +124,14 @@ test-sysfs:
 test-mem:
     cargo test -p smstatus-mem
 
+test-xkb:
+    cargo test -p smstatus-xkb
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-extensions: test-echo test-time test-sysfs test-mem
+test-extensions: test-echo test-time test-sysfs test-mem test-xkb
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -152,12 +160,15 @@ cov-sysfs:
 cov-mem:
     cargo llvm-cov -p smstatus-mem --summary-only
 
+cov-xkb:
+    cargo llvm-cov -p smstatus-xkb --summary-only
+
 cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo cov-time cov-sysfs cov-mem
+cov-extensions: cov-echo cov-time cov-sysfs cov-mem cov-xkb
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -175,5 +186,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -- -D warnings
+    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -p smstatus-xkb -- -D warnings
     cargo clippy -p smstatus -- -D warnings
