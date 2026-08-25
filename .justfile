@@ -59,9 +59,14 @@ build-sysfs flags="":
 
 build-sysfs-release: (build-sysfs "--release")
 
-build-extensions: build-echo build-time build-sysfs
+build-mem flags="":
+    cargo build -p smstatus-mem {{flags}}
 
-build-extensions-release: build-echo-release build-time-release build-sysfs-release
+build-mem-release: (build-mem "--release")
+
+build-extensions: build-echo build-time build-sysfs build-mem
+
+build-extensions-release: build-echo-release build-time-release build-sysfs-release build-mem-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -111,11 +116,14 @@ test-time:
 test-sysfs:
     cargo test -p smstatus-sysfs
 
+test-mem:
+    cargo test -p smstatus-mem
+
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
 test-packages: test-fmt-common test-extension-protocol
 
-test-extensions: test-echo test-time test-sysfs
+test-extensions: test-echo test-time test-sysfs test-mem
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -141,12 +149,15 @@ cov-time:
 cov-sysfs:
     cargo llvm-cov -p smstatus-sysfs --summary-only
 
+cov-mem:
+    cargo llvm-cov -p smstatus-mem --summary-only
+
 cov-packages: cov-fmt-common cov-extension-protocol
 
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo cov-time cov-sysfs
+cov-extensions: cov-echo cov-time cov-sysfs cov-mem
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -164,5 +175,5 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -- -D warnings
+    cargo clippy -p echo -p smstatus-time -p smstatus-sysfs -p smstatus-mem -- -D warnings
     cargo clippy -p smstatus -- -D warnings

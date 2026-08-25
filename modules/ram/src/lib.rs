@@ -23,9 +23,23 @@ thread_local! {
 
 mod logic {
     use super::Config;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct MemUsageJson {
+        total_bytes: u64,
+        used_bytes: u64,
+        free_bytes: u64,
+    }
 
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
+    }
+
+    pub fn parse_mem_usage_json(json: &str) -> Result<(u64, u64, u64), String> {
+        serde_json::from_str::<MemUsageJson>(json)
+            .map(|s| (s.total_bytes, s.used_bytes, s.free_bytes))
+            .map_err(|e| format!("malformed mem usage: {e}"))
     }
 
     pub fn format_ram(format: &str, total_bytes: u64, used_bytes: u64, free_bytes: u64) -> String {
@@ -48,15 +62,12 @@ impl Guest for Component {
     }
 
     fn update() -> Output {
-        let text = match host::read_mem_usage() {
-            Ok(usage) => FORMAT.with(|f| {
-                logic::format_ram(
-                    &f.borrow(),
-                    usage.total_bytes,
-                    usage.used_bytes,
-                    usage.free_bytes,
-                )
-            }),
+        let text = match host::call_extension("mem", "read-mem-usage", "") {
+            Ok(json) => match logic::parse_mem_usage_json(&json) {
+                Ok((total_bytes, used_bytes, free_bytes)) => FORMAT
+                    .with(|f| logic::format_ram(&f.borrow(), total_bytes, used_bytes, free_bytes)),
+                Err(err) => logic::format_error(&err),
+            },
             Err(err) => logic::format_error(&err),
         };
         Output {
@@ -87,7 +98,7 @@ impl Guest for Component {
     }
 
     fn required_extensions() -> Vec<String> {
-        vec![]
+        vec!["mem".to_string()]
     }
 }
 
@@ -211,10 +222,30 @@ mod tests {
     }
 
     #[test]
-    fn required_extensions_is_empty() {
+    fn required_extensions_is_mem() {
         assert_eq!(
             super::Component::required_extensions(),
-            Vec::<String>::new()
+            vec!["mem".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_mem_usage_json_success() {
+        assert_eq!(
+            parse_mem_usage_json(
+                r#"{"total_bytes":1024000,"used_bytes":614400,"free_bytes":409600}"#
+            ),
+            Ok((1_024_000, 614_400, 409_600))
+        );
+    }
+
+    #[test]
+    fn parse_mem_usage_json_missing_fields() {
+        assert!(parse_mem_usage_json(r#"{"total_bytes":1024000}"#).is_err());
+    }
+
+    #[test]
+    fn parse_mem_usage_json_garbage() {
+        assert!(parse_mem_usage_json("not json").is_err());
     }
 }
