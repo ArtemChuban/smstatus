@@ -1,14 +1,12 @@
 name: Rust Doctor
 
 on:
-  push:
-    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
-  group: rust-doctor-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: rust-doctor-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -29,23 +27,31 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Cache rust-doctor global install
+        id: rust-doctor-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm-global
+          key: rust-doctor-0.6.0-${{ runner.os }}
+
       - name: Install rust-doctor
-        run: npm install -g rust-doctor@0.5.0
+        run: |
+          mkdir -p ~/.npm-global
+          npm config set prefix ~/.npm-global
+          echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
+          if [ ! -x ~/.npm-global/bin/rust-doctor ]; then
+            npm install -g rust-doctor@0.6.0
+          fi
 
       - name: Inspect the workspace
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          if [ -n "${BASE_REF:-}" ]; then
-            git fetch --no-tags origin "$BASE_REF"
-            scope_arguments=(--scope baseline --base "origin/$BASE_REF")
-          else
-            scope_arguments=(--scope full)
-          fi
+          git fetch --no-tags origin "$BASE_REF"
 
           set +e
-          rust-doctor . --yes --verbose "${scope_arguments[@]}" > scan.txt 2>&1
+          rust-doctor . --yes --verbose --scope baseline --base "origin/$BASE_REF" > scan.txt 2>&1
           scan_status=$?
           set -e
 
