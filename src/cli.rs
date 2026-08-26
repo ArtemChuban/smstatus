@@ -34,7 +34,7 @@ pub(crate) enum Commands {
     Stop,
     Run,
     Reload {
-        /// Reload config.toml (module list, separator, log retention, param re-init)
+        /// Reload active preset (module list, separator, log retention, param re-init)
         #[arg(long)]
         config: bool,
         /// Reload wasm for a module kind (repeatable)

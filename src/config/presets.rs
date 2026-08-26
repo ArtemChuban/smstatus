@@ -3,6 +3,8 @@
 //! Root `config.toml` holds the active preset pointer; bar layout lives in
 //! `presets/<name>.toml`. See `create_default_preset` for initial layout (#64).
 
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;

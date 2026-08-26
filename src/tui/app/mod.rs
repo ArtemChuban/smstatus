@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bindings::ConfigParam;
-use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
+use crate::config::{
+    BarConfig, ModuleParamValue, ParamWriteExpect, active_config_path, read_active_name,
+};
 use crate::manifest::{Metadata, RequiredExtension};
 use crate::schema_probe::SchemaProbe;
 
@@ -134,6 +136,8 @@ pub(super) struct App {
     pub(super) pending_start: Option<std::process::Child>,
     pub(super) pending_start_confirmed_running: bool,
     pub(super) mode: Mode,
+    pub(super) config_dir: Option<PathBuf>,
+    pub(super) active_preset: Option<String>,
     pub(super) config_path: Option<PathBuf>,
     pub(super) modules_dir: Option<PathBuf>,
     pub(super) extensions_dir: Option<PathBuf>,
@@ -186,6 +190,8 @@ impl Default for App {
             pending_start: None,
             pending_start_confirmed_running: false,
             mode: Mode::default(),
+            config_dir: None,
+            active_preset: None,
             config_path: None,
             modules_dir: None,
             extensions_dir: None,
@@ -237,19 +243,34 @@ impl App {
         let mut app = Self::default();
         match crate::config::default_config_dir() {
             Ok(config_dir) => {
-                let config_path = config_dir.join("config.toml");
-                let log_days = BarConfig::load(&config_path)
-                    .map(|config| config.log_days())
-                    .unwrap_or(7);
-                if let Err(err) = crate::logging::init(log_days) {
-                    crate::logging::to_stderr(
-                        log::Level::Error,
-                        &format!("failed to initialize logging: {err}"),
-                    );
-                }
-                app.config_path = Some(config_path);
+                app.config_dir = Some(config_dir.clone());
                 app.modules_dir = Some(config_dir.join("modules"));
                 app.extensions_dir = Some(config_dir.join("extensions"));
+
+                match active_config_path(&config_dir) {
+                    Ok(path) => {
+                        app.config_path = Some(path.clone());
+                        app.active_preset = read_active_name(&config_dir).ok();
+                        let log_days = BarConfig::load(&path)
+                            .map(|config| config.log_days())
+                            .unwrap_or(7);
+                        if let Err(err) = crate::logging::init(log_days) {
+                            crate::logging::to_stderr(
+                                log::Level::Error,
+                                &format!("failed to initialize logging: {err}"),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        app.push_action_message(format!("{err}"));
+                        if let Err(init_err) = crate::logging::init(7) {
+                            crate::logging::to_stderr(
+                                log::Level::Error,
+                                &format!("failed to initialize logging: {init_err}"),
+                            );
+                        }
+                    }
+                }
                 app.refresh_config();
             }
             Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
