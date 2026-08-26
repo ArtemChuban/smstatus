@@ -1,7 +1,9 @@
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use extension_protocol::{self as protocol, Request, Response};
+
+const EXTENSION_NAME: &str = "fs";
 
 fn expand_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, String> {
     match path.strip_prefix("~/") {
@@ -13,20 +15,95 @@ fn expand_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, String> {
     }
 }
 
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
+
+/// Resolve for prefix checks: canonicalize when possible, else lexical normalize.
+/// Collapses `..` and follows symlinks so allowlisted prefixes are real containment.
+fn resolve_for_check(path: &Path) -> PathBuf {
+    match path.canonicalize() {
+        Ok(canon) => canon,
+        Err(_) => lexical_normalize(path),
+    }
+}
+
+fn path_under_prefix(path: &Path, prefix: &Path) -> bool {
+    resolve_for_check(path).starts_with(resolve_for_check(prefix))
+}
+
 fn read_file(path: &str, home_dir: Option<&Path>) -> Result<String, String> {
     let expanded = expand_path(path, home_dir)?;
     std::fs::read_to_string(&expanded).map_err(|e| format!("read failed: {e}"))
 }
 
-fn handle_request(request: &Request) -> Response {
+fn handle_check(payload: &str, home_dir: Option<&Path>) -> Response {
+    let check = match protocol::decode_check_payload(payload) {
+        Ok(check) => check,
+        Err(msg) => return Response::Err(msg),
+    };
+    let entries = protocol::matching_entries(&check, EXTENSION_NAME);
+    if entries.is_empty() {
+        return Response::Err(format!(
+            "permission denied: no allowlisted entry for extension `{EXTENSION_NAME}` method `{}`",
+            check.method
+        ));
+    }
+    if check.method != "read" {
+        return Response::Ok(String::new());
+    }
+    let expanded_path = match expand_path(&check.payload, home_dir) {
+        Ok(path) => path,
+        Err(msg) => return Response::Err(msg),
+    };
+    for entry in entries {
+        let prefixes = match protocol::constraint_string_list(entry, "path_prefixes") {
+            Ok(prefixes) => prefixes,
+            Err(msg) => return Response::Err(msg),
+        };
+        for prefix in prefixes {
+            let expanded_prefix = match expand_path(&prefix, home_dir) {
+                Ok(path) => path,
+                Err(msg) => return Response::Err(msg),
+            };
+            if path_under_prefix(&expanded_path, &expanded_prefix) {
+                return Response::Ok(String::new());
+            }
+        }
+    }
+    Response::Err(format!(
+        "permission denied: path `{}` is not under any allowed path_prefixes",
+        check.payload
+    ))
+}
+
+fn handle_request_with(request: &Request, home_dir: Option<&Path>) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return handle_check(&request.payload, home_dir);
+    }
     if request.method == "read" {
-        match read_file(&request.payload, dirs::home_dir().as_deref()) {
+        match read_file(&request.payload, home_dir) {
             Ok(contents) => Response::Ok(contents),
             Err(msg) => Response::Err(msg),
         }
     } else {
         Response::Err(format!("unknown method: {}", request.method))
     }
+}
+
+fn handle_request(request: &Request) -> Response {
+    handle_request_with(request, dirs::home_dir().as_deref())
 }
 
 fn main() {
@@ -48,7 +125,27 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::symlink;
+
     use super::*;
+
+    fn read_check(path: &str, prefixes: &[&str], home_dir: Option<&Path>) -> Response {
+        let prefixes_json = prefixes
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let encoded = format!(
+            r#"{{"permissions":[{{"extension":"fs","method":"read","constraints":{{"path_prefixes":[{prefixes_json}]}}}}],"method":"read","payload":"{path}"}}"#
+        );
+        handle_request_with(
+            &Request {
+                method: protocol::CHECK_METHOD.to_string(),
+                payload: encoded,
+            },
+            home_dir,
+        )
+    }
 
     #[test]
     fn read_returns_file_contents_for_existing_path() {
@@ -118,5 +215,80 @@ mod tests {
 
         let contents = read_file("~/capacity", Some(&home)).unwrap();
         assert_eq!(contents, "42\n");
+    }
+
+    #[test]
+    fn check_allows_path_under_prefix() {
+        match read_check("/proc/stat", &["/proc/"], None) {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_path_outside_prefix() {
+        match read_check("/etc/passwd", &["/proc/"], None) {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err"),
+        }
+    }
+
+    #[test]
+    fn check_denies_dotdot_escape_outside_prefix() {
+        match read_check("/proc/../etc/passwd", &["/proc/"], None) {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err for .. escape"),
+        }
+    }
+
+    #[test]
+    fn check_denies_symlink_escape_outside_prefix() {
+        let root = std::env::temp_dir().join("smstatus-fs-symlink-escape");
+        let allowed = root.join("allowed");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&allowed).unwrap();
+        let secret = root.join("secret.txt");
+        std::fs::write(&secret, "nope\n").unwrap();
+        let link = allowed.join("escape");
+        symlink(&secret, &link).unwrap();
+
+        let prefix = format!("{}/", allowed.to_string_lossy());
+        let path = link.to_string_lossy().into_owned();
+        match read_check(&path, &[&prefix], None) {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err for symlink escape"),
+        }
+    }
+
+    #[test]
+    fn check_allows_tilde_path_when_prefix_and_path_both_expand() {
+        let home = Path::new("/home/testuser");
+        match read_check("~/claude/creds.json", &["~/claude/"], Some(home)) {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_when_unexpanded_prefix_would_not_match_expanded_path() {
+        // If only the path were expanded, prefix `~/claude/` would not be a
+        // Path prefix of `/home/testuser/claude/creds.json`. Expanding both
+        // sides allows the match; expanding neither leaves literal `~/` paths
+        // that still match each other. Force the expand-both rule by checking
+        // an absolute path against a tilde prefix with a home dir: only
+        // expanding the prefix makes this succeed.
+        let home = Path::new("/home/testuser");
+        match read_check(
+            "/home/testuser/claude/creds.json",
+            &["~/claude/"],
+            Some(home),
+        ) {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok via expanded prefix, got Err: {msg}"),
+        }
+        match read_check("/home/testuser/claude/creds.json", &["~/claude/"], None) {
+            Response::Err(_) => {}
+            Response::Ok(_) => panic!("expected Err when tilde prefix cannot expand"),
+        }
     }
 }

@@ -41,6 +41,9 @@ fn process_running(name: &str) -> Result<bool, String> {
 }
 
 fn handle_request(request: &Request) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return protocol::allowlist_check_response(&request.payload, "process");
+    }
     if request.method == "is-running" {
         match process_running(&request.payload) {
             Ok(running) => Response::Ok(running.to_string()),
@@ -148,6 +151,39 @@ mod tests {
         match response {
             Response::Ok(body) => assert_eq!(body, "true"),
             Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    fn is_running_check(method: &str, allowed: &str) -> Response {
+        let encoded = protocol::encode_check_payload(
+            vec![protocol::PermissionEntry {
+                extension: "process".to_string(),
+                method: allowed.to_string(),
+                constraints: Default::default(),
+            }],
+            method,
+            "firefox",
+        )
+        .unwrap();
+        handle_request(&Request {
+            method: protocol::CHECK_METHOD.to_string(),
+            payload: encoded,
+        })
+    }
+
+    #[test]
+    fn check_allows_allowlisted_is_running() {
+        match is_running_check("is-running", "is-running") {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_unlisted_method() {
+        match is_running_check("other", "is-running") {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err"),
         }
     }
 }
