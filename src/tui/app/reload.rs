@@ -8,18 +8,17 @@ use super::{
 };
 
 impl App {
-    pub(in crate::tui) fn poll_config_changes(&mut self) {
-        let Some(batch) = self
-            .config_watcher
-            .as_mut()
-            .and_then(|watcher| watcher.try_reload())
-        else {
-            return;
-        };
-        if batch.config {
-            self.refresh_config();
-        } else if !batch.wasm_kinds.is_empty() {
-            self.refresh_wasm_derived_state_for_kinds(&batch.wasm_kinds);
+    pub(super) fn notify_daemon_config_reload(&mut self) {
+        match crate::control::notify_running(crate::reload::ReloadRequest::config()) {
+            Ok(crate::control::NotifyOutcome::Delivered) => {}
+            Ok(crate::control::NotifyOutcome::NotRunning) => {
+                self.push_action_message(
+                    "smstatus is not running; config saved but bar not updated".to_string(),
+                );
+            }
+            Err(err) => {
+                self.push_action_message(format!("failed to notify running daemon: {err}"));
+            }
         }
     }
 

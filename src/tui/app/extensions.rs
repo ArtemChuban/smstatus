@@ -176,18 +176,9 @@ impl App {
                 let extensions_dir = self.extensions_dir.clone().expect("checked above");
                 match crate::install::install_extension_into(&extensions_dir, source) {
                     Ok(outcome) => {
-                        let replaced = matches!(
-                            outcome,
-                            crate::install::ExtensionInstallOutcome::Replace { .. }
-                        );
                         self.push_action_message(crate::install::format_extension_outcome(
                             &outcome,
                         ));
-                        if replaced {
-                            self.push_action_message(
-                                "restart may be needed for replaced extension".to_string(),
-                            );
-                        }
                         self.refresh_installed_extensions();
                     }
                     Err(err) => self.push_action_message(err.to_string()),

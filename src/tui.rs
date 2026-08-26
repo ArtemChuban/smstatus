@@ -32,7 +32,6 @@ fn run_inner() -> crate::error::Result<()> {
     while !app.should_quit {
         app.refresh_daemon_status(crate::daemon::status());
         app.poll_pending_start();
-        app.poll_config_changes();
         app.refresh_log_history();
         app.sync_logs_follow();
         let completed = guard.terminal.draw(|frame| ui::draw(frame, &app))?;
