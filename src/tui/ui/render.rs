@@ -102,6 +102,8 @@ pub(super) fn separator_line(app: &App) -> String {
         | Mode::RenamingParamKey { .. }
         | Mode::ChoosingInstallKind { .. }
         | Mode::EnteringInstallSource { .. }
+        | Mode::EnteringInstallSha256 { .. }
+        | Mode::ConfirmingInstallReplace { .. }
         | Mode::ChoosingPreset { .. }
         | Mode::NamingPreset { .. }
         | Mode::ConfirmingRemovePreset { .. }
@@ -146,6 +148,10 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
             Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
         }
         Mode::EnteringInstallSource { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
+        Mode::EnteringInstallSha256 { .. } => Cow::Borrowed("Confirm SHA-256: Enter | Cancel: Esc"),
+        Mode::ConfirmingInstallReplace { name, .. } => Cow::Owned(format!(
+            "Replace extension {name}? Confirm: d | Cancel: any key"
+        )),
         Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
@@ -569,6 +575,10 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
         }
         Mode::EnteringInstallSource { .. } => {
             lines.push("Confirm source: Enter".to_string());
+            lines.push("Cancel: Esc".to_string());
+        }
+        Mode::EnteringInstallSha256 { .. } => {
+            lines.push("Confirm SHA-256: Enter".to_string());
             lines.push("Cancel: Esc".to_string());
         }
         _ => {}

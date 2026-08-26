@@ -173,7 +173,7 @@ fn parse_module_manifest_str(text: &str) -> Result<ModuleManifest> {
     Ok(manifest)
 }
 
-fn parse_extension_manifest_str(text: &str) -> Result<ExtensionManifest> {
+pub(crate) fn parse_extension_manifest_str(text: &str) -> Result<ExtensionManifest> {
     let manifest: ExtensionManifest =
         toml::from_str(text).map_err(|e| format!("failed to parse extension manifest: {e}"))?;
     if !is_safe_extension_name(&manifest.name) {
