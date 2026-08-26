@@ -13,7 +13,8 @@ use crate::logging::parse_log_level;
 use crate::manifest::Metadata;
 
 use super::super::app::{
-    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
+    App, DetailContext, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
+    ParamOrigin,
 };
 
 pub(super) const SEPARATOR_EDIT_PREFIX: &str = "New separator: ";
@@ -34,15 +35,31 @@ pub(super) fn draw_modules_column(
     frame.render_widget(Paragraph::new(module_lines), modules_inner);
 }
 
-pub(super) fn draw_params_column(frame: &mut Frame, app: &App, area: Rect, viewport_height: usize) {
-    let params_block = Block::default()
-        .title(params_title(app))
+pub(super) fn draw_extensions_column(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    viewport_height: usize,
+) {
+    let extensions_block = Block::default()
+        .title(extensions_title(app, viewport_height))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
-    let params_inner = params_block.inner(area);
-    frame.render_widget(params_block, area);
-    let lines = visible_params_lines(app, viewport_height, params_inner.width);
-    frame.render_widget(Paragraph::new(lines), params_inner);
+    let extensions_inner = extensions_block.inner(area);
+    frame.render_widget(extensions_block, area);
+    let extension_lines = visible_extension_lines(app, viewport_height, extensions_inner.width);
+    frame.render_widget(Paragraph::new(extension_lines), extensions_inner);
+}
+
+pub(super) fn draw_detail_column(frame: &mut Frame, app: &App, area: Rect, viewport_height: usize) {
+    let detail_block = Block::default()
+        .title(detail_title(app))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let detail_inner = detail_block.inner(area);
+    frame.render_widget(detail_block, area);
+    let lines = visible_detail_lines(app, viewport_height, detail_inner.width);
+    frame.render_widget(Paragraph::new(lines), detail_inner);
 }
 
 pub(super) fn boxed_title(text: &str) -> String {
@@ -78,6 +95,8 @@ pub(super) fn separator_line(app: &App) -> String {
         | Mode::EditingParamValue { .. }
         | Mode::ConfirmingRemoveParam { .. }
         | Mode::RenamingParamKey { .. }
+        | Mode::ChoosingInstallKind { .. }
+        | Mode::EnteringInstallSource { .. }
         | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -99,7 +118,10 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
     match &app.mode {
         Mode::Normal => match app.panel_focus {
             PanelFocus::Modules => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Ext: Tab/x | Install: i | Quit: q | Start: s | Kill: k | Help: ?",
+            ),
+            PanelFocus::Extensions => Cow::Borrowed(
+                "Select: \u{2191}/\u{2193} | Detail: Enter/\u{2192} | Modules: Esc/\u{2190} | Install: i | Logs: Tab | Quit: q | Help: ?",
             ),
             PanelFocus::Params => Cow::Borrowed(
                 "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
@@ -112,6 +134,10 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
         Mode::AddingModule { .. } => {
             Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
         }
+        Mode::ChoosingInstallKind { .. } => {
+            Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
+        }
+        Mode::EnteringInstallSource { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
@@ -195,13 +221,43 @@ pub(super) fn logs_title(app: &App, viewport_height: usize) -> String {
     boxed_title(&text)
 }
 
-pub(super) fn params_title(app: &App) -> String {
-    let text = match selected_module_entry(app) {
-        Some(entry) => {
-            let kind = BarConfig::split_module_entry(entry).0;
-            params_title_text(entry, app.metadata_by_kind.get(kind))
+pub(super) fn extensions_title(app: &App, viewport_height: usize) -> String {
+    let text = if app.installed_extensions.is_empty() {
+        "extensions (none installed)".to_string()
+    } else {
+        let (start, end, total) = module_window(
+            app.installed_extensions.len(),
+            app.extension_scroll_offset,
+            viewport_height,
+        );
+        if viewport_height == 0 {
+            format!("extensions {total} installed")
+        } else {
+            format!("extensions {}-{end}/{total}", start + 1)
         }
-        None => "config".to_string(),
+    };
+    boxed_title(&text)
+}
+
+pub(super) fn detail_title(app: &App) -> String {
+    let text = if app.panel_focus == PanelFocus::Extensions
+        || app.detail_context == DetailContext::Extension
+    {
+        match app
+            .extension_selected_index
+            .and_then(|idx| app.installed_extensions.get(idx))
+        {
+            Some(name) => format!("extension {name}"),
+            None => "extension".to_string(),
+        }
+    } else {
+        match selected_module_entry(app) {
+            Some(entry) => {
+                let kind = BarConfig::split_module_entry(entry).0;
+                params_title_text(entry, app.metadata_by_kind.get(kind))
+            }
+            None => "config".to_string(),
+        }
     };
     boxed_title(&text)
 }
@@ -336,6 +392,82 @@ pub(super) fn param_display_lines(state: &ModuleParamsState) -> Vec<(String, boo
     }
 }
 
+pub(super) fn requirement_header_lines(app: &App) -> Vec<(String, bool)> {
+    let Some(entry) = selected_module_entry(app) else {
+        return Vec::new();
+    };
+    let kind = BarConfig::split_module_entry(entry).0;
+    app.requirement_lines_by_kind
+        .get(kind)
+        .map(|lines| {
+            lines
+                .iter()
+                .map(|line| (line.clone(), true))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn visible_extension_lines(
+    app: &App,
+    viewport_height: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let labels = app.extension_list_labels().to_vec();
+    let selected = if app.panel_focus == PanelFocus::Extensions {
+        app.extension_selected_index
+    } else {
+        None
+    };
+    styled_list_lines(
+        &labels,
+        selected,
+        app.extension_scroll_offset,
+        viewport_height,
+        width,
+    )
+}
+
+fn extension_detail_lines(app: &App) -> Vec<(String, bool)> {
+    let Some(name) = app
+        .extension_selected_index
+        .and_then(|idx| app.installed_extensions.get(idx))
+    else {
+        return vec![("(no extension selected)".to_string(), false)];
+    };
+    let mut lines = Vec::new();
+    let version = app
+        .extensions_dir
+        .as_ref()
+        .and_then(|dir| crate::manifest::read_extension_manifest(dir, name).ok())
+        .map(|manifest| manifest.version)
+        .unwrap_or_else(|| "unknown".to_string());
+    lines.push((format!("version: {version}"), false));
+    lines.push(("status: installed".to_string(), false));
+    let required_by = app.modules_requiring_extension(name);
+    if required_by.is_empty() {
+        lines.push(("required by: (none)".to_string(), true));
+    } else {
+        lines.push(("required by:".to_string(), false));
+        for kind in required_by {
+            lines.push((format!("  {kind}"), false));
+        }
+    }
+    lines
+}
+
+pub(super) fn visible_detail_lines(
+    app: &App,
+    viewport_height: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    if app.panel_focus == PanelFocus::Extensions || app.detail_context == DetailContext::Extension {
+        let lines = extension_detail_lines(app);
+        return styled_dimmable_lines(&lines, None, 0, viewport_height, width);
+    }
+    visible_params_lines(app, viewport_height, width)
+}
+
 pub(super) fn visible_params_lines(
     app: &App,
     viewport_height: usize,
@@ -344,7 +476,14 @@ pub(super) fn visible_params_lines(
     let Some(state) = &app.module_params else {
         return Vec::new();
     };
-    let lines = param_display_lines(state);
+    let header = requirement_header_lines(app);
+    let header_len = header.len().min(viewport_height);
+    let mut lines = styled_dimmable_lines(&header[..header_len], None, 0, header_len, width);
+    let param_viewport = viewport_height.saturating_sub(header_len);
+    if param_viewport == 0 {
+        return lines;
+    }
+    let param_lines = param_display_lines(state);
     let selected = if app.panel_focus == PanelFocus::Params
         && matches!(state.status, ModuleParamsStatus::Entries)
     {
@@ -357,7 +496,14 @@ pub(super) fn visible_params_lines(
     } else {
         0
     };
-    styled_dimmable_lines(&lines, selected, offset, viewport_height, width)
+    lines.extend(styled_dimmable_lines(
+        &param_lines,
+        selected,
+        offset,
+        param_viewport,
+        width,
+    ));
+    lines
 }
 
 pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
@@ -370,9 +516,17 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Move module: Ctrl+\u{2191}/\u{2193}".to_string());
                 lines.push("Add module: a".to_string());
                 lines.push("Remove module: d".to_string());
+                lines.push("Focus extensions: Tab/x".to_string());
+                lines.push("Install module/extension: i".to_string());
                 lines.push("Edit separator: e".to_string());
                 lines.push("Focus params: Enter/\u{2192}".to_string());
-                lines.push("Focus logs: Tab".to_string());
+            }
+            PanelFocus::Extensions => {
+                lines.push("Select extension: \u{2191}/\u{2193}".to_string());
+                lines.push("Install: i".to_string());
+                lines.push("Focus detail: Enter/\u{2192}".to_string());
+                lines.push("Back to modules: Esc/\u{2190}".to_string());
+                lines.push("Focus params/logs: Tab".to_string());
             }
             PanelFocus::Params => {
                 lines.push("Select param: \u{2191}/\u{2193}".to_string());
@@ -381,17 +535,26 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Remove param: d".to_string());
                 lines.push("Rename key: r".to_string());
                 lines.push("Focus logs: Tab".to_string());
-                lines.push("Back to modules: Esc/\u{2190}".to_string());
+                lines.push("Back: Esc/\u{2190}".to_string());
             }
             PanelFocus::Logs => {
                 lines.push("Scroll logs: \u{2191}/\u{2193}".to_string());
                 lines.push("Toggle ERROR/WARN/INFO: e/w/i".to_string());
-                lines.push("Back to modules: Esc/\u{2190}/Tab".to_string());
+                lines.push("Back: Esc/\u{2190}/Tab".to_string());
             }
         },
         Mode::Help => {
             lines.push("Close help: ? or Esc".to_string());
             lines.push("Scroll help: \u{2191}/\u{2193}".to_string());
+        }
+        Mode::ChoosingInstallKind { .. } => {
+            lines.push("Select install kind: \u{2191}/\u{2193}".to_string());
+            lines.push("Next: Enter".to_string());
+            lines.push("Cancel: Esc".to_string());
+        }
+        Mode::EnteringInstallSource { .. } => {
+            lines.push("Confirm source: Enter".to_string());
+            lines.push("Cancel: Esc".to_string());
         }
         _ => {}
     }

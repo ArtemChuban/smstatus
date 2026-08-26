@@ -785,3 +785,21 @@ fn esc_and_left_return_focus_to_modules() {
     app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
     assert_eq!(app.panel_focus, PanelFocus::Modules);
 }
+
+#[test]
+fn x_focuses_extensions_panel() {
+    install_test_log();
+    let dir = unique_temp_path("extensions-browse");
+    std::fs::create_dir(&dir).unwrap();
+    let mut app = App {
+        extensions_dir: Some(dir.clone()),
+        panel_focus: PanelFocus::Modules,
+        ..App::default()
+    };
+    app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.panel_focus, PanelFocus::Extensions);
+    app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.panel_focus, PanelFocus::Modules);
+    let _ = std::fs::remove_dir_all(&dir);
+}
