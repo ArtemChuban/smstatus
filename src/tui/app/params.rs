@@ -276,6 +276,7 @@ impl App {
         else {
             return;
         };
+        self.ensure_preset_pointer_current();
         let Some(path) = self.config_path.clone() else {
             self.push_action_message("cannot save param: config path unknown".to_string());
             return;
@@ -320,6 +321,7 @@ impl App {
         let Mode::ConfirmingRemoveParam { section, key } = std::mem::take(&mut self.mode) else {
             return;
         };
+        self.ensure_preset_pointer_current();
         let Some(path) = self.config_path.clone() else {
             self.push_action_message("cannot remove param: config path unknown".to_string());
             return;
@@ -382,6 +384,7 @@ impl App {
             return;
         }
         self.mode = Mode::Normal;
+        self.ensure_preset_pointer_current();
         let Some(path) = self.config_path.clone() else {
             self.push_action_message("cannot rename param: config path unknown".to_string());
             return;

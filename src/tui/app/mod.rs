@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bindings::ConfigParam;
-use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
+use crate::config::{
+    BarConfig, ModuleParamValue, ParamWriteExpect, active_config_path, read_active_name,
+};
 use crate::manifest::{Metadata, RequiredExtension};
 use crate::schema_probe::SchemaProbe;
 
@@ -14,6 +16,7 @@ mod help;
 mod logs;
 mod modules;
 mod params;
+mod presets;
 mod reload;
 mod requirement_status;
 mod separator;
@@ -60,6 +63,18 @@ pub(super) enum Mode {
     ConfirmingRemoveParam {
         section: String,
         key: String,
+    },
+    ChoosingPreset {
+        names: Vec<String>,
+        selected: usize,
+        scroll_offset: usize,
+    },
+    NamingPreset {
+        buffer: String,
+        cursor: usize,
+    },
+    ConfirmingRemovePreset {
+        name: String,
     },
     RenamingParamKey {
         section: String,
@@ -134,6 +149,8 @@ pub(super) struct App {
     pub(super) pending_start: Option<std::process::Child>,
     pub(super) pending_start_confirmed_running: bool,
     pub(super) mode: Mode,
+    pub(super) config_dir: Option<PathBuf>,
+    pub(super) active_preset: Option<String>,
     pub(super) config_path: Option<PathBuf>,
     pub(super) modules_dir: Option<PathBuf>,
     pub(super) extensions_dir: Option<PathBuf>,
@@ -186,6 +203,8 @@ impl Default for App {
             pending_start: None,
             pending_start_confirmed_running: false,
             mode: Mode::default(),
+            config_dir: None,
+            active_preset: None,
             config_path: None,
             modules_dir: None,
             extensions_dir: None,
@@ -237,19 +256,34 @@ impl App {
         let mut app = Self::default();
         match crate::config::default_config_dir() {
             Ok(config_dir) => {
-                let config_path = config_dir.join("config.toml");
-                let log_days = BarConfig::load(&config_path)
-                    .map(|config| config.log_days())
-                    .unwrap_or(7);
-                if let Err(err) = crate::logging::init(log_days) {
-                    crate::logging::to_stderr(
-                        log::Level::Error,
-                        &format!("failed to initialize logging: {err}"),
-                    );
-                }
-                app.config_path = Some(config_path);
+                app.config_dir = Some(config_dir.clone());
                 app.modules_dir = Some(config_dir.join("modules"));
                 app.extensions_dir = Some(config_dir.join("extensions"));
+
+                match active_config_path(&config_dir) {
+                    Ok(path) => {
+                        app.config_path = Some(path.clone());
+                        app.active_preset = read_active_name(&config_dir).ok();
+                        let log_days = BarConfig::load(&path)
+                            .map(|config| config.log_days())
+                            .unwrap_or(7);
+                        if let Err(err) = crate::logging::init(log_days) {
+                            crate::logging::to_stderr(
+                                log::Level::Error,
+                                &format!("failed to initialize logging: {err}"),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        app.push_action_message(format!("{err}"));
+                        if let Err(init_err) = crate::logging::init(7) {
+                            crate::logging::to_stderr(
+                                log::Level::Error,
+                                &format!("failed to initialize logging: {init_err}"),
+                            );
+                        }
+                    }
+                }
                 app.refresh_config();
             }
             Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
@@ -274,16 +308,24 @@ impl App {
             Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
             Mode::ChoosingInstallKind { .. } => self.handle_key_choosing_install_kind(key),
             Mode::EnteringInstallSource { .. } => self.handle_key_entering_install_source(key),
+            Mode::ChoosingPreset { .. } => self.handle_key_choosing_preset(key),
+            Mode::NamingPreset { .. } => self.handle_key_naming_preset(key),
+            Mode::ConfirmingRemovePreset { .. } => self.handle_key_confirming_remove_preset(key),
             Mode::Help => self.handle_key_help(key),
         }
     }
 
     fn handle_key_normal(&mut self, key: KeyEvent) {
+        self.ensure_preset_pointer_current();
         if is_quit(key) {
             self.should_quit = true;
             return;
         }
         match key.code {
+            KeyCode::Char('p') => {
+                self.begin_manage_presets();
+                return;
+            }
             KeyCode::Char('s') => {
                 self.start_daemon();
                 return;

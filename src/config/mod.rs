@@ -5,7 +5,19 @@ use crate::error::Result;
 mod discover;
 mod io;
 mod params;
+mod presets;
 mod write;
+
+pub(crate) use presets::{
+    active_config_path, copy_preset, list_preset_names, preset_file, read_active_name,
+    remove_preset_file, write_active_name,
+};
+
+#[cfg(test)]
+pub(crate) use presets::{DEFAULT_PRESET_NAME, create_default_preset, program_config_path};
+
+#[cfg(test)]
+pub(crate) use presets::test_fixtures;
 
 pub(crate) use discover::discover_module_kinds;
 

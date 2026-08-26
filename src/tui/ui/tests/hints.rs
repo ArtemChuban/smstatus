@@ -99,6 +99,7 @@ fn help_lines_modules_focus_lists_local_module_bindings() {
     assert!(!lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l == "--- Global ---"));
     assert!(lines.iter().any(|l| l == "Quit: q"));
+    assert!(lines.iter().any(|l| l == "Manage presets: p"));
 }
 
 #[test]
@@ -188,4 +189,46 @@ fn hint_line_entering_install_source_mode() {
         ..App::default()
     };
     assert_eq!(hint_line(&app).as_ref(), "Confirm: Enter | Cancel: Esc");
+}
+
+#[test]
+fn hint_line_choosing_preset_mode() {
+    let app = App {
+        mode: Mode::ChoosingPreset {
+            names: vec!["default".to_string()],
+            selected: 0,
+            scroll_offset: 0,
+        },
+        ..App::default()
+    };
+    assert_eq!(
+        hint_line(&app).as_ref(),
+        "Select: \u{2191}/\u{2193} | Switch: Enter | Save: a | Remove: d | Cancel: Esc"
+    );
+}
+
+#[test]
+fn hint_line_naming_preset_mode() {
+    let app = App {
+        mode: Mode::NamingPreset {
+            buffer: String::new(),
+            cursor: 0,
+        },
+        ..App::default()
+    };
+    assert_eq!(hint_line(&app).as_ref(), "Confirm: Enter | Cancel: Esc");
+}
+
+#[test]
+fn hint_line_confirming_remove_preset_mode_includes_name() {
+    let app = App {
+        mode: Mode::ConfirmingRemovePreset {
+            name: "work".to_string(),
+        },
+        ..App::default()
+    };
+    assert_eq!(
+        hint_line(&app).as_ref(),
+        "Remove preset work? Confirm: d | Cancel: any key"
+    );
 }

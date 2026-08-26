@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config::BarConfig;
+use crate::config::{BarConfig, active_config_path};
 use crate::control::ControlListener;
 use crate::error::Result;
 use crate::extension::ExtensionRegistry;
@@ -19,7 +19,7 @@ const DEFAULT_TICK_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) fn run() -> Result<()> {
     let config_dir: PathBuf = crate::config::default_config_dir()?;
     let modules_dir = config_dir.join("modules");
-    let config_path = config_dir.join("config.toml");
+    let config_path = active_config_path(&config_dir)?;
     let mut config = BarConfig::load(&config_path)?;
     let mut separator = config.separator();
     if let Err(err) = logging::init(config.log_days()) {
@@ -69,7 +69,7 @@ pub(crate) fn run() -> Result<()> {
                 batch,
                 &runtime,
                 &extensions,
-                &config_path,
+                &config_dir,
                 modules,
                 &mut config,
                 &mut separator,
@@ -112,13 +112,15 @@ fn apply_reload_batch(
     batch: ReloadBatch,
     runtime: &ModuleRuntime,
     extensions: &ExtensionRegistry,
-    config_path: &Path,
+    config_dir: &Path,
     mut modules: Vec<ModuleState>,
     config: &mut BarConfig,
     separator: &mut String,
 ) -> Vec<ModuleState> {
     if batch.config {
-        match BarConfig::load(config_path) {
+        match active_config_path(config_dir)
+            .and_then(|config_path| BarConfig::load(&config_path).map_err(|e| e.to_string().into()))
+        {
             Ok(new_config) => {
                 *separator = new_config.separator();
                 logging::set_retain_days(new_config.log_days());
@@ -185,8 +187,11 @@ mod tests {
         assert_eq!(extensions.call("echo", "ping", "before").unwrap(), "before");
 
         let config_path = base.join("config.toml");
-        std::fs::write(&config_path, "modules = []\n").unwrap();
-        let mut config = BarConfig::load(&config_path).unwrap();
+        std::fs::write(&config_path, "[presets]\nactive = \"default\"\n").unwrap();
+        let preset_path = base.join("presets").join("default.toml");
+        std::fs::create_dir_all(preset_path.parent().unwrap()).unwrap();
+        std::fs::write(&preset_path, "modules = []\n").unwrap();
+        let mut config = BarConfig::load(&preset_path).unwrap();
         let mut separator = config.separator();
 
         let (engine, linker) = host::build_engine_and_linker().unwrap();
@@ -207,7 +212,7 @@ mod tests {
             batch,
             &runtime,
             extensions.as_ref(),
-            &config_path,
+            &base,
             Vec::new(),
             &mut config,
             &mut separator,
