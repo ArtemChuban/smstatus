@@ -154,10 +154,11 @@ impl App {
             return;
         };
         let source = buffer.trim();
+        let options = crate::install::InstallOptions::default();
         match target {
             InstallTarget::Module => {
                 let modules_dir = self.modules_dir.clone().expect("checked above");
-                match crate::install::install_module_into(&modules_dir, source) {
+                match crate::install::install_module_into(&modules_dir, source, &options) {
                     Ok(outcome) => {
                         let kind = match &outcome {
                             crate::install::ModuleInstallOutcome::Fresh { kind, .. }
@@ -174,7 +175,7 @@ impl App {
             }
             InstallTarget::Extension => {
                 let extensions_dir = self.extensions_dir.clone().expect("checked above");
-                match crate::install::install_extension_into(&extensions_dir, source) {
+                match crate::install::install_extension_into(&extensions_dir, source, &options) {
                     Ok(outcome) => {
                         self.push_action_message(crate::install::format_extension_outcome(
                             &outcome,
