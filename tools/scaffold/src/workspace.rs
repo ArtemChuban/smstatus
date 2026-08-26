@@ -125,7 +125,6 @@ pub fn display_name_from(name: &str) -> String {
         .join(" ")
 }
 
-/// Escape a value for a TOML basic double-quoted string.
 pub fn escape_toml_basic_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

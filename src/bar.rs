@@ -2,14 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wasmtime::component::Linker;
-use wasmtime::{Config, Engine};
-
-use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
 use crate::extension::ExtensionRegistry;
-use crate::host::HostState;
+use crate::host;
 use crate::lock;
 use crate::logging;
 use crate::module::{ModuleRuntime, ModuleState};
@@ -20,7 +16,6 @@ const FUEL_PER_TICK: u64 = 10_000_000;
 const DEFAULT_TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn run() -> Result<()> {
-    let engine = build_engine()?;
     let config_dir: PathBuf = crate::config::default_config_dir()?;
     let modules_dir = config_dir.join("modules");
     let config_path = config_dir.join("config.toml");
@@ -33,7 +28,7 @@ pub(crate) fn run() -> Result<()> {
         );
     }
 
-    let linker = build_linker(&engine)?;
+    let (engine, linker) = host::build_engine_and_linker()?;
     let x11_bar = X11Bar::connect()?;
     let extensions = Arc::new(ExtensionRegistry::new(
         config_dir.join("extensions"),
@@ -79,23 +74,6 @@ pub(crate) fn run() -> Result<()> {
             );
         }
     }
-}
-
-fn build_engine() -> Result<Engine> {
-    let mut wasm_config = Config::new();
-    wasm_config.wasm_component_model(true);
-    wasm_config.consume_fuel(true);
-    Ok(Engine::new(&wasm_config)?)
-}
-
-fn build_linker(engine: &Engine) -> Result<Linker<HostState>> {
-    let mut linker = Linker::new(engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    GuestModule::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
-        &mut linker,
-        |state: &mut HostState| state,
-    )?;
-    Ok(linker)
 }
 
 fn start_modules(runtime: &ModuleRuntime, config: &BarConfig) -> Result<Vec<ModuleState>> {

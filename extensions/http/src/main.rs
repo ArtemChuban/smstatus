@@ -1,4 +1,3 @@
-use std::os::unix::net::UnixListener;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -39,7 +38,6 @@ fn path_and_query(uri: &Uri) -> String {
     }
 }
 
-/// True when `url` shares scheme/host/port with `prefix` and its path stays under the prefix path.
 fn url_under_prefix(url: &str, prefix: &str) -> Result<bool, String> {
     let url = Uri::from_str(url).map_err(|e| format!("invalid url: {e}"))?;
     let prefix = Uri::from_str(prefix).map_err(|e| format!("invalid url prefix: {e}"))?;
@@ -152,21 +150,8 @@ fn handle_request(agent: &ureq::Agent, request: &Request) -> Response {
 }
 
 fn main() {
-    let socket_path = std::env::args()
-        .nth(1)
-        .expect("missing socket path argument");
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).expect("failed to bind socket");
-    let (mut stream, _) = listener.accept().expect("failed to accept connection");
-    protocol::perform_handshake_server(&mut stream).expect("handshake failed");
-
     let agent = build_http_agent();
-    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
-        let response = handle_request(&agent, &request);
-        if protocol::write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    protocol::serve(move |request| handle_request(&agent, request));
 }
 
 #[cfg(test)]

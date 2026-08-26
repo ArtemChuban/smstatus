@@ -2,7 +2,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
 
-use super::text::{apply_text_edit, clamped_scroll_offset, is_valid_param_key};
+use super::text::{apply_text_edit, clamped_scroll_offset};
 use super::{App, Mode, PanelFocus, ParamEntry, ParamOrigin};
 
 impl App {
@@ -193,7 +193,7 @@ impl App {
             self.push_action_message("Param key cannot be empty".to_string());
             return;
         }
-        if !is_valid_param_key(buffer) {
+        if !crate::schema::is_valid_name(buffer) {
             self.push_action_message(format!(
                 "Invalid param key `{buffer}`: use only A-Z, a-z, 0-9, _, -"
             ));
@@ -349,7 +349,7 @@ impl App {
             self.push_action_message("Param key cannot be empty".to_string());
             return;
         }
-        if !is_valid_param_key(&new_key) {
+        if !crate::schema::is_valid_name(&new_key) {
             self.push_action_message(format!(
                 "Invalid param key `{new_key}`: use only A-Z, a-z, 0-9, _, -"
             ));
