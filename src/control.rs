@@ -12,7 +12,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(dead_code)]
 pub(crate) enum NotifyOutcome {
     Delivered,
     NotRunning,
@@ -133,7 +132,6 @@ fn serve_client(mut stream: UnixStream) -> ReloadBatch {
     batch
 }
 
-#[expect(dead_code)]
 pub(crate) fn notify_running(request: ReloadRequest) -> Result<NotifyOutcome, String> {
     let lines = request.command_lines();
     if lines.is_empty() {
