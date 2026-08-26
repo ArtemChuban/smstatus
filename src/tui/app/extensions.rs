@@ -116,7 +116,7 @@ impl App {
     pub(super) fn handle_key_entering_install_source(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Enter => self.commit_install(),
+            KeyCode::Enter => self.commit_install_source(),
             KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
                 if let Mode::EnteringInstallSource { buffer, cursor, .. } = &mut self.mode {
                     apply_text_edit(buffer, cursor, key);
@@ -126,7 +126,20 @@ impl App {
         }
     }
 
-    pub(super) fn commit_install(&mut self) {
+    pub(super) fn handle_key_entering_install_sha256(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => self.commit_install_sha256(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
+                if let Mode::EnteringInstallSha256 { buffer, cursor, .. } = &mut self.mode {
+                    apply_text_edit(buffer, cursor, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_install_source(&mut self) {
         let Mode::EnteringInstallSource { target, buffer, .. } = &self.mode else {
             return;
         };
@@ -153,21 +166,74 @@ impl App {
         else {
             return;
         };
-        let source = buffer.trim();
-        let options = crate::install::InstallOptions::default();
+        let source = buffer.trim().to_string();
+        if crate::install::is_remote_install_source(&source) {
+            self.mode = Mode::EnteringInstallSha256 {
+                target,
+                source,
+                buffer: String::new(),
+                cursor: 0,
+            };
+            return;
+        }
+        self.run_install(target, source, crate::install::InstallOptions::default());
+    }
+
+    fn commit_install_sha256(&mut self) {
+        let Mode::EnteringInstallSha256 {
+            target: _,
+            source: _,
+            buffer,
+            ..
+        } = &self.mode
+        else {
+            return;
+        };
+        if buffer.trim().is_empty() {
+            self.push_action_message("remote install requires a SHA-256 hash".to_string());
+            return;
+        }
+        let Mode::EnteringInstallSha256 {
+            target,
+            source,
+            buffer,
+            ..
+        } = std::mem::take(&mut self.mode)
+        else {
+            return;
+        };
+        let options = crate::install::InstallOptions {
+            expected_sha256: Some(buffer.trim().to_string()),
+            ..Default::default()
+        };
+        self.run_install(target, source, options);
+    }
+
+    fn run_install(
+        &mut self,
+        target: InstallTarget,
+        source: String,
+        options: crate::install::InstallOptions,
+    ) {
+        self.mode = Mode::Normal;
         match target {
             InstallTarget::Module => {
                 let modules_dir = self.modules_dir.clone().expect("checked above");
-                match crate::install::install_module_into(&modules_dir, source, &options) {
-                    Ok(outcome) => {
-                        let kind = match &outcome {
+                match crate::install::install_module_into(&modules_dir, &source, &options) {
+                    Ok(output) => {
+                        for warning in &output.warnings {
+                            self.push_action_message(warning.clone());
+                        }
+                        let kind = match &output.value {
                             crate::install::ModuleInstallOutcome::Fresh { kind, .. }
                             | crate::install::ModuleInstallOutcome::Skip { kind, .. }
                             | crate::install::ModuleInstallOutcome::Replace { kind, .. } => {
                                 kind.clone()
                             }
                         };
-                        self.push_action_message(crate::install::format_module_outcome(&outcome));
+                        self.push_action_message(crate::install::format_module_outcome(
+                            &output.value,
+                        ));
                         self.refresh_wasm_derived_state_for_kinds(&[kind]);
                     }
                     Err(err) => self.push_action_message(err.to_string()),
@@ -175,16 +241,59 @@ impl App {
             }
             InstallTarget::Extension => {
                 let extensions_dir = self.extensions_dir.clone().expect("checked above");
-                match crate::install::install_extension_into(&extensions_dir, source, &options) {
-                    Ok(outcome) => {
+                match crate::install::install_extension_into(&extensions_dir, &source, &options) {
+                    Ok(output) => {
+                        for warning in &output.warnings {
+                            self.push_action_message(warning.clone());
+                        }
                         self.push_action_message(crate::install::format_extension_outcome(
-                            &outcome,
+                            &output.value,
                         ));
                         self.refresh_installed_extensions();
                     }
-                    Err(err) => self.push_action_message(err.to_string()),
+                    Err(err) => match err.downcast::<crate::install::ExtensionAlreadyInstalled>() {
+                        Ok(already) => {
+                            self.mode = Mode::ConfirmingInstallReplace {
+                                source,
+                                name: already.name,
+                            };
+                        }
+                        Err(err) => self.push_action_message(err.to_string()),
+                    },
                 }
             }
+        }
+    }
+
+    pub(super) fn handle_key_confirming_install_replace(&mut self, key: KeyEvent) {
+        let Mode::ConfirmingInstallReplace { .. } = &self.mode else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char('d') => self.commit_install_replace(),
+            _ => self.mode = Mode::Normal,
+        }
+    }
+
+    fn commit_install_replace(&mut self) {
+        let Mode::ConfirmingInstallReplace { source, name: _ } = std::mem::take(&mut self.mode)
+        else {
+            return;
+        };
+        let options = crate::install::InstallOptions {
+            force: true,
+            ..Default::default()
+        };
+        let extensions_dir = self.extensions_dir.clone().expect("confirmed replace");
+        match crate::install::install_extension_into(&extensions_dir, &source, &options) {
+            Ok(output) => {
+                for warning in &output.warnings {
+                    self.push_action_message(warning.clone());
+                }
+                self.push_action_message(crate::install::format_extension_outcome(&output.value));
+                self.refresh_installed_extensions();
+            }
+            Err(err) => self.push_action_message(err.to_string()),
         }
     }
 

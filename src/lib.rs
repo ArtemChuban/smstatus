@@ -76,7 +76,12 @@ pub fn run() -> ExitCode {
                     ..Default::default()
                 };
                 match install::install_module(&source, &options) {
-                    Ok(outcome) => cli_ok_line(&install::format_module_outcome(&outcome)),
+                    Ok(output) => {
+                        for warning in &output.warnings {
+                            logging::to_stderr(log::Level::Warn, warning);
+                        }
+                        cli_ok_line(&install::format_module_outcome(&output.value))
+                    }
                     Err(err) => cli_err(err),
                 }
             }
@@ -94,14 +99,20 @@ pub fn run() -> ExitCode {
                 source,
                 allow_insecure_http,
                 sha256,
+                force,
             } => {
                 let options = install::InstallOptions {
                     allow_insecure_http,
                     expected_sha256: sha256,
-                    ..Default::default()
+                    force,
                 };
                 match install::install_extension(&source, &options) {
-                    Ok(outcome) => cli_ok_line(&install::format_extension_outcome(&outcome)),
+                    Ok(output) => {
+                        for warning in &output.warnings {
+                            logging::to_stderr(log::Level::Warn, warning);
+                        }
+                        cli_ok_line(&install::format_extension_outcome(&output.value))
+                    }
                     Err(err) => cli_err(err),
                 }
             }

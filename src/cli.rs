@@ -98,6 +98,8 @@ pub(crate) enum ExtensionCommands {
         allow_insecure_http: bool,
         #[arg(long)]
         sha256: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
     List,
     Remove {
