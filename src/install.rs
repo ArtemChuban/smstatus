@@ -4,13 +4,24 @@ use std::time::Duration;
 
 use flate2::read::GzDecoder;
 
+use crate::control::{self, NotifyOutcome};
 use crate::error::Result;
 use crate::extension::is_safe_extension_name;
 use crate::manifest;
 use crate::manifest::Metadata;
 use crate::meta;
+use crate::reload::ReloadRequest;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn notify_module_reload(kind: &str) {
+    match control::notify_running(ReloadRequest::module(kind)) {
+        Ok(NotifyOutcome::Delivered | NotifyOutcome::NotRunning) => {}
+        Err(err) => {
+            log::warn!("failed to notify running daemon about module `{kind}` reload: {err}")
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceKind {
@@ -400,6 +411,7 @@ pub(crate) fn install_module_into(
                     ModuleInstallAction::Replace => {
                         let (_scratch, staged) = stage_module_package(&root)?;
                         place_package_dir(&staged, &dest)?;
+                        notify_module_reload(&kind);
                         return Ok(ModuleInstallOutcome::Replace {
                             kind,
                             metadata: candidate,
@@ -413,6 +425,7 @@ pub(crate) fn install_module_into(
             Err(_) => {
                 let (_scratch, staged) = stage_module_package(&root)?;
                 place_package_dir(&staged, &dest)?;
+                notify_module_reload(&kind);
                 return Ok(ModuleInstallOutcome::Replace {
                     kind,
                     metadata: candidate,
@@ -423,6 +436,7 @@ pub(crate) fn install_module_into(
 
     let (_scratch, staged) = stage_module_package(&root)?;
     place_package_dir(&staged, &dest)?;
+    notify_module_reload(&kind);
     Ok(ModuleInstallOutcome::Fresh {
         kind,
         metadata: candidate,
@@ -461,7 +475,9 @@ pub(crate) fn format_extension_outcome(outcome: &ExtensionInstallOutcome) -> Str
             format!("installed extension `{name}`")
         }
         ExtensionInstallOutcome::Replace { name } => {
-            format!("replaced extension `{name}`")
+            format!(
+                "replaced extension `{name}`; run `smstatus reload --extension {name}` to use the new binary"
+            )
         }
     }
 }
