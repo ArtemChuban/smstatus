@@ -1,5 +1,3 @@
-use std::os::unix::net::UnixListener;
-
 use extension_protocol::{self as protocol, Request, Response};
 use serde::Serialize;
 use x11rb::protocol::xkb;
@@ -90,22 +88,10 @@ fn handle_request_with(
 }
 
 fn main() {
-    let socket_path = std::env::args()
-        .nth(1)
-        .expect("missing socket path argument");
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).expect("failed to bind socket");
-    let (mut stream, _) = listener.accept().expect("failed to accept connection");
-    protocol::perform_handshake_server(&mut stream).expect("handshake failed");
-
     let mut connection = None;
-    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
-        let response =
-            handle_request_with(&request, || read_with_cached_connection(&mut connection));
-        if protocol::write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    protocol::serve(move |request| {
+        handle_request_with(request, || read_with_cached_connection(&mut connection))
+    });
 }
 
 #[cfg(test)]
@@ -179,23 +165,9 @@ mod tests {
     }
 
     fn state_check(method: &str, allowed: &str) -> Response {
-        let encoded = protocol::encode_check_payload(
-            vec![protocol::PermissionEntry {
-                extension: "xkb".to_string(),
-                method: allowed.to_string(),
-                constraints: Default::default(),
-            }],
-            method,
-            "",
-        )
-        .unwrap();
-        handle_request_with(
-            &Request {
-                method: protocol::CHECK_METHOD.to_string(),
-                payload: encoded,
-            },
-            || unreachable!("read should not be called for check"),
-        )
+        handle_request_with(&protocol::check_request("xkb", method, "", allowed), || {
+            unreachable!("read should not be called for check")
+        })
     }
 
     #[test]

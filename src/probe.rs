@@ -2,12 +2,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::{Engine, Store};
 
 use crate::bindings::GuestModule;
 use crate::error::Result;
 use crate::extension::ExtensionRegistry;
-use crate::host::HostState;
+use crate::host::{self, HostState};
 use crate::lock;
 
 const FUEL_PER_PROBE: u64 = 10_000_000;
@@ -20,17 +20,7 @@ pub(crate) struct WasmProbe {
 
 impl WasmProbe {
     pub(crate) fn new() -> Result<Self> {
-        let mut wasm_config = Config::new();
-        wasm_config.wasm_component_model(true);
-        wasm_config.consume_fuel(true);
-        let engine = Engine::new(&wasm_config)?;
-
-        let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        GuestModule::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
-            &mut linker,
-            |state: &mut HostState| state,
-        )?;
+        let (engine, linker) = host::build_engine_and_linker()?;
 
         let extensions = Arc::new(ExtensionRegistry::new(
             crate::config::default_config_dir()?.join("extensions"),
@@ -46,14 +36,13 @@ impl WasmProbe {
 
     pub(crate) fn instantiate(&self, path: &Path) -> Result<(Store<HostState>, GuestModule)> {
         let component = Component::from_file(&self.engine, path)?;
-        let state = HostState::new(
+        host::instantiate_component(
+            &self.engine,
+            &self.linker,
+            &component,
             Arc::clone(&self.extensions),
             Arc::<[extension_protocol::PermissionEntry]>::from([]),
-        );
-        let mut store = Store::new(&self.engine, state);
-        store.limiter(|state| state.limits());
-        store.set_fuel(FUEL_PER_PROBE)?;
-        let module = GuestModule::instantiate(&mut store, &component, &self.linker)?;
-        Ok((store, module))
+            FUEL_PER_PROBE,
+        )
     }
 }

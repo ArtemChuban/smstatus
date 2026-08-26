@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -8,13 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION: u32 = 1;
 const MAX_FRAME_SIZE: u32 = 8 * 1024 * 1024;
 
-/// Reserved wire method for permission checks before a real extension call.
-///
-/// Every extension must implement this method. Extensions must not expose a
-/// user-facing method with the same name.
 pub const CHECK_METHOD: &str = "check";
 
-/// One permission entry from a module manifest, with flattened constraints.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionEntry {
     pub extension: String,
@@ -23,7 +18,6 @@ pub struct PermissionEntry {
     pub constraints: BTreeMap<String, serde_json::Value>,
 }
 
-/// Payload sent to [`CHECK_METHOD`]: frozen permissions plus the concrete call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckRequest {
     pub permissions: Vec<PermissionEntry>,
@@ -31,12 +25,10 @@ pub struct CheckRequest {
     pub payload: String,
 }
 
-/// Returns true when `method` is the reserved check gate.
 pub fn is_reserved_method(method: &str) -> bool {
     method == CHECK_METHOD
 }
 
-/// Entries in `request` that match `extension` and `request.method`.
 pub fn matching_entries<'a>(
     request: &'a CheckRequest,
     extension: &str,
@@ -48,7 +40,6 @@ pub fn matching_entries<'a>(
         .collect()
 }
 
-/// Allow when at least one matching entry exists (no constraint validation).
 pub fn check_allowlisted(request: &CheckRequest, extension: &str) -> Result<(), String> {
     if matching_entries(request, extension).is_empty() {
         Err(format!(
@@ -60,7 +51,6 @@ pub fn check_allowlisted(request: &CheckRequest, extension: &str) -> Result<(), 
     }
 }
 
-/// Read a JSON string-array constraint from `entry`.
 pub fn constraint_string_list(entry: &PermissionEntry, key: &str) -> Result<Vec<String>, String> {
     let value = entry
         .constraints
@@ -78,7 +68,6 @@ pub fn constraint_string_list(entry: &PermissionEntry, key: &str) -> Result<Vec<
         .collect()
 }
 
-/// Serialize a [`CheckRequest`] for the check RPC payload.
 pub fn encode_check_payload(
     permissions: impl IntoIterator<Item = PermissionEntry>,
     method: impl Into<String>,
@@ -92,7 +81,6 @@ pub fn encode_check_payload(
     serde_json::to_string(&request).map_err(|e| e.to_string())
 }
 
-/// Deserialize a check RPC payload into a [`CheckRequest`].
 pub fn decode_check_payload(payload: &str) -> Result<CheckRequest, String> {
     serde_json::from_str(payload).map_err(|e| e.to_string())
 }
@@ -120,10 +108,6 @@ pub enum Response {
     Err(String),
 }
 
-/// Decode a check payload and allow when `extension` + method is allowlisted.
-///
-/// Stock extensions with no extra constraint logic can return this from their
-/// reserved [`CHECK_METHOD`] handler.
 pub fn allowlist_check_response(payload: &str, extension: &str) -> Response {
     match decode_check_payload(payload) {
         Ok(check) => match check_allowlisted(&check, extension) {
@@ -134,10 +118,8 @@ pub fn allowlist_check_response(payload: &str, extension: &str) -> Response {
     }
 }
 
-/// Handler for a single extension method.
 pub type MethodHandler = fn(&Request) -> Response;
 
-/// Route a request to the reserved check handler, a registered method, or fallback.
 pub fn dispatch_request(
     request: &Request,
     handlers: &HashMap<String, MethodHandler>,
@@ -162,25 +144,64 @@ pub fn dispatch_request(
     }
 }
 
-/// Bind a Unix socket, accept one client, and dispatch frames until the connection ends.
+fn accept_and_handshake(socket_path: &str) -> Result<UnixStream, String> {
+    let _ = std::fs::remove_file(socket_path);
+    let listener = UnixListener::bind(socket_path).map_err(|e| e.to_string())?;
+    let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
+    perform_handshake_server(&mut stream)?;
+    Ok(stream)
+}
+
+fn drive_loop<S: Read + Write>(mut stream: S, mut respond: impl FnMut(&Request) -> Response) {
+    while let Ok(request) = read_frame::<_, Request>(&mut stream) {
+        let response = respond(&request);
+        if write_frame(&mut stream, &response).is_err() {
+            break;
+        }
+    }
+}
+
 pub fn run_unix_extension_server(
     socket_path: &str,
     handlers: HashMap<String, MethodHandler>,
     check: Option<MethodHandler>,
     fallback: Option<MethodHandler>,
 ) -> Result<(), String> {
-    let _ = std::fs::remove_file(socket_path);
-    let listener = UnixListener::bind(socket_path).map_err(|e| e.to_string())?;
-    let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
-    perform_handshake_server(&mut stream)?;
-
-    while let Ok(request) = read_frame::<_, Request>(&mut stream) {
-        let response = dispatch_request(&request, &handlers, check, fallback);
-        if write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    let stream = accept_and_handshake(socket_path)?;
+    drive_loop(stream, |request| {
+        dispatch_request(request, &handlers, check, fallback)
+    });
     Ok(())
+}
+
+pub fn serve(handler: impl FnMut(&Request) -> Response) {
+    let socket_path = std::env::args()
+        .nth(1)
+        .expect("missing socket path argument");
+    let stream = accept_and_handshake(&socket_path).expect("extension server failed");
+    drive_loop(stream, handler);
+}
+
+pub fn check_request(
+    extension: &str,
+    method: &str,
+    payload: &str,
+    allowed_method: &str,
+) -> Request {
+    let encoded = encode_check_payload(
+        vec![PermissionEntry {
+            extension: extension.to_string(),
+            method: allowed_method.to_string(),
+            constraints: BTreeMap::new(),
+        }],
+        method,
+        payload,
+    )
+    .unwrap();
+    Request {
+        method: CHECK_METHOD.to_string(),
+        payload: encoded,
+    }
 }
 
 pub fn write_frame<W: Write>(writer: &mut W, value: &impl Serialize) -> io::Result<()> {

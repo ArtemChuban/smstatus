@@ -1,10 +1,42 @@
 use std::sync::Arc;
 
-use wasmtime::{StoreLimits, StoreLimitsBuilder};
+use wasmtime::component::{Component, Linker};
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use crate::bindings::Host;
+use crate::bindings::{GuestModule, Host};
 use crate::extension::ExtensionRegistry;
+
+pub(crate) fn build_engine_and_linker() -> crate::error::Result<(Engine, Linker<HostState>)> {
+    let mut wasm_config = Config::new();
+    wasm_config.wasm_component_model(true);
+    wasm_config.consume_fuel(true);
+    let engine = Engine::new(&wasm_config)?;
+
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    GuestModule::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+        &mut linker,
+        |state: &mut HostState| state,
+    )?;
+    Ok((engine, linker))
+}
+
+pub(crate) fn instantiate_component(
+    engine: &Engine,
+    linker: &Linker<HostState>,
+    component: &Component,
+    extensions: Arc<ExtensionRegistry>,
+    permissions: Arc<[extension_protocol::PermissionEntry]>,
+    fuel: u64,
+) -> crate::error::Result<(Store<HostState>, GuestModule)> {
+    let state = HostState::new(extensions, permissions);
+    let mut store = Store::new(engine, state);
+    store.limiter(|state| state.limits());
+    store.set_fuel(fuel)?;
+    let module = GuestModule::instantiate(&mut store, component, linker)?;
+    Ok((store, module))
+}
 
 pub(crate) struct HostState {
     wasi_ctx: WasiCtx,
@@ -233,7 +265,6 @@ mod tests {
             "one"
         );
 
-        // Re-instantiate path builds a new HostState from the same frozen Arc.
         let mut second = HostState::new(registry, permissions);
         assert_eq!(
             second
