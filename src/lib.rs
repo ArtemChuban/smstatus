@@ -13,6 +13,7 @@ mod logging;
 mod manifest;
 mod meta;
 mod module;
+mod preset;
 mod probe;
 mod reload;
 mod schema;
@@ -23,7 +24,7 @@ mod x11;
 
 use std::process::ExitCode;
 
-use cli::{Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands};
+use cli::{Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PresetCommands};
 
 fn cli_ok_line(message: &str) -> ExitCode {
     logging::to_stdout(log::Level::Info, message);
@@ -88,6 +89,30 @@ pub fn run() -> ExitCode {
             },
             ExtensionCommands::Remove { name } => match install::remove_extension(&name) {
                 Ok(()) => cli_ok_line(&format!("removed extension `{name}`")),
+                Err(err) => cli_err(err),
+            },
+        },
+        Some(Commands::Preset { command }) => match command {
+            PresetCommands::List => match preset::list_presets() {
+                Ok(lines) => cli_ok_lines(lines),
+                Err(err) => cli_err(err),
+            },
+            PresetCommands::Save { name } => match preset::save_preset(&name) {
+                Ok(()) => cli_ok_line(&format!("saved preset `{name}`")),
+                Err(err) => cli_err(err),
+            },
+            PresetCommands::Use { name, reload } => match preset::use_preset(&name, reload) {
+                Ok(preset::UsePresetOutcome::ReloadDelivered) => cli_ok_line("reload delivered"),
+                Ok(preset::UsePresetOutcome::ReloadNotRunning) => {
+                    cli_ok_line(&format!("active preset set to `{name}`"))
+                }
+                Ok(preset::UsePresetOutcome::Switched) => {
+                    cli_ok_line(&format!("active preset set to `{name}`"))
+                }
+                Err(err) => cli_err(err),
+            },
+            PresetCommands::Remove { name } => match preset::remove_preset(&name) {
+                Ok(()) => cli_ok_line(&format!("removed preset `{name}`")),
                 Err(err) => cli_err(err),
             },
         },

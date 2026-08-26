@@ -3,8 +3,6 @@
 //! Root `config.toml` holds the active preset pointer; bar layout lives in
 //! `presets/<name>.toml`. See `create_default_preset` for initial layout (#64).
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
@@ -14,6 +12,7 @@ use super::io::atomic_write;
 
 pub(crate) const PRESETS_SUBDIR: &str = "presets";
 pub(crate) const PROGRAM_CONFIG_FILE: &str = "config.toml";
+#[allow(dead_code)]
 pub(crate) const DEFAULT_PRESET_NAME: &str = "default";
 
 pub(crate) fn program_config_path(config_dir: &Path) -> PathBuf {
@@ -120,8 +119,7 @@ pub(crate) fn active_config_path(config_dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Writes root `config.toml` and a minimal `presets/default.toml` skeleton.
-/// Intended for future `smstatus init` (#64); errors if either file exists.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn create_default_preset(config_dir: &Path) -> Result<()> {
     let program_path = program_config_path(config_dir);
     if program_path.exists() {
