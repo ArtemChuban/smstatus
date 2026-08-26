@@ -153,7 +153,10 @@ test-http:
 
 test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-cpu test-process test-claude
 
-test-packages: test-fmt-common test-extension-protocol
+test-scaffold:
+    cargo test -p scaffold
+
+test-packages: test-fmt-common test-extension-protocol test-scaffold
 
 test-extensions: test-echo test-time test-fs test-mem test-xkb test-disk-extension test-smstatus-process test-http
 
@@ -218,6 +221,7 @@ fmt-check:
 
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
+    cargo clippy -p scaffold -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
     cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
     cargo clippy -p smstatus -- -D warnings
@@ -227,6 +231,9 @@ target-dir := "target"
 wasm-out := target-dir / wasm-target / profile
 native-out := target-dir / profile
 dist-dir := "dist"
+
+new-module name:
+    cargo run -q -p scaffold -- module {{name}}
 
 pack-module name: (build-module-by-name name)
     #!/usr/bin/env bash

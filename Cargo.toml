@@ -1,5 +1,5 @@
 [workspace]
-members = ["modules/battery", "modules/datetime", "modules/keyboard", "modules/disk", "modules/ram", "modules/cpu", "modules/process", "modules/claude", "packages/fmt-common", "packages/extension-protocol", "extensions/echo", "extensions/time", "extensions/fs", "extensions/mem", "extensions/xkb", "extensions/disk", "extensions/process", "extensions/http"]
+members = ["modules/battery", "modules/datetime", "modules/keyboard", "modules/disk", "modules/ram", "modules/cpu", "modules/process", "modules/claude", "packages/fmt-common", "packages/extension-protocol", "tools/scaffold", "extensions/echo", "extensions/time", "extensions/fs", "extensions/mem", "extensions/xkb", "extensions/disk", "extensions/process", "extensions/http"]
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
