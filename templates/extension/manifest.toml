@@ -1,0 +1,4 @@
+name = "{{name}}"
+version = "0.1.0"
+author = "{{author}}"
+extensions-api = { major = {{extensions_api_major}}, minor = {{extensions_api_minor}} }

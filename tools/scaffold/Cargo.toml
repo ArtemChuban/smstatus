@@ -1,0 +1,17 @@
+[package]
+name = "scaffold"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "scaffold"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+toml_edit = "0.25"
+
+[dev-dependencies]
+tempfile = "3"
