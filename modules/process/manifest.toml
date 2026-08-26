@@ -3,4 +3,6 @@ display_name = "Process"
 version = "0.1.0"
 author = "ArtemChuban"
 modules-api = { major = 0, minor = 1 }
-required_extensions = ["process"]
+required_extensions = [
+  { name = "process", version = { major = 0, minor = 1 } },
+]
