@@ -13,6 +13,7 @@ use crate::config::BarConfig;
 use crate::error::Result;
 use crate::extension::ExtensionRegistry;
 use crate::host::HostState;
+use crate::manifest::RequiredExtension;
 use crate::version;
 
 pub(crate) struct ModuleState {
@@ -45,12 +46,31 @@ pub(crate) struct ModuleRuntime {
     validated_kinds: RefCell<HashSet<String>>,
 }
 
-fn missing_extensions(required: &[String], registry: &ExtensionRegistry) -> Vec<String> {
-    required
-        .iter()
-        .filter(|name| !registry.is_installed(name))
-        .cloned()
-        .collect()
+#[derive(Debug, PartialEq, Eq)]
+enum UnmetExtension {
+    Missing(String),
+    Incompatible(String),
+}
+
+fn unmet_extensions(
+    required: &[RequiredExtension],
+    registry: &ExtensionRegistry,
+) -> Vec<UnmetExtension> {
+    let mut unmet = Vec::new();
+    for req in required {
+        if !registry.is_installed(&req.name) {
+            unmet.push(UnmetExtension::Missing(req.name.clone()));
+            continue;
+        }
+        let Ok(installed) = registry.installed_package_version(&req.name) else {
+            unmet.push(UnmetExtension::Incompatible(req.name.clone()));
+            continue;
+        };
+        if !version::package_version_meets_floor(installed, req.version.major, req.version.minor) {
+            unmet.push(UnmetExtension::Incompatible(req.name.clone()));
+        }
+    }
+    unmet
 }
 
 pub(crate) fn wait_wasm_stable(path: &Path) {
@@ -109,13 +129,30 @@ impl ModuleRuntime {
             (manifest.modules_api.major, manifest.modules_api.minor, 0),
         )?;
 
-        let missing = missing_extensions(&manifest.required_extensions, &self.extensions);
-        if !missing.is_empty() {
-            let list = missing.join(", ");
-            return Err(format!(
-                "module `{kind}` requires extension(s) `{list}`; install extension(s) {list}"
-            )
-            .into());
+        let unmet = unmet_extensions(&manifest.required_extensions, &self.extensions);
+        if !unmet.is_empty() {
+            let mut missing = Vec::new();
+            let mut incompatible = Vec::new();
+            for item in unmet {
+                match item {
+                    UnmetExtension::Missing(name) => missing.push(name),
+                    UnmetExtension::Incompatible(name) => incompatible.push(name),
+                }
+            }
+            let mut parts = Vec::new();
+            if !missing.is_empty() {
+                let list = missing.join(", ");
+                parts.push(format!(
+                    "missing extension(s) `{list}`; install extension(s) {list}"
+                ));
+            }
+            if !incompatible.is_empty() {
+                let list = incompatible.join(", ");
+                parts.push(format!(
+                    "incompatible extension(s) `{list}`; upgrade extension(s) {list}"
+                ));
+            }
+            return Err(format!("module `{kind}` requires {}", parts.join("; ")).into());
         }
 
         let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
@@ -341,19 +378,27 @@ impl ModuleRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::ApiVersionReq;
 
-    fn registry_with_installed(names: &[&str]) -> ExtensionRegistry {
+    fn req(name: &str, major: u32, minor: u32) -> RequiredExtension {
+        RequiredExtension {
+            name: name.to_string(),
+            version: ApiVersionReq { major, minor },
+        }
+    }
+
+    fn registry_with_installed(entries: &[(&str, &str)]) -> ExtensionRegistry {
         let dir = crate::extension::test_temp_dir("module");
         let extensions_dir = dir.join("extensions");
         std::fs::create_dir_all(&extensions_dir).unwrap();
-        for name in names {
+        for &(name, version) in entries {
             let pkg = extensions_dir.join(name);
             std::fs::create_dir_all(&pkg).unwrap();
             std::fs::write(pkg.join("extension"), "").unwrap();
             std::fs::write(
                 pkg.join("manifest.toml"),
                 format!(
-                    "name = \"{name}\"\nversion = \"0.1.0\"\nauthor = \"test\"\nextensions-api = {{ major = 0, minor = 1 }}\n"
+                    "name = \"{name}\"\nversion = \"{version}\"\nauthor = \"test\"\nextensions-api = {{ major = 0, minor = 1 }}\n"
                 ),
             )
             .unwrap();
@@ -364,15 +409,18 @@ mod tests {
     #[test]
     fn no_required_extensions_is_never_missing() {
         let registry = registry_with_installed(&[]);
-        assert_eq!(missing_extensions(&[], &registry), Vec::<String>::new());
+        assert_eq!(
+            unmet_extensions(&[], &registry),
+            Vec::<UnmetExtension>::new()
+        );
     }
 
     #[test]
     fn all_required_extensions_installed_is_not_missing() {
-        let registry = registry_with_installed(&["docker"]);
+        let registry = registry_with_installed(&[("docker", "0.1.0")]);
         assert_eq!(
-            missing_extensions(&["docker".to_string()], &registry),
-            Vec::<String>::new()
+            unmet_extensions(&[req("docker", 0, 1)], &registry),
+            Vec::<UnmetExtension>::new()
         );
     }
 
@@ -380,24 +428,36 @@ mod tests {
     fn one_missing_extension_is_reported() {
         let registry = registry_with_installed(&[]);
         assert_eq!(
-            missing_extensions(&["docker".to_string()], &registry),
-            vec!["docker".to_string()]
+            unmet_extensions(&[req("docker", 0, 1)], &registry),
+            vec![UnmetExtension::Missing("docker".to_string())]
         );
     }
 
     #[test]
     fn several_missing_extensions_are_all_reported() {
-        let registry = registry_with_installed(&["docker"]);
+        let registry = registry_with_installed(&[("docker", "0.1.0")]);
         assert_eq!(
-            missing_extensions(
-                &[
-                    "docker".to_string(),
-                    "dbus".to_string(),
-                    "network".to_string(),
-                ],
+            unmet_extensions(
+                &[req("docker", 0, 1), req("dbus", 0, 1), req("network", 0, 1)],
                 &registry
             ),
-            vec!["dbus".to_string(), "network".to_string()]
+            vec![
+                UnmetExtension::Missing("dbus".to_string()),
+                UnmetExtension::Missing("network".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn incompatible_extension_version_is_reported() {
+        let registry = registry_with_installed(&[("fs", "0.1.0")]);
+        assert_eq!(
+            unmet_extensions(&[req("fs", 0, 2)], &registry),
+            vec![UnmetExtension::Incompatible("fs".to_string())]
+        );
+        assert_eq!(
+            unmet_extensions(&[req("fs", 1, 0)], &registry),
+            vec![UnmetExtension::Incompatible("fs".to_string())]
         );
     }
 }

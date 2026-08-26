@@ -80,6 +80,12 @@ impl ExtensionRegistry {
             .unwrap_or(false)
     }
 
+    pub(crate) fn installed_package_version(&self, name: &str) -> Result<(u32, u32, u32), String> {
+        let manifest = crate::manifest::read_extension_manifest(&self.extensions_dir, name)
+            .map_err(|e| e.to_string())?;
+        crate::version::parse_package_version(&manifest.version).map_err(|e| e.to_string())
+    }
+
     fn kill_child(&self, name: &str) {
         if let Some(mut child) = lock(&self.children).remove(name) {
             let _ = child.kill();

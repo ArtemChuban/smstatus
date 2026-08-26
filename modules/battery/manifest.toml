@@ -3,4 +3,6 @@ display_name = "Battery"
 version = "0.1.0"
 author = "ArtemChuban"
 modules-api = { major = 0, minor = 1 }
-required_extensions = ["fs"]
+required_extensions = [
+  { name = "fs", version = { major = 0, minor = 1 } },
+]

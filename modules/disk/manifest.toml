@@ -3,4 +3,6 @@ display_name = "Disk"
 version = "0.1.0"
 author = "ArtemChuban"
 modules-api = { major = 0, minor = 1 }
-required_extensions = ["disk"]
+required_extensions = [
+  { name = "disk", version = { major = 0, minor = 1 } },
+]

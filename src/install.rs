@@ -638,7 +638,7 @@ mod tests {
     ) -> String {
         let exts = required_extensions
             .iter()
-            .map(|e| format!("\"{e}\""))
+            .map(|e| format!("{{ name = \"{e}\", version = {{ major = 0, minor = 1 }} }}"))
             .collect::<Vec<_>>()
             .join(", ");
         format!(
