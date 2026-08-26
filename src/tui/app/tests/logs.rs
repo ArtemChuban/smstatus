@@ -2,11 +2,10 @@ use super::*;
 use crate::tui::app::{LOGS_CHUNK_LINES, PanelFocus};
 
 #[test]
-fn tab_focuses_logs_and_sets_follow() {
+fn tab_from_modules_focuses_extensions() {
     let mut app = App::default();
     app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.panel_focus, PanelFocus::Logs);
-    assert!(app.logs_follow);
+    assert_eq!(app.panel_focus, PanelFocus::Extensions);
 }
 
 #[test]
@@ -21,17 +20,17 @@ fn tab_from_params_focuses_logs() {
 }
 
 #[test]
-fn esc_and_left_from_logs_return_to_modules() {
+fn esc_and_left_from_logs_return_to_params() {
     let mut app = App {
         panel_focus: PanelFocus::Logs,
         ..App::default()
     };
     app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.panel_focus, PanelFocus::Modules);
+    assert_eq!(app.panel_focus, PanelFocus::Params);
 
     app.panel_focus = PanelFocus::Logs;
     app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
-    assert_eq!(app.panel_focus, PanelFocus::Modules);
+    assert_eq!(app.panel_focus, PanelFocus::Params);
 }
 
 #[test]
@@ -44,6 +43,10 @@ fn tab_from_logs_returns_to_modules() {
     assert_eq!(app.panel_focus, PanelFocus::Modules);
 }
 
+fn focus_logs(app: &mut App) {
+    app.focus_logs();
+}
+
 #[test]
 fn up_from_newest_clears_follow_and_down_restores_it() {
     install_test_log();
@@ -51,7 +54,7 @@ fn up_from_newest_clears_follow_and_down_restores_it() {
     std::fs::write(&path, "line0\nline1\nline2\nline3\nline4\n").unwrap();
 
     let mut app = App::default();
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     assert!(app.logs_follow);
     assert_eq!(app.logs_selected_index, Some(4));
     assert_eq!(app.logs_total, 5);
@@ -72,13 +75,13 @@ fn tab_away_and_back_restores_follow() {
     std::fs::write(&path, "a\nb\nc\nd\n").unwrap();
 
     let mut app = App::default();
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
     assert!(!app.logs_follow);
 
     app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.panel_focus, PanelFocus::Modules);
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     assert_eq!(app.panel_focus, PanelFocus::Logs);
     assert!(app.logs_follow);
     assert_eq!(app.logs_selected_index, Some(3));
@@ -94,7 +97,7 @@ fn scroll_offset_clamps_selected_line_into_viewport() {
         logs_viewport_height: 3,
         ..App::default()
     };
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     assert_eq!(app.logs_selected_index, Some(5));
     assert_eq!(app.logs_scroll_offset, 3);
 
@@ -118,7 +121,7 @@ fn refresh_keeps_selected_line_when_new_log_appended() {
         logs_viewport_height: 3,
         ..App::default()
     };
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
     app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
     assert!(!app.logs_follow);
@@ -175,7 +178,7 @@ fn scrolling_up_past_chunk_loads_older_lines_with_full_total() {
         logs_viewport_height: 3,
         ..App::default()
     };
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     assert_eq!(app.logs_total, total);
     assert!(app.log_history.len() <= LOGS_CHUNK_LINES.max(6));
     assert!(app.logs_loaded_from > 0);
@@ -209,7 +212,7 @@ fn toggle_i_hides_info_keeps_error_and_moves_among_visible() {
         logs_viewport_height: 5,
         ..App::default()
     };
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     assert_eq!(app.logs_total, 5);
     assert_eq!(app.logs_file_total, 5);
     assert!(app.logs_follow);
@@ -253,7 +256,7 @@ fn filtered_title_includes_file_total() {
         logs_viewport_height: 3,
         ..App::default()
     };
-    app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+    focus_logs(&mut app);
     app.handle_key(key(KeyCode::Char('i'), KeyModifiers::NONE));
     assert_eq!(app.logs_total, 2);
     assert_eq!(app.logs_file_total, 3);

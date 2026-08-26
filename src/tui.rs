@@ -37,6 +37,8 @@ fn run_inner() -> crate::error::Result<()> {
         app.sync_logs_follow();
         let completed = guard.terminal.draw(|frame| ui::draw(frame, &app))?;
         app.modules_viewport_height = ui::modules_viewport_height(completed.area.height);
+        app.extensions_viewport_height = ui::extensions_viewport_height(completed.area.height);
+        app.params_viewport_height = ui::params_viewport_height(completed.area.height);
         app.logs_viewport_height = ui::logs_viewport_height(completed.area.height);
         app.overlay_viewport_height = ui::overlay_viewport_height(completed.area.height);
         app.poll_metadata();

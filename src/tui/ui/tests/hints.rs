@@ -89,14 +89,14 @@ fn help_lines_modules_focus_lists_local_module_bindings() {
     let lines = help_lines(&app);
     assert_eq!(lines[0], "--- Local ---");
     assert!(lines.iter().any(|l| l.contains("Add module: a")));
-    assert!(lines.iter().any(|l| l.contains("Browse extensions: x")));
+    assert!(lines.iter().any(|l| l.contains("Focus extensions: Tab/x")));
     assert!(
         lines
             .iter()
             .any(|l| l.contains("Install module/extension: i"))
     );
     assert!(lines.iter().any(|l| l.contains("Focus params")));
-    assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
+    assert!(!lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l == "--- Global ---"));
     assert!(lines.iter().any(|l| l == "Quit: q"));
 }
@@ -114,7 +114,7 @@ fn help_lines_params_focus_lists_edit_add_del_rename() {
     assert!(lines.iter().any(|l| l.contains("Remove param")));
     assert!(lines.iter().any(|l| l.contains("Rename key")));
     assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
-    assert!(lines.iter().any(|l| l.contains("Back to modules")));
+    assert!(lines.iter().any(|l| l.contains("Back:")));
     assert!(!lines.iter().any(|l| l.contains("Add module")));
     assert!(!lines.iter().any(|l| l.contains("Edit separator")));
 }
@@ -137,38 +137,32 @@ fn help_lines_logs_focus_lists_scroll_and_back() {
     let lines = help_lines(&app);
     assert!(lines.iter().any(|l| l.contains("Scroll logs")));
     assert!(lines.iter().any(|l| l.contains("Toggle ERROR/WARN/INFO")));
-    assert!(lines.iter().any(|l| l.contains("Back to modules")));
+    assert!(lines.iter().any(|l| l.contains("Back:")));
     assert!(!lines.iter().any(|l| l.contains("Add module")));
 }
 
 #[test]
-fn hint_line_browsing_extensions_mode() {
+fn hint_line_extensions_focus() {
     let app = App {
-        mode: Mode::BrowsingExtensions {
-            selected: 0,
-            scroll_offset: 0,
-        },
+        panel_focus: PanelFocus::Extensions,
         ..App::default()
     };
     assert_eq!(
         hint_line(&app).as_ref(),
-        "Select: \u{2191}/\u{2193} | Install: i | Close: Esc"
+        "Select: \u{2191}/\u{2193} | Detail: Enter/\u{2192} | Modules: Esc/\u{2190} | Install: i | Logs: Tab | Quit: q | Help: ?"
     );
 }
 
 #[test]
-fn help_lines_browsing_extensions_lists_close() {
+fn help_lines_extensions_focus_lists_navigation() {
     let app = App {
-        mode: Mode::BrowsingExtensions {
-            selected: 0,
-            scroll_offset: 0,
-        },
+        panel_focus: PanelFocus::Extensions,
         ..App::default()
     };
     let lines = help_lines(&app);
     assert!(lines.iter().any(|l| l.contains("Select extension")));
     assert!(lines.iter().any(|l| l.contains("Install: i")));
-    assert!(lines.iter().any(|l| l.contains("Close: Esc")));
+    assert!(lines.iter().any(|l| l.contains("Back to modules")));
 }
 
 #[test]

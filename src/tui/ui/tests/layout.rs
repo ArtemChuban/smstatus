@@ -49,7 +49,9 @@ fn compute_fixed_heights_splits_flexible_space_evenly() {
     assert_eq!(h.hint, 1);
     assert_eq!(h.logs, 5);
     assert_eq!(h.modules_border, 2);
-    assert_eq!(h.modules_content, 3);
+    assert_eq!(h.modules_content, 1);
+    assert_eq!(h.extensions_border, 2);
+    assert_eq!(h.extensions_content, 0);
 }
 
 #[test]
@@ -60,13 +62,17 @@ fn compute_fixed_heights_modules_get_ceil_when_flexible_odd() {
     assert_eq!(h.logs, 3);
     assert_eq!(h.modules_border, 2);
     assert_eq!(h.modules_content, 2);
+    assert_eq!(h.extensions_border, 0);
+    assert_eq!(h.extensions_content, 0);
 }
 
 #[test]
 fn compute_fixed_heights_grows_both_halves_together() {
     let a = compute_fixed_heights(14);
     let b = compute_fixed_heights(16);
-    assert_eq!(b.modules_content, a.modules_content + 1);
+    let stack_a = a.modules_content + a.extensions_content;
+    let stack_b = b.modules_content + b.extensions_content;
+    assert_eq!(stack_b, stack_a + 1);
     assert_eq!(b.logs, a.logs + 1);
 }
 
@@ -97,9 +103,10 @@ fn overlay_viewport_height_matches_overlay_inner_geometry() {
             x: 0,
             y: 0,
             width: 40,
-            height: heights
-                .modules_border
-                .saturating_add(heights.modules_content),
+            height: heights.modules_border
+                + heights.modules_content
+                + heights.extensions_border
+                + heights.extensions_content,
         };
         let expected = Block::default()
             .borders(Borders::ALL)
