@@ -20,10 +20,6 @@ pub(super) fn is_quit(key: KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('q')) || is_hard_quit(key)
 }
 
-pub(super) fn is_valid_param_key(key: &str) -> bool {
-    crate::schema::is_valid_name(key)
-}
-
 pub(super) fn apply_text_edit(buffer: &mut String, cursor: &mut usize, key: KeyEvent) {
     match key.code {
         KeyCode::Left => {

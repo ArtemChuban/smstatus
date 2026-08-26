@@ -1,6 +1,5 @@
 use std::path::{Component, Path};
 
-/// Path-safe (same as host `is_safe_extension_name`) and a valid Cargo package name.
 pub fn is_safe_name(name: &str) -> bool {
     is_safe_path_component(name) && is_valid_cargo_package_name(name)
 }
@@ -17,7 +16,6 @@ fn is_safe_path_component(name: &str) -> bool {
     }
 }
 
-/// ASCII subset of Cargo package name rules: letter/`_` first; then alnum/`_`/`-`.
 fn is_valid_cargo_package_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {

@@ -1,4 +1,3 @@
-use std::os::unix::net::UnixListener;
 use std::path::{Component, Path, PathBuf};
 
 use extension_protocol::{self as protocol, Request, Response};
@@ -30,8 +29,6 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Resolve for prefix checks: canonicalize when possible, else lexical normalize.
-/// Collapses `..` and follows symlinks so allowlisted prefixes are real containment.
 fn resolve_for_check(path: &Path) -> PathBuf {
     match path.canonicalize() {
         Ok(canon) => canon,
@@ -107,20 +104,7 @@ fn handle_request(request: &Request) -> Response {
 }
 
 fn main() {
-    let socket_path = std::env::args()
-        .nth(1)
-        .expect("missing socket path argument");
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).expect("failed to bind socket");
-    let (mut stream, _) = listener.accept().expect("failed to accept connection");
-    protocol::perform_handshake_server(&mut stream).expect("handshake failed");
-
-    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
-        let response = handle_request(&request);
-        if protocol::write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    protocol::serve(handle_request);
 }
 
 #[cfg(test)]
@@ -271,12 +255,6 @@ mod tests {
 
     #[test]
     fn check_denies_when_unexpanded_prefix_would_not_match_expanded_path() {
-        // If only the path were expanded, prefix `~/claude/` would not be a
-        // Path prefix of `/home/testuser/claude/creds.json`. Expanding both
-        // sides allows the match; expanding neither leaves literal `~/` paths
-        // that still match each other. Force the expand-both rule by checking
-        // an absolute path against a tilde prefix with a home dir: only
-        // expanding the prefix makes this succeed.
         let home = Path::new("/home/testuser");
         match read_check(
             "/home/testuser/claude/creds.json",

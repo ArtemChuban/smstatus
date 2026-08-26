@@ -210,10 +210,6 @@ impl App {
         self.sync_logs_follow();
     }
 
-    pub(super) fn leave_logs_focus(&mut self, to: PanelFocus) {
-        self.panel_focus = to;
-    }
-
     pub(in crate::tui) fn sync_logs_follow(&mut self) {
         if !self.logs_follow {
             return;
@@ -282,8 +278,8 @@ impl App {
         match key.code {
             KeyCode::Up => self.select_previous_log(),
             KeyCode::Down => self.select_next_log(),
-            KeyCode::Esc | KeyCode::Left => self.leave_logs_focus(PanelFocus::Modules),
-            KeyCode::Tab => self.leave_logs_focus(PanelFocus::Modules),
+            KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
+            KeyCode::Tab => self.panel_focus = PanelFocus::Modules,
             KeyCode::Char('e') => {
                 self.logs_show_error = !self.logs_show_error;
                 self.apply_log_level_filter_change();

@@ -1,5 +1,3 @@
-use std::os::unix::net::UnixListener;
-
 use extension_protocol::{self as protocol, Request, Response};
 
 fn is_pid_dir(file_name: &str) -> bool {
@@ -55,20 +53,7 @@ fn handle_request(request: &Request) -> Response {
 }
 
 fn main() {
-    let socket_path = std::env::args()
-        .nth(1)
-        .expect("missing socket path argument");
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).expect("failed to bind socket");
-    let (mut stream, _) = listener.accept().expect("failed to accept connection");
-    protocol::perform_handshake_server(&mut stream).expect("handshake failed");
-
-    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
-        let response = handle_request(&request);
-        if protocol::write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    protocol::serve(handle_request);
 }
 
 #[cfg(test)]
@@ -155,20 +140,9 @@ mod tests {
     }
 
     fn is_running_check(method: &str, allowed: &str) -> Response {
-        let encoded = protocol::encode_check_payload(
-            vec![protocol::PermissionEntry {
-                extension: "process".to_string(),
-                method: allowed.to_string(),
-                constraints: Default::default(),
-            }],
-            method,
-            "firefox",
-        )
-        .unwrap();
-        handle_request(&Request {
-            method: protocol::CHECK_METHOD.to_string(),
-            payload: encoded,
-        })
+        handle_request(&protocol::check_request(
+            "process", method, "firefox", allowed,
+        ))
     }
 
     #[test]

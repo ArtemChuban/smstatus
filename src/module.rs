@@ -12,7 +12,7 @@ use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
 use crate::extension::ExtensionRegistry;
-use crate::host::HostState;
+use crate::host::{self, HostState};
 use crate::manifest::RequiredExtension;
 use crate::version;
 
@@ -119,12 +119,14 @@ impl ModuleRuntime {
         component: &Component,
         permissions: Arc<[extension_protocol::PermissionEntry]>,
     ) -> Result<(Store<HostState>, GuestModule)> {
-        let state = HostState::new(Arc::clone(&self.extensions), permissions);
-        let mut store = Store::new(&self.engine, state);
-        store.limiter(|state| state.limits());
-        store.set_fuel(self.fuel_per_tick)?;
-        let module = GuestModule::instantiate(&mut store, component, &self.linker)?;
-        Ok((store, module))
+        host::instantiate_component(
+            &self.engine,
+            &self.linker,
+            component,
+            Arc::clone(&self.extensions),
+            permissions,
+            self.fuel_per_tick,
+        )
     }
 
     pub(crate) fn start(&self, kind: &str, name: &str, config: &str) -> Result<ModuleState> {

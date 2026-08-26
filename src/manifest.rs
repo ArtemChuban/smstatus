@@ -168,7 +168,6 @@ fn parse_module_manifest_str(text: &str) -> Result<ModuleManifest> {
             )
             .into());
         }
-        // Reject unsupported constraint types early via the same conversion host uses.
         perm.to_protocol_entry()?;
     }
     Ok(manifest)

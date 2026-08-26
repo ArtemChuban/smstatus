@@ -107,7 +107,6 @@ fn create_crate(name: &str, kind: CrateKind) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate name, ensure path/member/package are free, return repo root.
 fn prepare_crate(name: &str, kind: &str) -> Result<PathBuf, String> {
     if !is_safe_name(name) {
         return Err(format!("invalid name `{name}`"));

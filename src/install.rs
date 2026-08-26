@@ -18,7 +18,6 @@ pub(crate) enum SourceKind {
     Url,
 }
 
-/// Local path or downloaded temp file. URL temps are removed on drop.
 #[derive(Debug)]
 pub(crate) struct ResolvedSource {
     path: PathBuf,
@@ -101,15 +100,15 @@ pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
                 .read_to_vec()
                 .map_err(|e| format!("failed to read download body for `{source}`: {e}"))?
         };
-        let label = if basename.is_empty() {
-            PathBuf::from(format!("smstatus-download-{}.tar.gz", std::process::id()))
-        } else {
-            PathBuf::from(basename)
-        };
         let file_name = if basename.is_empty() {
             format!("smstatus-download-{}.tar.gz", std::process::id())
         } else {
             format!("smstatus-download-{}-{basename}", std::process::id())
+        };
+        let label = if basename.is_empty() {
+            PathBuf::from(&file_name)
+        } else {
+            PathBuf::from(basename)
         };
         let temp_path = std::env::temp_dir().join(file_name);
         fs::write(&temp_path, bytes).map_err(|e| {
