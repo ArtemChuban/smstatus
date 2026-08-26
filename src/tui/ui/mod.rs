@@ -16,7 +16,7 @@ pub(in crate::tui) use render::help_lines;
 use layout::{compute_fixed_heights, layout_areas, modules_region};
 use overlay::{
     draw_add_overlay, draw_help_overlay, draw_install_kind_overlay, draw_naming_overlay,
-    draw_param_text_overlay,
+    draw_param_text_overlay, draw_preset_list_overlay,
 };
 use render::{
     SEPARATOR_EDIT_PREFIX, boxed_title, draw_detail_column, draw_extensions_column,
@@ -139,10 +139,26 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 buffer,
                 *cursor,
             ),
+            Mode::ChoosingPreset {
+                names,
+                selected,
+                scroll_offset,
+            } => draw_preset_list_overlay(
+                frame,
+                region,
+                names,
+                *selected,
+                *scroll_offset,
+                app.active_preset.as_deref(),
+            ),
+            Mode::NamingPreset { buffer, cursor } => {
+                draw_param_text_overlay(frame, region, "save preset as", buffer, *cursor)
+            }
             Mode::Normal
             | Mode::EditingSeparator { .. }
             | Mode::ConfirmingRemove { .. }
-            | Mode::ConfirmingRemoveParam { .. } => {}
+            | Mode::ConfirmingRemoveParam { .. }
+            | Mode::ConfirmingRemovePreset { .. } => {}
         }
     }
 }
