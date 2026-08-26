@@ -13,6 +13,7 @@ use crate::meta;
 use crate::reload::ReloadRequest;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
 
 fn notify_module_reload(kind: &str) {
     match control::notify_running(ReloadRequest::module(kind)) {
@@ -192,6 +193,25 @@ impl Drop for ScratchDir {
     }
 }
 
+fn validate_tar_entry_path(path: &Path) -> Result<()> {
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                return Err(format!("archive entry path `{}` is absolute", path.display()).into());
+            }
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "archive entry path `{}` contains parent directory component",
+                    path.display()
+                )
+                .into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn unpack_archive(archive: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest)
         .map_err(|e| format!("failed to create unpack dir `{}`: {e}", dest.display()))?;
@@ -199,8 +219,49 @@ fn unpack_archive(archive: &Path, dest: &Path) -> Result<()> {
         .map_err(|e| format!("failed to open archive `{}`: {e}", archive.display()))?;
     let decoder = GzDecoder::new(file);
     let mut tar = tar::Archive::new(decoder);
-    tar.unpack(dest)
-        .map_err(|e| format!("failed to unpack archive `{}`: {e}", archive.display()))?;
+    let mut unpacked_bytes: u64 = 0;
+    for entry in tar.entries().map_err(|e| {
+        format!(
+            "failed to read archive entries from `{}`: {e}",
+            archive.display()
+        )
+    })? {
+        let mut entry = entry.map_err(|e| {
+            format!(
+                "failed to read archive entry from `{}`: {e}",
+                archive.display()
+            )
+        })?;
+        match entry.header().entry_type() {
+            tar::EntryType::Regular | tar::EntryType::GNUSparse => {}
+            tar::EntryType::Directory => {}
+            other => {
+                return Err(format!(
+                    "unsupported archive entry type `{other:?}` in `{}`",
+                    archive.display()
+                )
+                .into());
+            }
+        }
+        let path = entry
+            .path()
+            .map_err(|e| format!("invalid archive entry path in `{}`: {e}", archive.display()))?;
+        validate_tar_entry_path(&path)?;
+        unpacked_bytes = unpacked_bytes.saturating_add(entry.header().size().unwrap_or(0));
+        if unpacked_bytes > MAX_UNPACKED_BYTES {
+            return Err(format!(
+                "archive `{}` exceeds maximum unpacked size of {MAX_UNPACKED_BYTES} bytes",
+                archive.display()
+            )
+            .into());
+        }
+        entry.unpack_in(dest).map_err(|e| {
+            format!(
+                "failed to unpack archive entry in `{}`: {e}",
+                archive.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -793,6 +854,151 @@ mod tests {
         let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
         write_tar_gz(&staging, &archive).unwrap();
         archive
+    }
+
+    fn set_raw_tar_path(header: &mut tar::Header, path: &str) {
+        let gnu = header.as_gnu_mut().expect("gnu header");
+        gnu.name.fill(0);
+        let bytes = path.as_bytes();
+        let len = bytes.len().min(gnu.name.len().saturating_sub(1));
+        gnu.name[..len].copy_from_slice(&bytes[..len]);
+        header.set_cksum();
+    }
+
+    fn write_tar_gz_with<F>(archive: &Path, add_entries: F) -> Result<()>
+    where
+        F: FnOnce(&mut tar::Builder<GzEncoder<std::fs::File>>) -> Result<()>,
+    {
+        let file = fs::File::create(archive)
+            .map_err(|e| format!("failed to create archive `{}`: {e}", archive.display()))?;
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        add_entries(&mut builder)?;
+        builder
+            .finish()
+            .map_err(|e| format!("failed to finish archive: {e}"))?;
+        Ok(())
+    }
+
+    fn append_symlink(
+        builder: &mut tar::Builder<GzEncoder<std::fs::File>>,
+        name: &str,
+        target: &str,
+    ) -> Result<()> {
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path(name)
+            .map_err(|e| format!("failed to set symlink path: {e}"))?;
+        header
+            .set_link_name(target)
+            .map_err(|e| format!("failed to set symlink target: {e}"))?;
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_cksum();
+        builder
+            .append(&header, &[] as &[u8])
+            .map_err(|e| format!("failed to append symlink: {e}"))?;
+        Ok(())
+    }
+
+    fn append_sized_file(
+        builder: &mut tar::Builder<GzEncoder<std::fs::File>>,
+        name: &str,
+        size: u64,
+    ) -> Result<()> {
+        let data = vec![0u8; size as usize];
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path(name)
+            .map_err(|e| format!("failed to set file path: {e}"))?;
+        header.set_size(size);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append(&header, &data[..])
+            .map_err(|e| format!("failed to append file: {e}"))?;
+        Ok(())
+    }
+
+    fn unpack_to_temp(archive: &Path) -> PathBuf {
+        let dest = unique_temp_dir("unpack-test").unwrap();
+        unpack_archive(archive, &dest).unwrap();
+        dest
+    }
+
+    #[test]
+    fn unpack_archive_rejects_absolute_path_member() {
+        let archive = temp_modules_dir("tar-abs").join("evil.tar.gz");
+        write_tar_gz_with(&archive, |builder| {
+            let mut header = tar::Header::new_gnu();
+            set_raw_tar_path(&mut header, "/etc/passwd");
+            header.set_size(4);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append(&header, &b"evil"[..])?;
+            Ok(())
+        })
+        .unwrap();
+        let dest = unique_temp_dir("tar-abs-unpack").unwrap();
+        let err = unpack_archive(&archive, &dest).unwrap_err();
+        assert!(err.to_string().contains("absolute"));
+    }
+
+    #[test]
+    fn unpack_archive_rejects_parent_dir_member() {
+        let archive = temp_modules_dir("tar-parent").join("evil.tar.gz");
+        write_tar_gz_with(&archive, |builder| {
+            let mut header = tar::Header::new_gnu();
+            set_raw_tar_path(&mut header, "../outside.txt");
+            header.set_size(4);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append(&header, &b"evil"[..])?;
+            Ok(())
+        })
+        .unwrap();
+        let dest = unique_temp_dir("tar-parent-unpack").unwrap();
+        let err = unpack_archive(&archive, &dest).unwrap_err();
+        assert!(err.to_string().contains("parent directory"));
+    }
+
+    #[test]
+    fn unpack_archive_rejects_symlink_member() {
+        let archive = temp_modules_dir("tar-symlink").join("evil.tar.gz");
+        write_tar_gz_with(&archive, |builder| {
+            append_symlink(builder, "link", "/etc/passwd")
+        })
+        .unwrap();
+        let dest = unique_temp_dir("tar-symlink-unpack").unwrap();
+        let err = unpack_archive(&archive, &dest).unwrap_err();
+        assert!(err.to_string().contains("Symlink"));
+    }
+
+    #[test]
+    fn unpack_archive_rejects_oversized_aggregate() {
+        let archive = temp_modules_dir("tar-oversized").join("evil.tar.gz");
+        let chunk = 33 * 1024 * 1024;
+        write_tar_gz_with(&archive, |builder| {
+            append_sized_file(builder, "a.bin", chunk)?;
+            append_sized_file(builder, "b.bin", chunk)?;
+            Ok(())
+        })
+        .unwrap();
+        let dest = unique_temp_dir("tar-oversized-unpack").unwrap();
+        let err = unpack_archive(&archive, &dest).unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum unpacked size"));
+    }
+
+    #[test]
+    fn unpack_archive_accepts_legitimate_module_and_extension_archives() {
+        let module = pack_module_archive("battery", "0.1.0");
+        let module_dest = unpack_to_temp(&module);
+        assert!(package_root(&module_dest).is_ok());
+
+        let extension = pack_echo_archive();
+        let extension_dest = unpack_to_temp(&extension);
+        assert!(package_root(&extension_dest).is_ok());
     }
 
     #[test]
