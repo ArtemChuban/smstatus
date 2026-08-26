@@ -1,11 +1,15 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::bindings::{GuestModule, Host};
-use crate::extension::ExtensionRegistry;
+use crate::extension::{
+    ExtensionCallAudit, ExtensionCallOutcome, ExtensionCallRecord, ExtensionRegistry,
+    redact_error_message, redact_payload,
+};
 
 pub(crate) fn build_engine_and_linker() -> crate::error::Result<(Engine, Linker<HostState>)> {
     let mut wasm_config = Config::new();
@@ -28,9 +32,10 @@ pub(crate) fn instantiate_component(
     component: &Component,
     extensions: Arc<ExtensionRegistry>,
     permissions: Arc<[extension_protocol::PermissionEntry]>,
+    audit: Arc<ExtensionCallAudit>,
     fuel: u64,
 ) -> crate::error::Result<(Store<HostState>, GuestModule)> {
-    let state = HostState::new(extensions, permissions);
+    let state = HostState::new(extensions, permissions, audit);
     let mut store = Store::new(engine, state);
     store.limiter(|state| state.limits());
     store.set_fuel(fuel)?;
@@ -44,12 +49,15 @@ pub(crate) struct HostState {
     limits: StoreLimits,
     extensions: Arc<ExtensionRegistry>,
     permissions: Arc<[extension_protocol::PermissionEntry]>,
+    audit: Arc<ExtensionCallAudit>,
+    caller_module_kind: Option<String>,
 }
 
 impl HostState {
     pub(crate) fn new(
         extensions: Arc<ExtensionRegistry>,
         permissions: Arc<[extension_protocol::PermissionEntry]>,
+        audit: Arc<ExtensionCallAudit>,
     ) -> Self {
         Self {
             wasi_ctx: WasiCtxBuilder::new().build(),
@@ -60,7 +68,13 @@ impl HostState {
                 .build(),
             extensions,
             permissions,
+            audit,
+            caller_module_kind: None,
         }
+    }
+
+    pub(crate) fn set_caller_module_kind(&mut self, kind: Option<String>) {
+        self.caller_module_kind = kind;
     }
 
     pub(crate) fn limits(&mut self) -> &mut StoreLimits {
@@ -75,7 +89,25 @@ impl Host for HostState {
         method: String,
         payload: String,
     ) -> Result<String, String> {
+        let payload_preview = redact_payload(&method, &payload);
+        let module_kind = self.caller_module_kind.clone();
+
+        let push_audit = |outcome: ExtensionCallOutcome| {
+            log::debug!(
+                "extension call audit: extension=`{extension}` method=`{method}` outcome={outcome:?} preview={payload_preview}"
+            );
+            self.audit.push(ExtensionCallRecord {
+                at: Instant::now(),
+                module_kind: module_kind.clone(),
+                extension: extension.clone(),
+                method: method.clone(),
+                payload_preview: payload_preview.clone(),
+                outcome,
+            });
+        };
+
         if extension_protocol::is_reserved_method(&method) {
+            push_audit(ExtensionCallOutcome::Denied);
             return Err(format!("permission denied: method `{method}` is reserved"));
         }
 
@@ -84,19 +116,41 @@ impl Host for HostState {
             .iter()
             .any(|perm| perm.extension == extension && perm.method == method)
         {
+            push_audit(ExtensionCallOutcome::Denied);
             return Err(format!(
                 "permission denied: module has no permission for extension `{extension}` method `{method}`"
             ));
         }
 
-        let check_payload = extension_protocol::encode_check_payload(
+        let check_payload = match extension_protocol::encode_check_payload(
             self.permissions.iter().cloned(),
             method.clone(),
             payload.clone(),
-        )?;
-        self.extensions
-            .call(&extension, extension_protocol::CHECK_METHOD, &check_payload)?;
-        self.extensions.call(&extension, &method, &payload)
+        ) {
+            Ok(check_payload) => check_payload,
+            Err(err) => {
+                push_audit(ExtensionCallOutcome::Err(redact_error_message(&err)));
+                return Err(err);
+            }
+        };
+        if let Err(err) =
+            self.extensions
+                .call(&extension, extension_protocol::CHECK_METHOD, &check_payload)
+        {
+            push_audit(ExtensionCallOutcome::Err(redact_error_message(&err)));
+            return Err(err);
+        }
+
+        match self.extensions.call(&extension, &method, &payload) {
+            Ok(value) => {
+                push_audit(ExtensionCallOutcome::Ok);
+                Ok(value)
+            }
+            Err(err) => {
+                push_audit(ExtensionCallOutcome::Err(redact_error_message(&err)));
+                Err(err)
+            }
+        }
     }
 }
 
@@ -118,6 +172,7 @@ mod tests {
 
     use super::*;
     use crate::bindings::Host;
+    use crate::extension::{ExtensionCallAudit, ExtensionCallOutcome};
 
     fn echo_extension_path() -> PathBuf {
         static ECHO: OnceLock<PathBuf> = OnceLock::new();
@@ -183,6 +238,10 @@ mod tests {
         }
     }
 
+    fn fresh_audit() -> Arc<ExtensionCallAudit> {
+        Arc::new(ExtensionCallAudit::new())
+    }
+
     #[test]
     fn call_extension_errors_when_not_installed() {
         let dir = crate::extension::test_temp_dir("host-missing");
@@ -197,7 +256,7 @@ mod tests {
                 constraints: BTreeMap::new(),
             },
         ]);
-        let mut state = HostState::new(registry, permissions);
+        let mut state = HostState::new(registry, permissions, fresh_audit());
         let err = state
             .call_extension("missing".to_string(), "ping".to_string(), String::new())
             .unwrap_err();
@@ -209,6 +268,7 @@ mod tests {
         let mut state = HostState::new(
             registry_with_echo(),
             Arc::from(vec![echo_ping_permission()]),
+            fresh_audit(),
         );
         let result = state
             .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
@@ -218,7 +278,7 @@ mod tests {
 
     #[test]
     fn call_extension_denies_without_matching_permission() {
-        let mut state = HostState::new(registry_with_echo(), Arc::from([]));
+        let mut state = HostState::new(registry_with_echo(), Arc::from([]), fresh_audit());
         let err = state
             .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
             .unwrap_err();
@@ -230,6 +290,7 @@ mod tests {
         let mut state = HostState::new(
             registry_with_echo(),
             Arc::from(vec![echo_ping_permission()]),
+            fresh_audit(),
         );
         let err = state
             .call_extension("echo".to_string(), "pong".to_string(), "hello".to_string())
@@ -242,6 +303,7 @@ mod tests {
         let mut state = HostState::new(
             registry_with_echo(),
             Arc::from(vec![echo_ping_permission()]),
+            fresh_audit(),
         );
         let err = state
             .call_extension(
@@ -257,7 +319,12 @@ mod tests {
     fn frozen_permissions_still_enforce_on_new_host_state() {
         let permissions = Arc::from(vec![echo_ping_permission()]);
         let registry = registry_with_echo();
-        let mut first = HostState::new(Arc::clone(&registry), Arc::clone(&permissions));
+        let audit = fresh_audit();
+        let mut first = HostState::new(
+            Arc::clone(&registry),
+            Arc::clone(&permissions),
+            Arc::clone(&audit),
+        );
         assert_eq!(
             first
                 .call_extension("echo".to_string(), "ping".to_string(), "one".to_string())
@@ -265,7 +332,7 @@ mod tests {
             "one"
         );
 
-        let mut second = HostState::new(registry, permissions);
+        let mut second = HostState::new(registry, permissions, audit);
         assert_eq!(
             second
                 .call_extension("echo".to_string(), "ping".to_string(), "two".to_string())
@@ -276,5 +343,74 @@ mod tests {
             .call_extension("echo".to_string(), "other".to_string(), String::new())
             .unwrap_err();
         assert!(err.contains("permission denied"));
+    }
+
+    #[test]
+    fn call_extension_records_ok_in_audit() {
+        let audit = fresh_audit();
+        let mut state = HostState::new(
+            registry_with_echo(),
+            Arc::from(vec![echo_ping_permission()]),
+            Arc::clone(&audit),
+        );
+        state
+            .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
+            .unwrap();
+        let records = audit.recent(10);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].outcome, ExtensionCallOutcome::Ok);
+        assert_eq!(records[0].module_kind, None);
+    }
+
+    #[test]
+    fn call_extension_records_module_kind_when_set() {
+        let audit = fresh_audit();
+        let mut state = HostState::new(
+            registry_with_echo(),
+            Arc::from(vec![echo_ping_permission()]),
+            Arc::clone(&audit),
+        );
+        state.set_caller_module_kind(Some("cpu".to_string()));
+        state
+            .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
+            .unwrap();
+        let records = audit.recent(1);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].module_kind.as_deref(), Some("cpu"));
+    }
+
+    #[test]
+    fn call_extension_records_check_failure_in_audit() {
+        let dir = crate::extension::test_temp_dir("host-check-fail");
+        let registry = Arc::new(ExtensionRegistry::new(
+            dir.join("extensions"),
+            dir.join("sockets"),
+        ));
+        let audit = fresh_audit();
+        let mut state = HostState::new(
+            registry,
+            Arc::from(vec![echo_ping_permission()]),
+            Arc::clone(&audit),
+        );
+        let err = state
+            .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
+            .unwrap_err();
+        assert!(err.contains("not installed"));
+        let records = audit.recent(1);
+        assert_eq!(records.len(), 1);
+        assert!(matches!(records[0].outcome, ExtensionCallOutcome::Err(_)));
+    }
+
+    #[test]
+    fn call_extension_records_denied_without_registry_call() {
+        let audit = fresh_audit();
+        let mut state = HostState::new(registry_with_echo(), Arc::from([]), Arc::clone(&audit));
+        let err = state
+            .call_extension("echo".to_string(), "ping".to_string(), "hello".to_string())
+            .unwrap_err();
+        assert!(err.contains("permission denied"));
+        let records = audit.recent(10);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].outcome, ExtensionCallOutcome::Denied);
     }
 }

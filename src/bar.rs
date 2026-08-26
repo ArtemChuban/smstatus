@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::config::{BarConfig, active_config_path};
 use crate::control::ControlListener;
 use crate::error::Result;
-use crate::extension::ExtensionRegistry;
+use crate::extension::{ExtensionCallAudit, ExtensionRegistry};
 use crate::host;
 use crate::lock;
 use crate::logging;
@@ -35,6 +35,7 @@ pub(crate) fn run() -> Result<()> {
         config_dir.join("extensions"),
         lock::lock_dir()?.join("extensions"),
     ));
+    let audit = Arc::new(ExtensionCallAudit::new());
 
     let runtime = ModuleRuntime::new(
         engine,
@@ -42,6 +43,7 @@ pub(crate) fn run() -> Result<()> {
         modules_dir.clone(),
         FUEL_PER_TICK,
         Arc::clone(&extensions),
+        audit,
     );
 
     let mut modules = start_modules(&runtime, &config)?;
@@ -196,12 +198,14 @@ mod tests {
 
         let (engine, linker) = host::build_engine_and_linker().unwrap();
         let extensions = Arc::new(extensions);
+        let audit = Arc::new(ExtensionCallAudit::new());
         let runtime = ModuleRuntime::new(
             engine,
             linker,
             base.join("modules"),
             FUEL_PER_TICK,
             Arc::clone(&extensions),
+            audit,
         );
 
         let batch = ReloadBatch {
