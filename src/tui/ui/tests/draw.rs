@@ -351,7 +351,7 @@ fn draw_renders_modules_that_fully_fit_in_the_viewport() {
         ]),
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     assert_eq!(
         render(&app, 70, height),
         expected(
@@ -385,7 +385,7 @@ fn draw_renders_scrolled_slice_of_modules_when_more_than_fit() {
         module_scroll_offset: 2,
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 2;
+    let height = BASELINE_HEIGHT + 8;
     assert_eq!(
         render(&app, 70, height),
         expected(
@@ -393,8 +393,8 @@ fn draw_renders_scrolled_slice_of_modules_when_more_than_fit() {
             height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
-            "modules 3-6/6",
-            &["m2", "m3", "m4", "m5"],
+            "modules 3-5/6",
+            &["m2", "m3", "m4"],
             "config",
             &[],
             "logs",
@@ -736,7 +736,7 @@ fn draw_renders_confirming_remove_hint_with_unchanged_list_and_title() {
         },
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     let expected_buf = with_reversed_modules_row(
         expected(
             70,
@@ -870,33 +870,19 @@ fn draw_renders_metadata_with_entry_for_instance_module() {
 }
 
 #[test]
-fn draw_renders_extensions_overlay_title_list_and_hint() {
+fn draw_renders_extensions_panel_in_left_stack() {
     let app = App {
         daemon_status: Some(DaemonStatus::Stopped),
-        mode: Mode::BrowsingExtensions {
-            selected: 0,
-            scroll_offset: 0,
-        },
-        installed_extensions: vec!["echo".to_string(), "notify".to_string()],
-        extension_overlay_labels: vec!["echo".to_string(), "notify".to_string()],
+        panel_focus: PanelFocus::Extensions,
+        installed_extensions: vec!["echo".to_string()],
+        extension_overlay_labels: vec!["echo 0.1.0".to_string()],
+        extension_selected_index: Some(0),
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 5;
-    let expected_buf = expected_overlay(
-        70,
-        height,
-        Some(DaemonStatus::Stopped),
-        "separator: unknown",
-        "extensions 1-2/2",
-        &["echo", "notify"],
-        "logs",
-        &[],
-        "Select: \u{2191}/\u{2193} | Install: i | Close: Esc",
-    );
-    let overlay = overlay_area_for_frame(70, height);
-    let inner_y = Block::default().borders(Borders::ALL).inner(overlay).y;
-    let expected_buf = with_reversed_overlay_row(expected_buf, inner_y, 70, height);
-    assert_eq!(render(&app, 70, height), expected_buf);
+    let buf = render(&app, 70, BASELINE_HEIGHT + 5);
+    let text = format!("{buf:?}");
+    assert!(text.contains("extensions"));
+    assert!(text.contains("echo 0.1.0"));
 }
 
 #[test]

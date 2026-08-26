@@ -1,12 +1,13 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::text::{apply_text_edit, clamped_scroll_offset};
-use super::{App, InstallTarget, Mode};
+use super::{App, DetailContext, InstallTarget, Mode, PanelFocus};
 
 impl App {
     pub(super) fn refresh_installed_extensions(&mut self) {
         let Some(extensions_dir) = self.extensions_dir.as_ref() else {
             self.installed_extensions.clear();
+            self.extension_selected_index = None;
             self.refresh_extension_display_cache();
             return;
         };
@@ -17,52 +18,72 @@ impl App {
                 self.installed_extensions.clear();
             }
         }
+        if self.installed_extensions.is_empty() {
+            self.extension_selected_index = None;
+            self.extension_scroll_offset = 0;
+        } else {
+            let max = self.installed_extensions.len() - 1;
+            self.extension_selected_index =
+                Some(self.extension_selected_index.unwrap_or(0).min(max));
+            self.ensure_extension_selected_visible();
+        }
         self.refresh_extension_display_cache();
     }
 
-    pub(super) fn begin_browse_extensions(&mut self) {
+    pub(super) fn focus_extensions(&mut self) {
         self.refresh_installed_extensions();
-        self.mode = Mode::BrowsingExtensions {
-            selected: 0,
-            scroll_offset: 0,
-        };
+        self.panel_focus = PanelFocus::Extensions;
     }
 
     pub(super) fn begin_install(&mut self) {
         self.mode = Mode::ChoosingInstallKind { selected: 0 };
     }
 
-    pub(super) fn handle_key_browsing_extensions(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Normal;
-                return;
-            }
-            KeyCode::Char('i') => {
-                self.begin_install();
-                return;
-            }
-            _ => {}
-        }
-        let Mode::BrowsingExtensions {
-            selected,
-            scroll_offset,
-        } = &mut self.mode
-        else {
+    pub(super) fn ensure_extension_selected_visible(&mut self) {
+        let Some(idx) = self.extension_selected_index else {
             return;
         };
+        self.extension_scroll_offset = clamped_scroll_offset(
+            self.extension_scroll_offset,
+            idx,
+            self.extensions_viewport_height,
+        );
+    }
+
+    pub(super) fn select_previous_extension(&mut self) {
+        let Some(idx) = self.extension_selected_index else {
+            return;
+        };
+        if idx > 0 {
+            self.extension_selected_index = Some(idx - 1);
+            self.ensure_extension_selected_visible();
+        }
+    }
+
+    pub(super) fn select_next_extension(&mut self) {
+        let Some(idx) = self.extension_selected_index else {
+            return;
+        };
+        if idx + 1 < self.installed_extensions.len() {
+            self.extension_selected_index = Some(idx + 1);
+            self.ensure_extension_selected_visible();
+        }
+    }
+
+    pub(super) fn handle_key_normal_extensions(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => {
-                *selected = selected.saturating_sub(1);
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
-            }
-            KeyCode::Down => {
-                if !self.installed_extensions.is_empty() {
-                    *selected = (*selected + 1).min(self.installed_extensions.len() - 1);
+            KeyCode::Up => self.select_previous_extension(),
+            KeyCode::Down => self.select_next_extension(),
+            KeyCode::Char('i') => self.begin_install(),
+            KeyCode::Enter | KeyCode::Right => self.focus_params(),
+            KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
+            KeyCode::Tab => {
+                if self.selected_index.is_some() {
+                    self.detail_context = DetailContext::Module;
+                    self.panel_focus = PanelFocus::Params;
+                } else {
+                    self.focus_logs();
                 }
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
             }
             _ => {}
         }
@@ -175,7 +196,7 @@ impl App {
         }
     }
 
-    pub(in crate::tui) fn extension_overlay_labels(&self) -> &[String] {
+    pub(in crate::tui) fn extension_list_labels(&self) -> &[String] {
         &self.extension_overlay_labels
     }
 

@@ -8,18 +8,20 @@ mod overlay;
 mod render;
 
 pub(in crate::tui) use layout::{
-    logs_viewport_height, modules_viewport_height, overlay_viewport_height,
+    extensions_viewport_height, logs_viewport_height, modules_viewport_height,
+    overlay_viewport_height, params_viewport_height,
 };
 pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};
 use overlay::{
-    draw_add_overlay, draw_extensions_overlay, draw_help_overlay, draw_install_kind_overlay,
-    draw_naming_overlay, draw_param_text_overlay,
+    draw_add_overlay, draw_help_overlay, draw_install_kind_overlay, draw_naming_overlay,
+    draw_param_text_overlay,
 };
 use render::{
-    SEPARATOR_EDIT_PREFIX, boxed_title, draw_modules_column, draw_params_column, hint_line,
-    logs_title, outer_title, separator_line, text_edit_cursor_column, visible_log_lines,
+    SEPARATOR_EDIT_PREFIX, boxed_title, draw_detail_column, draw_extensions_column,
+    draw_modules_column, hint_line, logs_title, outer_title, separator_line,
+    text_edit_cursor_column, visible_log_lines,
 };
 
 #[cfg(test)]
@@ -40,7 +42,10 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
 
     let heights = compute_fixed_heights(outer_inner.height);
     let areas = layout_areas(outer_inner, &heights);
-    let viewport_height = heights.modules_content as usize;
+    let modules_viewport = heights.modules_content as usize;
+    let extensions_viewport = heights.extensions_content as usize;
+    let detail_viewport =
+        (heights.modules_content + heights.extensions_border + heights.extensions_content) as usize;
 
     if areas.settings.height > 0 {
         let settings_block = Block::default()
@@ -58,8 +63,11 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     }
 
     if areas.modules.height > 0 {
-        draw_modules_column(frame, app, areas.modules, viewport_height);
-        draw_params_column(frame, app, areas.params, viewport_height);
+        draw_modules_column(frame, app, areas.modules, modules_viewport);
+        if areas.extensions.height > 0 {
+            draw_extensions_column(frame, app, areas.extensions, extensions_viewport);
+        }
+        draw_detail_column(frame, app, areas.params, detail_viewport);
     }
 
     if areas.logs.height > 0 {
@@ -87,13 +95,6 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 selected,
                 scroll_offset,
             } => draw_add_overlay(frame, region, available, *selected, *scroll_offset),
-            Mode::BrowsingExtensions {
-                selected,
-                scroll_offset,
-            } => {
-                let labels = app.extension_overlay_labels();
-                draw_extensions_overlay(frame, region, labels, *selected, *scroll_offset)
-            }
             Mode::ChoosingInstallKind { selected } => {
                 let labels = App::install_kind_labels();
                 let labels = labels.map(str::to_string);

@@ -81,24 +81,6 @@ pub(super) fn draw_add_overlay(
     );
 }
 
-pub(super) fn draw_extensions_overlay(
-    frame: &mut Frame,
-    region: Rect,
-    labels: &[String],
-    selected: usize,
-    scroll_offset: usize,
-) {
-    draw_list_overlay(
-        frame,
-        region,
-        "extensions",
-        "installed",
-        labels,
-        selected,
-        scroll_offset,
-    );
-}
-
 pub(super) fn draw_install_kind_overlay(
     frame: &mut Frame,
     region: Rect,

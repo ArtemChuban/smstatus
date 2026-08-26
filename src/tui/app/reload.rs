@@ -307,8 +307,12 @@ impl App {
             scroll_offset,
         };
         if let Some(sel) = state.selected_index {
-            state.scroll_offset =
-                clamped_scroll_offset(state.scroll_offset, sel, self.modules_viewport_height);
+            state.scroll_offset = clamped_scroll_offset(
+                state.scroll_offset,
+                sel,
+                self.params_viewport_height
+                    .saturating_sub(self.detail_header_line_count()),
+            );
         }
         self.module_params = Some(state);
     }

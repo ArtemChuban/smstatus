@@ -138,22 +138,64 @@ pub(super) fn expected(
         rows.push(nested_bottom_row(w));
     }
 
-    let modules_height = heights.modules_border + heights.modules_content;
-    if modules_height > 0 {
+    let stack_height = heights.modules_border
+        + heights.modules_content
+        + heights.extensions_border
+        + heights.extensions_content;
+    if stack_height > 0 {
+        let mc = heights.modules_content as usize;
+        let ec = heights.extensions_content as usize;
+        let detail_inner = (heights.modules_content
+            + heights.extensions_border
+            + heights.extensions_content) as usize;
+        let ext_title = "extensions (none installed)";
+
+        let mut mod_lines: Vec<String> = module_lines.iter().map(|s| s.to_string()).collect();
+        let mut par_lines: Vec<String> = params_lines.iter().map(|s| s.to_string()).collect();
+        while mod_lines.len() < mc {
+            mod_lines.push(String::new());
+        }
+        while par_lines.len() < detail_inner {
+            par_lines.push(String::new());
+        }
+
+        let mut ext_lines: Vec<String> = Vec::new();
+        while ext_lines.len() < ec {
+            ext_lines.push(String::new());
+        }
+
         rows.push(two_col_top_row(modules_title_text, params_title_text, w));
-        let vh = heights.modules_content as usize;
-        let mut left: Vec<String> = module_lines.iter().map(|s| s.to_string()).collect();
-        let mut right: Vec<String> = params_lines.iter().map(|s| s.to_string()).collect();
-        while left.len() < vh {
-            left.push(String::new());
+
+        let (lw, rw) = split_widths(w);
+        let mut par_i = 0usize;
+
+        for i in 0..mc {
+            rows.push(two_col_content_row(&mod_lines[i], &par_lines[par_i], w));
+            par_i += 1;
         }
-        while right.len() < vh {
-            right.push(String::new());
+
+        if heights.extensions_border > 0 {
+            rows.push(wrap(
+                &(bottom_border(lw) + &wrap(&pad(&par_lines[par_i], rw.saturating_sub(2)))),
+            ));
+            par_i += 1;
+            rows.push(wrap(
+                &(top_border(&boxed_title(ext_title), lw)
+                    + &wrap(&pad(&par_lines[par_i], rw.saturating_sub(2)))),
+            ));
+            par_i += 1;
+            for i in 0..ec {
+                rows.push(two_col_content_row(&ext_lines[i], &par_lines[par_i], w));
+                par_i += 1;
+            }
+            rows.push(two_col_bottom_row(w));
+        } else {
+            while par_i < detail_inner {
+                rows.push(two_col_content_row("", &par_lines[par_i], w));
+                par_i += 1;
+            }
+            rows.push(two_col_bottom_row(w));
         }
-        for i in 0..vh {
-            rows.push(two_col_content_row(&left[i], &right[i], w));
-        }
-        rows.push(two_col_bottom_row(w));
     }
 
     if heights.logs > 0 {
@@ -293,7 +335,7 @@ pub(super) fn expected_param_text_overlay(
     buf
 }
 
-const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Install: i | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Ext: Tab/x | Install: i | Quit: q | Start: s | Kill: k | Help: ?";
 const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
 const NORMAL_HINT_LOGS: &str = "Scroll: \u{2191}/\u{2193} | Levels: e/w/i | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?";
 const HELP_HINT: &str = "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";
@@ -318,6 +360,8 @@ pub(super) fn render(app: &App, width: u16, height: u16) -> Buffer {
 pub(super) fn render_with_log(app: &mut App, width: u16, height: u16) -> Buffer {
     app.logs_viewport_height = logs_viewport_height(height);
     app.modules_viewport_height = modules_viewport_height(height);
+    app.extensions_viewport_height = extensions_viewport_height(height);
+    app.params_viewport_height = params_viewport_height(height);
     app.refresh_log_history();
     if app.logs_follow {
         app.sync_logs_follow();

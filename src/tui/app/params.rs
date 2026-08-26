@@ -3,19 +3,29 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
 
 use super::text::{apply_text_edit, clamped_scroll_offset};
-use super::{App, Mode, PanelFocus, ParamEntry, ParamOrigin};
+use super::{App, DetailContext, Mode, PanelFocus, ParamEntry, ParamOrigin};
 
 impl App {
     pub(super) fn focus_params(&mut self) {
-        if self.selected_index.is_some() {
-            self.panel_focus = PanelFocus::Params;
+        match self.panel_focus {
+            PanelFocus::Extensions => {
+                if self.extension_selected_index.is_some() {
+                    self.detail_context = DetailContext::Extension;
+                    self.panel_focus = PanelFocus::Params;
+                }
+            }
+            PanelFocus::Modules if self.selected_index.is_some() => {
+                self.detail_context = DetailContext::Module;
+                self.panel_focus = PanelFocus::Params;
+            }
+            _ => {}
         }
     }
 
     pub(super) fn ensure_selected_param_visible(&mut self) {
         let viewport_height = self
-            .modules_viewport_height
-            .saturating_sub(self.requirement_header_line_count());
+            .params_viewport_height
+            .saturating_sub(self.detail_header_line_count());
         let Some(params) = self.module_params.as_mut() else {
             return;
         };

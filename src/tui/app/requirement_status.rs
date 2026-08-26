@@ -6,6 +6,8 @@ use crate::manifest::RequiredExtension;
 use crate::version;
 
 use super::App;
+use super::DetailContext;
+use super::PanelFocus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::tui) enum RequirementStatus {
@@ -96,10 +98,27 @@ impl App {
     }
 
     pub(super) fn requirement_header_line_count(&self) -> usize {
+        if self.panel_focus == PanelFocus::Extensions
+            || self.detail_context == DetailContext::Extension
+        {
+            return 0;
+        }
         let Some(kind) = self.selected_module_kind() else {
             return 0;
         };
         self.requirement_lines_by_kind.get(kind).map_or(0, Vec::len)
+    }
+
+    pub(super) fn detail_header_line_count(&self) -> usize {
+        self.requirement_header_line_count()
+    }
+
+    pub(in crate::tui) fn modules_requiring_extension(&self, ext_name: &str) -> Vec<String> {
+        self.required_extensions_by_kind
+            .iter()
+            .filter(|(_, reqs)| reqs.iter().any(|req| req.name == ext_name))
+            .map(|(kind, _)| kind.clone())
+            .collect()
     }
 
     fn selected_module_kind(&self) -> Option<&str> {
