@@ -28,6 +28,13 @@ pub(super) fn action_log() -> Vec<String> {
     crate::logging::logged_messages()
 }
 
+pub(super) fn action_log_with_daemon_notify(messages: &[&str]) -> Vec<String> {
+    std::iter::once("smstatus is not running; config saved but bar not updated")
+        .chain(messages.iter().copied())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(super) fn clear_action_log() {
     crate::logging::clear_for_test();
 }

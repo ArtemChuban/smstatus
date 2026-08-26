@@ -299,6 +299,7 @@ impl App {
                 } else {
                     self.select_param_by_key(&key);
                 }
+                self.notify_daemon_config_reload();
                 self.push_action_message(log);
             }
             Err(err) => {
@@ -326,6 +327,7 @@ impl App {
         match BarConfig::write_module_param_remove(&path, &section, &key) {
             Ok(()) => {
                 self.reload_params_after_write();
+                self.notify_daemon_config_reload();
                 self.push_action_message(format!("Removed {key}"));
             }
             Err(err) => self.push_action_message(format!("Failed to remove {key}: {err}")),
@@ -388,6 +390,7 @@ impl App {
             Ok(()) => {
                 self.reload_params_after_write();
                 self.select_param_by_key(&new_key);
+                self.notify_daemon_config_reload();
                 self.push_action_message(format!("Renamed {old_key} → {new_key}"));
             }
             Err(err) => self.push_action_message(format!("Failed to rename {old_key}: {err}")),
