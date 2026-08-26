@@ -351,7 +351,7 @@ fn draw_renders_modules_that_fully_fit_in_the_viewport() {
         ]),
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     assert_eq!(
         render(&app, 70, height),
         expected(
@@ -385,7 +385,7 @@ fn draw_renders_scrolled_slice_of_modules_when_more_than_fit() {
         module_scroll_offset: 2,
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 2;
+    let height = BASELINE_HEIGHT + 8;
     assert_eq!(
         render(&app, 70, height),
         expected(
@@ -393,8 +393,8 @@ fn draw_renders_scrolled_slice_of_modules_when_more_than_fit() {
             height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
-            "modules 3-6/6",
-            &["m2", "m3", "m4", "m5"],
+            "modules 3-5/6",
+            &["m2", "m3", "m4"],
             "config",
             &[],
             "logs",
@@ -736,7 +736,7 @@ fn draw_renders_confirming_remove_hint_with_unchanged_list_and_title() {
         },
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     let expected_buf = with_reversed_modules_row(
         expected(
             70,
@@ -866,5 +866,62 @@ fn draw_renders_metadata_with_entry_for_instance_module() {
             5,
             70,
         )
+    );
+}
+
+#[test]
+fn draw_renders_extensions_panel_in_left_stack() {
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        panel_focus: PanelFocus::Extensions,
+        installed_extensions: vec!["echo".to_string()],
+        extension_overlay_labels: vec!["echo 0.1.0".to_string()],
+        extension_selected_index: Some(0),
+        ..App::default()
+    };
+    let buf = render(&app, 70, BASELINE_HEIGHT + 5);
+    let text = format!("{buf:?}");
+    assert!(text.contains("extensions"));
+    assert!(text.contains("echo 0.1.0"));
+}
+
+#[test]
+fn draw_params_column_pins_required_extensions_header() {
+    use crate::manifest::{ApiVersionReq, RequiredExtension};
+    use std::collections::HashMap;
+
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        module_params: Some(params_entries(vec![ParamEntry {
+            key: "a".to_string(),
+            value: ModuleParamValue::String("1".to_string()),
+            origin: ParamOrigin::Explicit,
+        }])),
+        required_extensions_by_kind: HashMap::from([(
+            "cpu".to_string(),
+            vec![RequiredExtension {
+                name: "echo".to_string(),
+                version: ApiVersionReq { major: 1, minor: 0 },
+            }],
+        )]),
+        requirement_lines_by_kind: HashMap::from([(
+            "cpu".to_string(),
+            vec!["echo missing".to_string()],
+        )]),
+        ..App::default()
+    };
+    let lines = visible_params_lines(&app, 10, 40);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].to_string(), "echo missing");
+    assert_eq!(lines[1].to_string(), "a = \"1\"");
+    let buffer = render(&app, 70, BASELINE_HEIGHT + 2);
+    let row: String = (0..70)
+        .map(|x| buffer[(x, 5)].symbol().to_string())
+        .collect();
+    assert!(
+        row.contains("echo missing"),
+        "params column should show requirement status, got {row:?}"
     );
 }

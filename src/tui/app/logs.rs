@@ -278,7 +278,7 @@ impl App {
         match key.code {
             KeyCode::Up => self.select_previous_log(),
             KeyCode::Down => self.select_next_log(),
-            KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Modules,
+            KeyCode::Esc | KeyCode::Left => self.panel_focus = PanelFocus::Params,
             KeyCode::Tab => self.panel_focus = PanelFocus::Modules,
             KeyCode::Char('e') => {
                 self.logs_show_error = !self.logs_show_error;

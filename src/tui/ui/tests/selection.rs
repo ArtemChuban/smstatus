@@ -13,7 +13,7 @@ fn selected_module_row_is_rendered_with_reversed_style() {
         module_params: Some(params_missing("disk")),
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     let buffer = render(&app, 70, height);
     let expected_buf = with_reversed_modules_row(
         expected(
@@ -135,7 +135,7 @@ fn selected_module_row_style_follows_selection_when_scrolled() {
         module_params: Some(params_missing("m3")),
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 2;
+    let height = BASELINE_HEIGHT + 8;
     let buffer = render(&app, 70, height);
     let expected_buf = with_reversed_modules_row(
         expected(
@@ -143,8 +143,8 @@ fn selected_module_row_style_follows_selection_when_scrolled() {
             height,
             Some(DaemonStatus::Stopped),
             "separator: unknown",
-            "modules 3-6/6",
-            &["m2", "m3", "m4", "m5"],
+            "modules 3-5/6",
+            &["m2", "m3", "m4"],
             "config m3",
             &["(no [m3] section)"],
             "logs",
@@ -169,7 +169,7 @@ fn no_module_row_is_reversed_styled_when_selection_is_none() {
         selected_index: None,
         ..App::default()
     };
-    let height = BASELINE_HEIGHT + 3;
+    let height = BASELINE_HEIGHT + 8;
     let buffer = render(&app, 70, height);
     for y in 5..=7u16 {
         for x in 0..70 {
