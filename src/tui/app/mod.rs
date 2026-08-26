@@ -16,6 +16,7 @@ mod help;
 mod logs;
 mod modules;
 mod params;
+mod presets;
 mod reload;
 mod requirement_status;
 mod separator;
@@ -62,6 +63,18 @@ pub(super) enum Mode {
     ConfirmingRemoveParam {
         section: String,
         key: String,
+    },
+    ChoosingPreset {
+        names: Vec<String>,
+        selected: usize,
+        scroll_offset: usize,
+    },
+    NamingPreset {
+        buffer: String,
+        cursor: usize,
+    },
+    ConfirmingRemovePreset {
+        name: String,
     },
     RenamingParamKey {
         section: String,
@@ -295,16 +308,24 @@ impl App {
             Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
             Mode::ChoosingInstallKind { .. } => self.handle_key_choosing_install_kind(key),
             Mode::EnteringInstallSource { .. } => self.handle_key_entering_install_source(key),
+            Mode::ChoosingPreset { .. } => self.handle_key_choosing_preset(key),
+            Mode::NamingPreset { .. } => self.handle_key_naming_preset(key),
+            Mode::ConfirmingRemovePreset { .. } => self.handle_key_confirming_remove_preset(key),
             Mode::Help => self.handle_key_help(key),
         }
     }
 
     fn handle_key_normal(&mut self, key: KeyEvent) {
+        self.ensure_preset_pointer_current();
         if is_quit(key) {
             self.should_quit = true;
             return;
         }
         match key.code {
+            KeyCode::Char('p') => {
+                self.begin_manage_presets();
+                return;
+            }
             KeyCode::Char('s') => {
                 self.start_daemon();
                 return;

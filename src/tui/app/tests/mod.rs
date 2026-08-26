@@ -45,6 +45,7 @@ mod install;
 mod logs;
 mod modules;
 mod params;
+mod presets;
 mod reload;
 mod separator;
 mod text;

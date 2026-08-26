@@ -58,14 +58,15 @@ impl App {
         let Some(target) = idx.checked_add_signed(delta).filter(|&t| t < modules.len()) else {
             return;
         };
-        let Some(path) = self.config_path.clone() else {
-            self.push_action_message("cannot reorder modules: config path unknown".to_string());
-            return;
-        };
         let Some(name) = modules.get(idx).cloned() else {
             return;
         };
         let mut new_order = modules.clone();
+        self.ensure_preset_pointer_current();
+        let Some(path) = self.config_path.clone() else {
+            self.push_action_message("cannot reorder modules: config path unknown".to_string());
+            return;
+        };
         new_order.swap(idx, target);
         match crate::config::BarConfig::write_module_order(&path, &new_order) {
             Ok(()) => {
@@ -193,6 +194,7 @@ impl App {
         } else {
             format!("{kind}#{buffer}")
         };
+        self.ensure_preset_pointer_current();
         let (Some(modules), Some(path)) = (self.modules.clone(), self.config_path.clone()) else {
             self.push_action_message("cannot add module: config state unknown".to_string());
             return;
@@ -240,6 +242,7 @@ impl App {
         let Some(modules) = self.modules.clone() else {
             return;
         };
+        self.ensure_preset_pointer_current();
         let Some(path) = self.config_path.clone() else {
             self.push_action_message("cannot remove module: config path unknown".to_string());
             return;

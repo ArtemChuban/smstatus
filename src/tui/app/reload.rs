@@ -8,6 +8,36 @@ use super::{
 };
 
 impl App {
+    pub(super) fn sync_preset_pointer_from_disk(&mut self) -> bool {
+        let Some(config_dir) = self.config_dir.as_deref() else {
+            return false;
+        };
+        match (
+            crate::config::active_config_path(config_dir),
+            crate::config::read_active_name(config_dir),
+        ) {
+            (Ok(path), Ok(active)) => {
+                let changed = self.config_path.as_deref() != Some(path.as_path())
+                    || self.active_preset.as_deref() != Some(active.as_str());
+                self.config_path = Some(path);
+                self.active_preset = Some(active);
+                changed
+            }
+            _ => {
+                let had = self.config_path.is_some() || self.active_preset.is_some();
+                self.config_path = None;
+                self.active_preset = None;
+                had
+            }
+        }
+    }
+
+    pub(super) fn ensure_preset_pointer_current(&mut self) {
+        if self.sync_preset_pointer_from_disk() {
+            self.refresh_config();
+        }
+    }
+
     pub(super) fn notify_daemon_config_reload(&mut self) {
         match crate::control::notify_running(crate::reload::ReloadRequest::config()) {
             Ok(crate::control::NotifyOutcome::Delivered) => {}
@@ -23,7 +53,13 @@ impl App {
     }
 
     pub(super) fn refresh_config(&mut self) {
+        self.sync_preset_pointer_from_disk();
         let Some(path) = self.config_path.as_deref() else {
+            self.clear_loaded_config_state();
+            self.refresh_installed_extensions();
+            self.drop_stale_confirming_remove_mode();
+            self.drop_stale_param_modes();
+            self.drop_stale_preset_modes();
             return;
         };
         match BarConfig::load(path) {
@@ -93,6 +129,70 @@ impl App {
         self.refresh_installed_extensions();
         self.drop_stale_confirming_remove_mode();
         self.drop_stale_param_modes();
+        self.drop_stale_preset_modes();
+    }
+
+    pub(super) fn drop_stale_preset_modes(&mut self) {
+        let Some(config_dir) = self.config_dir.as_deref() else {
+            if matches!(
+                self.mode,
+                Mode::ChoosingPreset { .. }
+                    | Mode::NamingPreset { .. }
+                    | Mode::ConfirmingRemovePreset { .. }
+            ) {
+                self.mode = Mode::Normal;
+            }
+            return;
+        };
+        match &self.mode {
+            Mode::ChoosingPreset { names, .. } => {
+                let Ok(current) = crate::config::list_preset_names(config_dir) else {
+                    self.mode = Mode::Normal;
+                    return;
+                };
+                let Ok(active) = crate::config::read_active_name(config_dir) else {
+                    self.mode = Mode::Normal;
+                    return;
+                };
+                if current != *names || self.active_preset.as_deref() != Some(active.as_str()) {
+                    if current.is_empty() {
+                        self.mode = Mode::Normal;
+                    } else {
+                        self.mode = Mode::ChoosingPreset {
+                            names: current,
+                            selected: 0,
+                            scroll_offset: 0,
+                        };
+                    }
+                }
+            }
+            Mode::ConfirmingRemovePreset { name } => {
+                let Ok(current) = crate::config::list_preset_names(config_dir) else {
+                    self.mode = Mode::Normal;
+                    return;
+                };
+                if !current.iter().any(|n| n == name) {
+                    self.mode = Mode::Normal;
+                }
+            }
+            Mode::NamingPreset { .. } if crate::config::active_config_path(config_dir).is_err() => {
+                self.mode = Mode::Normal;
+            }
+            _ => {}
+        }
+    }
+
+    fn clear_loaded_config_state(&mut self) {
+        self.separator = None;
+        self.modules = None;
+        self.clear_metadata_state();
+        self.clear_schema_state();
+        self.selected_index = None;
+        self.module_params = None;
+        self.config_cache = None;
+        self.panel_focus = PanelFocus::Modules;
+        self.last_separator_error = None;
+        self.last_modules_error = None;
     }
 
     fn clear_metadata_state(&mut self) {
