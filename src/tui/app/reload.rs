@@ -8,21 +8,6 @@ use super::{
 };
 
 impl App {
-    pub(in crate::tui) fn poll_config_changes(&mut self) {
-        let Some(batch) = self
-            .config_watcher
-            .as_mut()
-            .and_then(|watcher| watcher.try_reload())
-        else {
-            return;
-        };
-        if batch.config {
-            self.refresh_config();
-        } else if !batch.wasm_kinds.is_empty() {
-            self.refresh_wasm_derived_state_for_kinds(&batch.wasm_kinds);
-        }
-    }
-
     pub(super) fn refresh_config(&mut self) {
         let Some(path) = self.config_path.as_deref() else {
             return;

@@ -138,7 +138,6 @@ pub(super) struct App {
     pub(super) modules_dir: Option<PathBuf>,
     pub(super) extensions_dir: Option<PathBuf>,
     pub(super) separator: Option<String>,
-    pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
     pub(super) last_separator_error: Option<String>,
     pub(super) modules: Option<Vec<String>>,
     pub(super) installed_extensions: Vec<String>,
@@ -191,7 +190,6 @@ impl Default for App {
             modules_dir: None,
             extensions_dir: None,
             separator: None,
-            config_watcher: None,
             last_separator_error: None,
             modules: None,
             installed_extensions: Vec::new(),
@@ -240,7 +238,6 @@ impl App {
         match crate::config::default_config_dir() {
             Ok(config_dir) => {
                 let config_path = config_dir.join("config.toml");
-                let modules_dir = config_dir.join("modules");
                 let log_days = BarConfig::load(&config_path)
                     .map(|config| config.log_days())
                     .unwrap_or(7);
@@ -249,16 +246,6 @@ impl App {
                         log::Level::Error,
                         &format!("failed to initialize logging: {err}"),
                     );
-                }
-                match crate::watcher::ReloadWatcher::new(
-                    &config_dir,
-                    config_path.clone(),
-                    modules_dir,
-                ) {
-                    Ok(watcher) => app.config_watcher = Some(watcher),
-                    Err(err) => {
-                        app.push_action_message(format!("config hot-reload unavailable: {err}"))
-                    }
                 }
                 app.config_path = Some(config_path);
                 app.modules_dir = Some(config_dir.join("modules"));
