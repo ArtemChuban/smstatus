@@ -1,13 +1,14 @@
-use std::os::unix::net::UnixListener;
+use std::collections::HashMap;
 
 use extension_protocol::{self as protocol, Request, Response};
 
 const EXTENSION_NAME: &str = "echo";
 
-fn handle_request(request: &Request) -> Response {
-    if protocol::is_reserved_method(&request.method) {
-        return protocol::allowlist_check_response(&request.payload, EXTENSION_NAME);
-    }
+fn check(request: &Request) -> Response {
+    protocol::allowlist_check_response(&request.payload, EXTENSION_NAME)
+}
+
+fn fallback(request: &Request) -> Response {
     Response::Ok(request.payload.clone())
 }
 
@@ -15,17 +16,9 @@ fn main() {
     let socket_path = std::env::args()
         .nth(1)
         .expect("missing socket path argument");
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).expect("failed to bind socket");
-    let (mut stream, _) = listener.accept().expect("failed to accept connection");
-    protocol::perform_handshake_server(&mut stream).expect("handshake failed");
-
-    while let Ok(request) = protocol::read_frame::<_, Request>(&mut stream) {
-        let response = handle_request(&request);
-        if protocol::write_frame(&mut stream, &response).is_err() {
-            break;
-        }
-    }
+    let handlers = HashMap::new();
+    protocol::run_unix_extension_server(&socket_path, handlers, Some(check), Some(fallback))
+        .expect("extension server failed");
 }
 
 #[cfg(test)]
@@ -51,6 +44,10 @@ mod tests {
             method: protocol::CHECK_METHOD.to_string(),
             payload: encoded,
         }
+    }
+
+    fn handle_request(request: &Request) -> Response {
+        protocol::dispatch_request(request, &HashMap::new(), Some(check), Some(fallback))
     }
 
     #[test]
