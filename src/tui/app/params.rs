@@ -13,14 +13,16 @@ impl App {
     }
 
     pub(super) fn ensure_selected_param_visible(&mut self) {
+        let viewport_height = self
+            .modules_viewport_height
+            .saturating_sub(self.requirement_header_line_count());
         let Some(params) = self.module_params.as_mut() else {
             return;
         };
         let Some(idx) = params.selected_index else {
             return;
         };
-        params.scroll_offset =
-            clamped_scroll_offset(params.scroll_offset, idx, self.modules_viewport_height);
+        params.scroll_offset = clamped_scroll_offset(params.scroll_offset, idx, viewport_height);
     }
 
     pub(super) fn select_previous_param(&mut self) {

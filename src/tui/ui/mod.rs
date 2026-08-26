@@ -13,7 +13,10 @@ pub(in crate::tui) use layout::{
 pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};
-use overlay::{draw_add_overlay, draw_help_overlay, draw_naming_overlay, draw_param_text_overlay};
+use overlay::{
+    draw_add_overlay, draw_extensions_overlay, draw_help_overlay, draw_naming_overlay,
+    draw_param_text_overlay,
+};
 use render::{
     SEPARATOR_EDIT_PREFIX, boxed_title, draw_modules_column, draw_params_column, hint_line,
     logs_title, outer_title, separator_line, text_edit_cursor_column, visible_log_lines,
@@ -24,7 +27,7 @@ use layout::{OUTER_BORDER_ROWS, overlay_rect};
 #[cfg(test)]
 use overlay::{PARAM_TEXT_OVERLAY_HEIGHT, param_text_overlay_rect};
 #[cfg(test)]
-use render::{daemon_status_phrase, instance_name_prefix};
+use render::{daemon_status_phrase, instance_name_prefix, visible_params_lines};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -84,6 +87,13 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 selected,
                 scroll_offset,
             } => draw_add_overlay(frame, region, available, *selected, *scroll_offset),
+            Mode::BrowsingExtensions {
+                selected,
+                scroll_offset,
+            } => {
+                let labels = app.extension_overlay_labels();
+                draw_extensions_overlay(frame, region, labels, *selected, *scroll_offset)
+            }
             Mode::NamingModuleInstance {
                 kind,
                 buffer,

@@ -78,6 +78,7 @@ pub(super) fn separator_line(app: &App) -> String {
         | Mode::EditingParamValue { .. }
         | Mode::ConfirmingRemoveParam { .. }
         | Mode::RenamingParamKey { .. }
+        | Mode::BrowsingExtensions { .. }
         | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -99,7 +100,7 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
     match &app.mode {
         Mode::Normal => match app.panel_focus {
             PanelFocus::Modules => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Params => Cow::Borrowed(
                 "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
@@ -112,6 +113,7 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
         Mode::AddingModule { .. } => {
             Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
         }
+        Mode::BrowsingExtensions { .. } => Cow::Borrowed("Select: \u{2191}/\u{2193} | Close: Esc"),
         Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
@@ -336,6 +338,22 @@ pub(super) fn param_display_lines(state: &ModuleParamsState) -> Vec<(String, boo
     }
 }
 
+pub(super) fn requirement_header_lines(app: &App) -> Vec<(String, bool)> {
+    let Some(entry) = selected_module_entry(app) else {
+        return Vec::new();
+    };
+    let kind = BarConfig::split_module_entry(entry).0;
+    app.requirement_lines_by_kind
+        .get(kind)
+        .map(|lines| {
+            lines
+                .iter()
+                .map(|line| (line.clone(), true))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 pub(super) fn visible_params_lines(
     app: &App,
     viewport_height: usize,
@@ -344,7 +362,14 @@ pub(super) fn visible_params_lines(
     let Some(state) = &app.module_params else {
         return Vec::new();
     };
-    let lines = param_display_lines(state);
+    let header = requirement_header_lines(app);
+    let header_len = header.len().min(viewport_height);
+    let mut lines = styled_dimmable_lines(&header[..header_len], None, 0, header_len, width);
+    let param_viewport = viewport_height.saturating_sub(header_len);
+    if param_viewport == 0 {
+        return lines;
+    }
+    let param_lines = param_display_lines(state);
     let selected = if app.panel_focus == PanelFocus::Params
         && matches!(state.status, ModuleParamsStatus::Entries)
     {
@@ -357,7 +382,14 @@ pub(super) fn visible_params_lines(
     } else {
         0
     };
-    styled_dimmable_lines(&lines, selected, offset, viewport_height, width)
+    lines.extend(styled_dimmable_lines(
+        &param_lines,
+        selected,
+        offset,
+        param_viewport,
+        width,
+    ));
+    lines
 }
 
 pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
@@ -370,6 +402,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Move module: Ctrl+\u{2191}/\u{2193}".to_string());
                 lines.push("Add module: a".to_string());
                 lines.push("Remove module: d".to_string());
+                lines.push("Browse extensions: x".to_string());
                 lines.push("Edit separator: e".to_string());
                 lines.push("Focus params: Enter/\u{2192}".to_string());
                 lines.push("Focus logs: Tab".to_string());
@@ -392,6 +425,10 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
         Mode::Help => {
             lines.push("Close help: ? or Esc".to_string());
             lines.push("Scroll help: \u{2191}/\u{2193}".to_string());
+        }
+        Mode::BrowsingExtensions { .. } => {
+            lines.push("Select extension: \u{2191}/\u{2193}".to_string());
+            lines.push("Close: Esc".to_string());
         }
         _ => {}
     }

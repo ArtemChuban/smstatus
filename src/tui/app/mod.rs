@@ -5,15 +5,17 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bindings::ConfigParam;
 use crate::config::{BarConfig, ModuleParamValue, ParamWriteExpect};
-use crate::manifest::Metadata;
+use crate::manifest::{Metadata, RequiredExtension};
 use crate::schema_probe::SchemaProbe;
 
 mod daemon;
+mod extensions;
 mod help;
 mod logs;
 mod modules;
 mod params;
 mod reload;
+mod requirement_status;
 mod separator;
 mod text;
 
@@ -65,6 +67,10 @@ pub(super) enum Mode {
         buffer: String,
         cursor: usize,
     },
+    BrowsingExtensions {
+        selected: usize,
+        scroll_offset: usize,
+    },
     Help,
 }
 
@@ -112,10 +118,15 @@ pub(super) struct App {
     pub(super) mode: Mode,
     pub(super) config_path: Option<PathBuf>,
     pub(super) modules_dir: Option<PathBuf>,
+    pub(super) extensions_dir: Option<PathBuf>,
     pub(super) separator: Option<String>,
     pub(super) config_watcher: Option<crate::watcher::ReloadWatcher>,
     pub(super) last_separator_error: Option<String>,
     pub(super) modules: Option<Vec<String>>,
+    pub(super) installed_extensions: Vec<String>,
+    pub(super) extension_overlay_labels: Vec<String>,
+    pub(super) required_extensions_by_kind: HashMap<String, Vec<RequiredExtension>>,
+    pub(super) requirement_lines_by_kind: HashMap<String, Vec<String>>,
     pub(super) metadata_by_kind: HashMap<String, Metadata>,
     pub(super) metadata_failed: HashSet<String>,
     pub(super) metadata_needs_stable: HashSet<String>,
@@ -155,10 +166,15 @@ impl Default for App {
             mode: Mode::default(),
             config_path: None,
             modules_dir: None,
+            extensions_dir: None,
             separator: None,
             config_watcher: None,
             last_separator_error: None,
             modules: None,
+            installed_extensions: Vec::new(),
+            extension_overlay_labels: Vec::new(),
+            required_extensions_by_kind: HashMap::new(),
+            requirement_lines_by_kind: HashMap::new(),
             metadata_by_kind: HashMap::new(),
             metadata_failed: HashSet::new(),
             metadata_needs_stable: HashSet::new(),
@@ -218,6 +234,7 @@ impl App {
                 }
                 app.config_path = Some(config_path);
                 app.modules_dir = Some(config_dir.join("modules"));
+                app.extensions_dir = Some(config_dir.join("extensions"));
                 app.refresh_config();
             }
             Err(err) => app.push_action_message(format!("could not determine config path: {err}")),
@@ -240,6 +257,7 @@ impl App {
             Mode::EditingParamValue { .. } => self.handle_key_editing_param_value(key),
             Mode::ConfirmingRemoveParam { .. } => self.handle_key_confirming_remove_param(key),
             Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
+            Mode::BrowsingExtensions { .. } => self.handle_key_browsing_extensions(key),
             Mode::Help => self.handle_key_help(key),
         }
     }
@@ -283,6 +301,7 @@ impl App {
             KeyCode::Down => self.select_next_module(),
             KeyCode::Char('a') => self.begin_add_module(),
             KeyCode::Char('d') => self.begin_remove_module(),
+            KeyCode::Char('x') => self.begin_browse_extensions(),
             KeyCode::Enter | KeyCode::Right => self.focus_params(),
             KeyCode::Tab => self.focus_logs(),
             _ => {}

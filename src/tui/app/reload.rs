@@ -91,6 +91,7 @@ impl App {
                 }
             }
         }
+        self.refresh_installed_extensions();
         self.drop_stale_confirming_remove_mode();
         self.drop_stale_param_modes();
     }
@@ -99,6 +100,7 @@ impl App {
         self.metadata_by_kind.clear();
         self.metadata_failed.clear();
         self.metadata_needs_stable.clear();
+        self.required_extensions_by_kind.clear();
     }
 
     fn clear_schema_state(&mut self) {
@@ -115,6 +117,8 @@ impl App {
             .retain(|kind| configured.contains(kind));
         self.metadata_needs_stable
             .retain(|kind| configured.contains(kind));
+        self.required_extensions_by_kind
+            .retain(|kind, _| configured.contains(kind));
     }
 
     fn prune_schema_to_configured(&mut self) {
@@ -135,10 +139,12 @@ impl App {
             self.metadata_by_kind.remove(kind);
             self.metadata_failed.remove(kind);
             self.metadata_needs_stable.insert(kind.clone());
+            self.required_extensions_by_kind.remove(kind);
             self.schema_by_kind.remove(kind);
             self.schema_failed.remove(kind);
             self.schema_needs_stable.insert(kind.clone());
         }
+        self.refresh_extension_display_cache();
     }
 
     pub(in crate::tui) fn poll_metadata(&mut self) {
@@ -152,19 +158,24 @@ impl App {
             return;
         };
         let wait_stable = self.metadata_needs_stable.remove(&kind);
-        let result = if wait_stable {
-            crate::meta::read_after_stable(&modules_dir, &kind)
-        } else {
-            crate::meta::read(&modules_dir, &kind)
-        };
-        match result {
-            Ok(meta) => {
-                self.metadata_by_kind.insert(kind, meta);
+        if wait_stable {
+            crate::module::wait_wasm_stable(&crate::manifest::module_manifest_path(
+                &modules_dir,
+                &kind,
+            ));
+        }
+        match crate::manifest::read_module_manifest(&modules_dir, &kind) {
+            Ok(manifest) => {
+                self.required_extensions_by_kind
+                    .insert(kind.clone(), manifest.required_extensions.clone());
+                self.metadata_by_kind.insert(kind, manifest.to_metadata());
             }
             Err(_) => {
+                self.required_extensions_by_kind.remove(&kind);
                 self.metadata_failed.insert(kind);
             }
         }
+        self.refresh_extension_display_cache();
     }
 
     fn configured_kinds(&self) -> HashSet<String> {

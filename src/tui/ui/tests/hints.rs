@@ -89,6 +89,7 @@ fn help_lines_modules_focus_lists_local_module_bindings() {
     let lines = help_lines(&app);
     assert_eq!(lines[0], "--- Local ---");
     assert!(lines.iter().any(|l| l.contains("Add module: a")));
+    assert!(lines.iter().any(|l| l.contains("Browse extensions: x")));
     assert!(lines.iter().any(|l| l.contains("Focus params")));
     assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l == "--- Global ---"));
@@ -133,4 +134,33 @@ fn help_lines_logs_focus_lists_scroll_and_back() {
     assert!(lines.iter().any(|l| l.contains("Toggle ERROR/WARN/INFO")));
     assert!(lines.iter().any(|l| l.contains("Back to modules")));
     assert!(!lines.iter().any(|l| l.contains("Add module")));
+}
+
+#[test]
+fn hint_line_browsing_extensions_mode() {
+    let app = App {
+        mode: Mode::BrowsingExtensions {
+            selected: 0,
+            scroll_offset: 0,
+        },
+        ..App::default()
+    };
+    assert_eq!(
+        hint_line(&app).as_ref(),
+        "Select: \u{2191}/\u{2193} | Close: Esc"
+    );
+}
+
+#[test]
+fn help_lines_browsing_extensions_lists_close() {
+    let app = App {
+        mode: Mode::BrowsingExtensions {
+            selected: 0,
+            scroll_offset: 0,
+        },
+        ..App::default()
+    };
+    let lines = help_lines(&app);
+    assert!(lines.iter().any(|l| l.contains("Select extension")));
+    assert!(lines.iter().any(|l| l.contains("Close: Esc")));
 }
