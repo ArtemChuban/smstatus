@@ -99,7 +99,35 @@ pub(crate) fn reload_request_from_cli(
     request
 }
 
+#[expect(
+    dead_code,
+    reason = "reload-only parser kept for tests and future callers"
+)]
 pub(crate) fn parse_command_line(line: &str) -> Result<ReloadRequest, String> {
+    match parse_control_line(line)? {
+        ControlLine::Reload(request) => Ok(request),
+        ControlLine::Status => Err("status is not a reload command".to_string()),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ControlLine {
+    Reload(ReloadRequest),
+    Status,
+}
+
+pub(crate) fn parse_control_line(line: &str) -> Result<ControlLine, String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(ControlLine::Reload(ReloadRequest::default()));
+    }
+    if line == "status" {
+        return Ok(ControlLine::Status);
+    }
+    parse_reload_command_line(line).map(ControlLine::Reload)
+}
+
+fn parse_reload_command_line(line: &str) -> Result<ReloadRequest, String> {
     let line = line.trim();
     if line.is_empty() {
         return Ok(ReloadRequest::default());
@@ -169,6 +197,12 @@ mod tests {
             parse_command_line("extension:echo").unwrap(),
             ReloadRequest::extension("echo")
         );
+    }
+
+    #[test]
+    fn parse_control_line_accepts_status_without_merging_into_reload() {
+        assert_eq!(parse_control_line("status").unwrap(), ControlLine::Status);
+        assert!(parse_command_line("status").is_err());
     }
 
     #[test]
