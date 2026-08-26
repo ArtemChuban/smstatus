@@ -2,6 +2,9 @@ mod audit;
 mod client;
 mod registry;
 
+pub(crate) use audit::{
+    ExtensionCallAudit, ExtensionCallOutcome, ExtensionCallRecord, redact_payload,
+};
 pub(crate) use registry::{ExtensionRegistry, is_safe_extension_name};
 
 #[cfg(test)]

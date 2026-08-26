@@ -11,7 +11,7 @@ use wasmtime::{Engine, Store};
 use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
-use crate::extension::ExtensionRegistry;
+use crate::extension::{ExtensionCallAudit, ExtensionRegistry};
 use crate::host::{self, HostState};
 use crate::manifest::RequiredExtension;
 use crate::version;
@@ -44,6 +44,7 @@ pub(crate) struct ModuleRuntime {
     modules_dir: PathBuf,
     fuel_per_tick: u64,
     extensions: Arc<ExtensionRegistry>,
+    audit: Arc<ExtensionCallAudit>,
     validated_kinds: RefCell<HashSet<String>>,
 }
 
@@ -93,6 +94,7 @@ impl ModuleRuntime {
         modules_dir: PathBuf,
         fuel_per_tick: u64,
         extensions: Arc<ExtensionRegistry>,
+        audit: Arc<ExtensionCallAudit>,
     ) -> Self {
         Self {
             engine,
@@ -100,6 +102,7 @@ impl ModuleRuntime {
             modules_dir,
             fuel_per_tick,
             extensions,
+            audit,
             validated_kinds: RefCell::new(HashSet::new()),
         }
     }
@@ -125,6 +128,7 @@ impl ModuleRuntime {
             component,
             Arc::clone(&self.extensions),
             permissions,
+            Arc::clone(&self.audit),
             self.fuel_per_tick,
         )
     }
@@ -195,8 +199,12 @@ impl ModuleRuntime {
         }
 
         state.store.set_fuel(self.fuel_per_tick)?;
+        state
+            .store
+            .data_mut()
+            .set_caller_module_kind(Some(state.kind.clone()));
 
-        match state
+        let tick_result = match state
             .module
             .smstatus_module_guest()
             .call_update(&mut state.store)
@@ -204,6 +212,7 @@ impl ModuleRuntime {
             Ok(output) => {
                 state.last_output = output.text;
                 state.next_due = now + Duration::from_millis(output.interval_ms as u64);
+                Ok(())
             }
             Err(err) => {
                 log::error!(
@@ -233,9 +242,12 @@ impl ModuleRuntime {
                     Err(err) => log::error!("failed to re-instantiate `{}`: {err}", state.name),
                 }
                 state.next_due = now + Duration::from_secs(1);
+                Ok(())
             }
-        }
-        Ok(())
+        };
+
+        state.store.data_mut().set_caller_module_kind(None);
+        tick_result
     }
 
     fn kind_forced(force_wasm_kinds: &[String], kind: &str) -> bool {

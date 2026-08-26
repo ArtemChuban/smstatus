@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
@@ -15,6 +13,7 @@ pub(crate) enum ExtensionCallOutcome {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct ExtensionCallRecord {
     pub(crate) at: Instant,
     pub(crate) module_kind: Option<String>,
@@ -45,6 +44,7 @@ impl ExtensionCallAudit {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn recent(&self, limit: usize) -> Vec<ExtensionCallRecord> {
         let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
         let start = records.len().saturating_sub(limit);
