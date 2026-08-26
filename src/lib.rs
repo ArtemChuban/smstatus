@@ -65,10 +65,19 @@ pub fn run() -> ExitCode {
             }
         }
         Some(Commands::Module { command }) => match command {
-            ModuleCommands::Install { source } => match install::install_module(&source) {
-                Ok(outcome) => cli_ok_line(&install::format_module_outcome(&outcome)),
-                Err(err) => cli_err(err),
-            },
+            ModuleCommands::Install {
+                source,
+                allow_insecure_http,
+            } => {
+                let options = install::InstallOptions {
+                    allow_insecure_http,
+                    ..Default::default()
+                };
+                match install::install_module(&source, &options) {
+                    Ok(outcome) => cli_ok_line(&install::format_module_outcome(&outcome)),
+                    Err(err) => cli_err(err),
+                }
+            }
             ModuleCommands::List => match install::list_modules() {
                 Ok(lines) => cli_ok_lines(lines),
                 Err(err) => cli_err(err),
@@ -79,10 +88,19 @@ pub fn run() -> ExitCode {
             },
         },
         Some(Commands::Extension { command }) => match command {
-            ExtensionCommands::Install { source } => match install::install_extension(&source) {
-                Ok(outcome) => cli_ok_line(&install::format_extension_outcome(&outcome)),
-                Err(err) => cli_err(err),
-            },
+            ExtensionCommands::Install {
+                source,
+                allow_insecure_http,
+            } => {
+                let options = install::InstallOptions {
+                    allow_insecure_http,
+                    ..Default::default()
+                };
+                match install::install_extension(&source, &options) {
+                    Ok(outcome) => cli_ok_line(&install::format_extension_outcome(&outcome)),
+                    Err(err) => cli_err(err),
+                }
+            }
             ExtensionCommands::List => match install::list_extensions() {
                 Ok(lines) => cli_ok_lines(lines),
                 Err(err) => cli_err(err),

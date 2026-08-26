@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,6 +15,15 @@ use crate::reload::ReloadRequest;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub(crate) struct InstallOptions {
+    pub allow_insecure_http: bool,
+    pub expected_sha256: Option<String>,
+    pub force: bool,
+}
 
 fn notify_module_reload(kind: &str) {
     match control::notify_running(ReloadRequest::module(kind)) {
@@ -94,7 +104,12 @@ fn url_basename(source: &str) -> &str {
     without_query.rsplit('/').next().unwrap_or(without_query)
 }
 
-pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
+pub(crate) fn resolve_source(source: &str, options: &InstallOptions) -> Result<ResolvedSource> {
+    if source.starts_with("http://") && !options.allow_insecure_http {
+        return Err(
+            "cleartext HTTP downloads are disabled; pass --allow-insecure-http to override".into(),
+        );
+    }
     if source.starts_with("http://") || source.starts_with("https://") {
         let basename = url_basename(source);
         let agent = ureq::Agent::new_with_config(
@@ -102,16 +117,10 @@ pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
                 .timeout_global(Some(DOWNLOAD_TIMEOUT))
                 .build(),
         );
-        let bytes = {
-            let mut response = agent
-                .get(source)
-                .call()
-                .map_err(|e| format!("failed to download `{source}`: {e}"))?;
-            response
-                .body_mut()
-                .read_to_vec()
-                .map_err(|e| format!("failed to read download body for `{source}`: {e}"))?
-        };
+        let mut response = agent
+            .get(source)
+            .call()
+            .map_err(|e| format!("failed to download `{source}`: {e}"))?;
         let file_name = if basename.is_empty() {
             format!("smstatus-download-{}.tar.gz", std::process::id())
         } else {
@@ -123,12 +132,9 @@ pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
             PathBuf::from(basename)
         };
         let temp_path = std::env::temp_dir().join(file_name);
-        fs::write(&temp_path, bytes).map_err(|e| {
-            format!(
-                "failed to write temp download `{}`: {e}",
-                temp_path.display()
-            )
-        })?;
+        let reader = response.body_mut().with_config().reader();
+        write_limited_response_body(reader, &temp_path, MAX_DOWNLOAD_BYTES)
+            .map_err(|e| format!("failed to read download body for `{source}`: {e}"))?;
         Ok(ResolvedSource {
             path: temp_path,
             kind: SourceKind::Url,
@@ -145,6 +151,29 @@ pub(crate) fn resolve_source(source: &str) -> Result<ResolvedSource> {
             kind: SourceKind::Local,
         })
     }
+}
+
+fn write_limited_response_body<R: Read>(mut reader: R, dest: &Path, max_bytes: u64) -> Result<()> {
+    let mut file = fs::File::create(dest)
+        .map_err(|e| format!("failed to create temp download `{}`: {e}", dest.display()))?;
+    let mut buffer = [0u8; 8192];
+    let mut total: u64 = 0;
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("failed to read download body: {e}"))?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        if total > max_bytes {
+            let _ = fs::remove_file(dest);
+            return Err(format!("download exceeds maximum size of {max_bytes} bytes").into());
+        }
+        file.write_all(&buffer[..read])
+            .map_err(|e| format!("failed to write temp download `{}`: {e}", dest.display()))?;
+    }
+    Ok(())
 }
 
 fn format_meta(metadata: &Metadata) -> String {
@@ -438,8 +467,9 @@ fn stage_extension_package(root: &Path) -> Result<(ScratchDir, PathBuf)> {
 pub(crate) fn install_module_into(
     modules_dir: &Path,
     source: &str,
+    options: &InstallOptions,
 ) -> Result<ModuleInstallOutcome> {
-    let resolved = resolve_source(source)?;
+    let resolved = resolve_source(source, options)?;
     let check_path = resolved.label();
     if !has_tar_gz_extension(check_path) {
         return Err(format!(
@@ -504,9 +534,12 @@ pub(crate) fn install_module_into(
     })
 }
 
-pub(crate) fn install_module(source: &str) -> Result<ModuleInstallOutcome> {
+pub(crate) fn install_module(
+    source: &str,
+    options: &InstallOptions,
+) -> Result<ModuleInstallOutcome> {
     let modules_dir = crate::config::default_config_dir()?.join("modules");
-    install_module_into(&modules_dir, source)
+    install_module_into(&modules_dir, source, options)
 }
 
 #[derive(Debug)]
@@ -546,8 +579,9 @@ pub(crate) fn format_extension_outcome(outcome: &ExtensionInstallOutcome) -> Str
 pub(crate) fn install_extension_into(
     extensions_dir: &Path,
     source: &str,
+    options: &InstallOptions,
 ) -> Result<ExtensionInstallOutcome> {
-    let resolved = resolve_source(source)?;
+    let resolved = resolve_source(source, options)?;
     let check_path = resolved.label();
     if !has_tar_gz_extension(check_path) {
         return Err(format!(
@@ -578,9 +612,12 @@ pub(crate) fn install_extension_into(
     }
 }
 
-pub(crate) fn install_extension(source: &str) -> Result<ExtensionInstallOutcome> {
+pub(crate) fn install_extension(
+    source: &str,
+    options: &InstallOptions,
+) -> Result<ExtensionInstallOutcome> {
     let extensions_dir = crate::config::default_config_dir()?.join("extensions");
-    install_extension_into(&extensions_dir, source)
+    install_extension_into(&extensions_dir, source, options)
 }
 
 pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
@@ -865,6 +902,19 @@ mod tests {
         header.set_cksum();
     }
 
+    fn write_raw_tar_gz(archive: &Path, tar_bytes: &[u8]) -> Result<()> {
+        let file = fs::File::create(archive)
+            .map_err(|e| format!("failed to create archive `{}`: {e}", archive.display()))?;
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder
+            .write_all(tar_bytes)
+            .map_err(|e| format!("failed to write archive `{}`: {e}", archive.display()))?;
+        encoder
+            .finish()
+            .map_err(|e| format!("failed to finish archive: {e}"))?;
+        Ok(())
+    }
+
     fn write_tar_gz_with<F>(archive: &Path, add_entries: F) -> Result<()>
     where
         F: FnOnce(&mut tar::Builder<GzEncoder<std::fs::File>>) -> Result<()>,
@@ -899,25 +949,6 @@ mod tests {
         builder
             .append(&header, &[] as &[u8])
             .map_err(|e| format!("failed to append symlink: {e}"))?;
-        Ok(())
-    }
-
-    fn append_sized_file(
-        builder: &mut tar::Builder<GzEncoder<std::fs::File>>,
-        name: &str,
-        size: u64,
-    ) -> Result<()> {
-        let data = vec![0u8; size as usize];
-        let mut header = tar::Header::new_gnu();
-        header
-            .set_path(name)
-            .map_err(|e| format!("failed to set file path: {e}"))?;
-        header.set_size(size);
-        header.set_mode(0o644);
-        header.set_cksum();
-        builder
-            .append(&header, &data[..])
-            .map_err(|e| format!("failed to append file: {e}"))?;
         Ok(())
     }
 
@@ -978,13 +1009,15 @@ mod tests {
     #[test]
     fn unpack_archive_rejects_oversized_aggregate() {
         let archive = temp_modules_dir("tar-oversized").join("evil.tar.gz");
-        let chunk = 33 * 1024 * 1024;
-        write_tar_gz_with(&archive, |builder| {
-            append_sized_file(builder, "a.bin", chunk)?;
-            append_sized_file(builder, "b.bin", chunk)?;
-            Ok(())
-        })
-        .unwrap();
+        let mut header = tar::Header::new_gnu();
+        set_raw_tar_path(&mut header, "large.bin");
+        header.set_size(65 * 1024 * 1024);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut tar_bytes = header.as_bytes().to_vec();
+        tar_bytes.extend_from_slice(&[0u8; 512]);
+        tar_bytes.extend_from_slice(&[0u8; 512]);
+        write_raw_tar_gz(&archive, &tar_bytes).unwrap();
         let dest = unique_temp_dir("tar-oversized-unpack").unwrap();
         let err = unpack_archive(&archive, &dest).unwrap_err();
         assert!(err.to_string().contains("exceeds maximum unpacked size"));
@@ -999,6 +1032,10 @@ mod tests {
         let extension = pack_echo_archive();
         let extension_dest = unpack_to_temp(&extension);
         assert!(package_root(&extension_dest).is_ok());
+    }
+
+    fn install_options() -> InstallOptions {
+        InstallOptions::default()
     }
 
     #[test]
@@ -1035,7 +1072,9 @@ mod tests {
         let modules_dir = temp_modules_dir("fresh-skip");
         let archive = pack_module_archive("battery", "0.1.0");
 
-        let first = install_module_into(&modules_dir, archive.to_str().unwrap()).unwrap();
+        let first =
+            install_module_into(&modules_dir, archive.to_str().unwrap(), &install_options())
+                .unwrap();
         match &first {
             ModuleInstallOutcome::Fresh { kind, .. } => assert_eq!(kind, "battery"),
             other => panic!("expected Fresh, got {other:?}"),
@@ -1043,7 +1082,9 @@ mod tests {
         assert!(manifest::module_manifest_path(&modules_dir, "battery").exists());
         assert!(manifest::module_wasm_path(&modules_dir, "battery").exists());
 
-        let second = install_module_into(&modules_dir, archive.to_str().unwrap()).unwrap();
+        let second =
+            install_module_into(&modules_dir, archive.to_str().unwrap(), &install_options())
+                .unwrap();
         match second {
             ModuleInstallOutcome::Skip { kind, .. } => assert_eq!(kind, "battery"),
             other => panic!("expected Skip, got {other:?}"),
@@ -1054,10 +1095,11 @@ mod tests {
     fn install_module_into_replaces_different_version() {
         let modules_dir = temp_modules_dir("replace-version");
         let battery = pack_module_archive("battery", "0.1.0");
-        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        install_module_into(&modules_dir, battery.to_str().unwrap(), &install_options()).unwrap();
 
         let newer = pack_module_archive("battery", "9.9.9");
-        let outcome = install_module_into(&modules_dir, newer.to_str().unwrap()).unwrap();
+        let outcome =
+            install_module_into(&modules_dir, newer.to_str().unwrap(), &install_options()).unwrap();
         match outcome {
             ModuleInstallOutcome::Replace { kind, metadata } => {
                 assert_eq!(kind, "battery");
@@ -1073,7 +1115,7 @@ mod tests {
     fn install_module_into_replaces_unreadable_installed() {
         let modules_dir = temp_modules_dir("replace-corrupt");
         let battery = pack_module_archive("battery", "0.1.0");
-        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        install_module_into(&modules_dir, battery.to_str().unwrap(), &install_options()).unwrap();
 
         fs::write(
             manifest::module_manifest_path(&modules_dir, "battery"),
@@ -1081,7 +1123,9 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        let outcome =
+            install_module_into(&modules_dir, battery.to_str().unwrap(), &install_options())
+                .unwrap();
         match outcome {
             ModuleInstallOutcome::Replace { kind, .. } => assert_eq!(kind, "battery"),
             other => panic!("expected Replace, got {other:?}"),
@@ -1094,13 +1138,65 @@ mod tests {
     fn install_module_into_rejects_bare_wasm() {
         let modules_dir = temp_modules_dir("reject-wasm");
         let wasm = find_or_build_guest_wasm("battery");
-        let err = install_module_into(&modules_dir, wasm.to_str().unwrap()).unwrap_err();
+        let err = install_module_into(&modules_dir, wasm.to_str().unwrap(), &install_options())
+            .unwrap_err();
         assert!(err.to_string().contains(".tar.gz"));
     }
 
     #[test]
+    fn resolve_source_rejects_cleartext_http_by_default() {
+        let err = resolve_source("http://example.com/x.tar.gz", &install_options()).unwrap_err();
+        assert!(err.to_string().contains("--allow-insecure-http"));
+    }
+
+    #[test]
+    fn resolve_source_allows_cleartext_http_when_enabled() {
+        let options = InstallOptions {
+            allow_insecure_http: true,
+            ..Default::default()
+        };
+        let err = resolve_source("http://example.com/x.tar.gz", &options).unwrap_err();
+        assert!(!err.to_string().contains("--allow-insecure-http"));
+    }
+
+    #[test]
+    fn write_limited_response_body_rejects_oversized_reader() {
+        struct OversizedReader {
+            remaining: usize,
+        }
+
+        impl Read for OversizedReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    return Ok(0);
+                }
+                let n = buf.len().min(self.remaining);
+                buf[..n].fill(0);
+                self.remaining -= n;
+                Ok(n)
+            }
+        }
+
+        let dest = unique_temp_dir("download-cap")
+            .unwrap()
+            .join("download.tar.gz");
+        let max_bytes = 1024;
+        let err = write_limited_response_body(
+            OversizedReader {
+                remaining: max_bytes as usize + 1,
+            },
+            &dest,
+            max_bytes,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("exceeds maximum size"));
+        assert!(!dest.exists());
+    }
+
+    #[test]
     fn resolve_source_rejects_missing_local_path() {
-        let err = resolve_source("/no/such/smstatus-module.tar.gz").unwrap_err();
+        let err =
+            resolve_source("/no/such/smstatus-module.tar.gz", &install_options()).unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }
 
@@ -1112,7 +1208,12 @@ mod tests {
         let extensions_dir = base.join("extensions");
         let archive = pack_echo_archive();
 
-        let outcome = install_extension_into(&extensions_dir, archive.to_str().unwrap()).unwrap();
+        let outcome = install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        )
+        .unwrap();
         match outcome {
             ExtensionInstallOutcome::Fresh { name } => assert_eq!(name, "echo"),
             other => panic!("expected Fresh, got {other:?}"),
@@ -1123,7 +1224,12 @@ mod tests {
         let registry = ExtensionRegistry::new(extensions_dir.clone(), base.join("sockets"));
         assert!(registry.is_installed("echo"));
 
-        let again = install_extension_into(&extensions_dir, archive.to_str().unwrap()).unwrap();
+        let again = install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        )
+        .unwrap();
         match again {
             ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
             other => panic!("expected Replace, got {other:?}"),
@@ -1135,7 +1241,7 @@ mod tests {
     fn list_and_remove_module_round_trip() {
         let modules_dir = temp_modules_dir("mod-list-rm");
         let battery = pack_module_archive("battery", "0.1.0");
-        install_module_into(&modules_dir, battery.to_str().unwrap()).unwrap();
+        install_module_into(&modules_dir, battery.to_str().unwrap(), &install_options()).unwrap();
 
         let listed = list_modules_in(&modules_dir).unwrap();
         assert_eq!(listed.len(), 1);
@@ -1153,7 +1259,12 @@ mod tests {
         let base = temp_modules_dir("ext-list-rm");
         let extensions_dir = base.join("extensions");
         let archive = pack_echo_archive();
-        install_extension_into(&extensions_dir, archive.to_str().unwrap()).unwrap();
+        install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        )
+        .unwrap();
 
         assert_eq!(
             list_extensions_in(&extensions_dir).unwrap(),
