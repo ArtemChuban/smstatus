@@ -635,6 +635,7 @@ mod tests {
         display_name: &str,
         version: &str,
         required_extensions: &[&str],
+        permissions: &str,
     ) -> String {
         let exts = required_extensions
             .iter()
@@ -642,7 +643,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "name = \"{name}\"\ndisplay_name = \"{display_name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nmodules-api = {{ major = 0, minor = 1 }}\nrequired_extensions = [{exts}]\n"
+            "name = \"{name}\"\ndisplay_name = \"{display_name}\"\nversion = \"{version}\"\nauthor = \"ArtemChuban\"\nmodules-api = {{ major = 0, minor = 1 }}\nrequired_extensions = [{exts}]\n{permissions}"
         )
     }
 
@@ -694,16 +695,31 @@ mod tests {
     }
 
     fn pack_module_archive(package: &str, version: &str) -> PathBuf {
-        let (display_name, required_extensions): (&str, &[&str]) = match package {
-            "battery" => ("Battery", &["fs"]),
-            "cpu" => ("CPU", &["fs"]),
+        let (display_name, required_extensions, permissions): (&str, &[&str], &str) = match package
+        {
+            "battery" => (
+                "Battery",
+                &["fs"],
+                "\n[[permissions]]\nextension = \"fs\"\nmethod = \"read\"\npath_prefixes = [\"/sys/class/power_supply/\"]\n",
+            ),
+            "cpu" => (
+                "CPU",
+                &["fs"],
+                "\n[[permissions]]\nextension = \"fs\"\nmethod = \"read\"\npath_prefixes = [\"/proc/\"]\n",
+            ),
             other => panic!("unsupported guest fixture `{other}`"),
         };
         let wasm = find_or_build_guest_wasm(package);
         let staging = temp_modules_dir(&format!("pack-{package}-{version}"));
         fs::write(
             staging.join("manifest.toml"),
-            module_manifest_toml(package, display_name, version, required_extensions),
+            module_manifest_toml(
+                package,
+                display_name,
+                version,
+                required_extensions,
+                permissions,
+            ),
         )
         .unwrap();
         fs::copy(&wasm, staging.join("module.wasm")).unwrap();

@@ -23,6 +23,7 @@ pub(crate) struct ModuleState {
     store: Store<HostState>,
     module: GuestModule,
     config: String,
+    permissions: Arc<[extension_protocol::PermissionEntry]>,
     last_output: String,
     next_due: Instant,
 }
@@ -113,8 +114,12 @@ impl ModuleRuntime {
         self.start(kind, name, config)
     }
 
-    fn instantiate(&self, component: &Component) -> Result<(Store<HostState>, GuestModule)> {
-        let state = HostState::new(Arc::clone(&self.extensions));
+    fn instantiate(
+        &self,
+        component: &Component,
+        permissions: Arc<[extension_protocol::PermissionEntry]>,
+    ) -> Result<(Store<HostState>, GuestModule)> {
+        let state = HostState::new(Arc::clone(&self.extensions), permissions);
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(self.fuel_per_tick)?;
@@ -155,8 +160,9 @@ impl ModuleRuntime {
             return Err(format!("module `{kind}` requires {}", parts.join("; ")).into());
         }
 
+        let permissions = manifest.frozen_protocol_permissions()?;
         let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
-        let (mut store, module) = self.instantiate(&component)?;
+        let (mut store, module) = self.instantiate(&component, Arc::clone(&permissions))?;
 
         if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
             let schema = module
@@ -175,6 +181,7 @@ impl ModuleRuntime {
             store,
             module,
             config: config.to_string(),
+            permissions,
             last_output: String::new(),
             next_due: Instant::now(),
         })
@@ -203,7 +210,7 @@ impl ModuleRuntime {
                     state.kind
                 );
                 log::error!("re-instantiating module after trap");
-                match self.instantiate(&state.component) {
+                match self.instantiate(&state.component, Arc::clone(&state.permissions)) {
                     Ok((mut store, module)) => {
                         match module
                             .smstatus_module_guest()

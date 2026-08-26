@@ -2540,6 +2540,7 @@ name = "smstatus-http"
 version = "0.1.0"
 dependencies = [
  "extension-protocol",
+ "http",
  "serde",
  "serde_json",
  "ureq",
