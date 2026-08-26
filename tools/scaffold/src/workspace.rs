@@ -306,6 +306,40 @@ version = "0.1.0"
     }
 
     #[test]
+    fn insert_workspace_member_after_last_extensions_entry() {
+        let cargo = r#"
+[workspace]
+members = ["modules/a", "packages/x", "extensions/y", "extensions/z"]
+"#;
+        let updated = insert_workspace_member(cargo, "extensions/new", "extensions/").unwrap();
+        let doc: DocumentMut = updated.parse().unwrap();
+        let members = workspace_members(&doc).unwrap();
+        assert_eq!(
+            members,
+            vec![
+                "modules/a".to_string(),
+                "packages/x".to_string(),
+                "extensions/y".to_string(),
+                "extensions/z".to_string(),
+                "extensions/new".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn render_extension_placeholders() {
+        let out = render_template(
+            "name={{name}} api={{extensions_api_major}}.{{extensions_api_minor}}",
+            &[
+                ("name", "foo".into()),
+                ("extensions_api_major", "0".into()),
+                ("extensions_api_minor", "1".into()),
+            ],
+        );
+        assert_eq!(out, "name=foo api=0.1");
+    }
+
+    #[test]
     fn find_repo_root_walks_ancestors() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

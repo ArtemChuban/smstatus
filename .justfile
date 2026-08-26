@@ -235,6 +235,9 @@ dist-dir := "dist"
 new-module name:
     cargo run -q -p scaffold -- module {{name}}
 
+new-extension name:
+    cargo run -q -p scaffold -- extension {{name}}
+
 pack-module name: (build-module-by-name name)
     #!/usr/bin/env bash
     set -euo pipefail
@@ -254,6 +257,8 @@ build-module-by-name name:
     if [ "{{profile}}" = "release" ]; then flags="--release"; fi
     cargo build -p "{{name}}" --target {{wasm-target}} $flags
 
+# First arg is Cargo package name; second is extensions/<bin> directory and binary name.
+# Scaffolds keep package, directory, and binary names identical.
 pack-extension name bin: (build-extension-by-package name)
     #!/usr/bin/env bash
     set -euo pipefail
