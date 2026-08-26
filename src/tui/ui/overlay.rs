@@ -154,3 +154,32 @@ pub(super) fn draw_param_text_overlay(
     let col = inner.x + text_edit_cursor_column("", buffer, cursor);
     frame.set_cursor_position((col, inner.y));
 }
+
+pub(super) fn draw_preset_list_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    names: &[String],
+    selected: usize,
+    scroll_offset: usize,
+    active: Option<&str>,
+) {
+    let labels: Vec<String> = names
+        .iter()
+        .map(|name| {
+            if active == Some(name.as_str()) {
+                format!("{name} (active)")
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+    draw_list_overlay(
+        frame,
+        region,
+        "presets",
+        "presets",
+        &labels,
+        selected,
+        scroll_offset,
+    );
+}

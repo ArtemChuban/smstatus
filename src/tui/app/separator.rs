@@ -60,6 +60,7 @@ impl App {
         let Mode::EditingSeparator { buffer: value, .. } = std::mem::take(&mut self.mode) else {
             return;
         };
+        self.ensure_preset_pointer_current();
         let Some(path) = self.config_path.clone() else {
             self.push_action_message("cannot save separator: config path unknown".to_string());
             return;

@@ -67,9 +67,14 @@ pub(super) fn boxed_title(text: &str) -> String {
 }
 
 pub(super) fn outer_title(app: &App) -> String {
+    let preset = app
+        .active_preset
+        .as_deref()
+        .map(|name| format!("preset: {name} "));
     boxed_title(&format!(
-        "smstatus v{} {}",
+        "smstatus v{} {}{}",
         env!("CARGO_PKG_VERSION"),
+        preset.unwrap_or_default(),
         daemon_status_phrase(app.daemon_status)
     ))
 }
@@ -97,6 +102,9 @@ pub(super) fn separator_line(app: &App) -> String {
         | Mode::RenamingParamKey { .. }
         | Mode::ChoosingInstallKind { .. }
         | Mode::EnteringInstallSource { .. }
+        | Mode::ChoosingPreset { .. }
+        | Mode::NamingPreset { .. }
+        | Mode::ConfirmingRemovePreset { .. }
         | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -151,6 +159,13 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
         Mode::Help => {
             Cow::Borrowed("Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k")
         }
+        Mode::ChoosingPreset { .. } => Cow::Borrowed(
+            "Select: \u{2191}/\u{2193} | Switch: Enter | Save: a | Remove: d | Cancel: Esc",
+        ),
+        Mode::NamingPreset { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
+        Mode::ConfirmingRemovePreset { name } => Cow::Owned(format!(
+            "Remove preset {name}? Confirm: d | Cancel: any key"
+        )),
     }
 }
 
@@ -567,6 +582,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
             lines.push("Kill daemon: k".to_string());
             if matches!(app.mode, Mode::Normal) {
                 lines.push("Help: ?".to_string());
+                lines.push("Manage presets: p".to_string());
             }
         }
         _ => {}
