@@ -3,4 +3,6 @@ display_name = "RAM"
 version = "0.1.0"
 author = "ArtemChuban"
 modules-api = { major = 0, minor = 1 }
-required_extensions = ["mem"]
+required_extensions = [
+  { name = "mem", version = { major = 0, minor = 1 } },
+]

@@ -20,6 +20,12 @@ pub(crate) struct ApiVersionReq {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub(crate) struct RequiredExtension {
+    pub name: String,
+    pub version: ApiVersionReq,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(crate) struct ModuleManifest {
     pub name: String,
     pub version: String,
@@ -28,7 +34,7 @@ pub(crate) struct ModuleManifest {
     #[serde(rename = "modules-api")]
     pub modules_api: ApiVersionReq,
     #[serde(default)]
-    pub required_extensions: Vec<String>,
+    pub required_extensions: Vec<RequiredExtension>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -79,6 +85,11 @@ fn parse_module_manifest_str(text: &str) -> Result<ModuleManifest> {
         toml::from_str(text).map_err(|e| format!("failed to parse module manifest: {e}"))?;
     if !is_safe_extension_name(&manifest.name) {
         return Err(format!("invalid module name `{}`", manifest.name).into());
+    }
+    for ext in &manifest.required_extensions {
+        if !is_safe_extension_name(&ext.name) {
+            return Err(format!("invalid required extension name `{}`", ext.name).into());
+        }
     }
     Ok(manifest)
 }
