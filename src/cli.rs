@@ -52,6 +52,27 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ExtensionCommands,
     },
+    Preset {
+        #[command(subcommand)]
+        command: PresetCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PresetCommands {
+    List,
+    Save {
+        name: String,
+    },
+    Use {
+        name: String,
+        /// Reload a running daemon after switching (without this, the bar keeps the previous preset until `smstatus reload` or restart)
+        #[arg(long)]
+        reload: bool,
+    },
+    Remove {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
