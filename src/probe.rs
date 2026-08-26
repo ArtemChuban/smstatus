@@ -46,7 +46,10 @@ impl WasmProbe {
 
     pub(crate) fn instantiate(&self, path: &Path) -> Result<(Store<HostState>, GuestModule)> {
         let component = Component::from_file(&self.engine, path)?;
-        let state = HostState::new(Arc::clone(&self.extensions));
+        let state = HostState::new(
+            Arc::clone(&self.extensions),
+            Arc::<[extension_protocol::PermissionEntry]>::from([]),
+        );
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state.limits());
         store.set_fuel(FUEL_PER_PROBE)?;
