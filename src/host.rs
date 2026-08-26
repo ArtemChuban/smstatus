@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::SystemTime;
 
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -97,7 +97,7 @@ impl Host for HostState {
                 "extension call audit: extension=`{extension}` method=`{method}` outcome={outcome:?} preview={payload_preview}"
             );
             self.audit.push(ExtensionCallRecord {
-                at: Instant::now(),
+                at: SystemTime::now(),
                 module_kind: module_kind.clone(),
                 extension: extension.clone(),
                 method: method.clone(),

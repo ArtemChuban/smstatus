@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
-use std::time::Instant;
+use std::time::SystemTime;
 
 const MAX_PREVIEW_LEN: usize = 80;
 
@@ -9,13 +9,11 @@ pub(crate) enum ExtensionCallOutcome {
     Ok,
     Err(String),
     Denied,
-    // Future: CheckDenied for #60 (extension-side permission denial)
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct ExtensionCallRecord {
-    pub(crate) at: Instant,
+    pub(crate) at: SystemTime,
     pub(crate) module_kind: Option<String>,
     pub(crate) extension: String,
     pub(crate) method: String,
@@ -44,7 +42,6 @@ impl ExtensionCallAudit {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn recent(&self, limit: usize) -> Vec<ExtensionCallRecord> {
         let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
         let start = records.len().saturating_sub(limit);
@@ -188,7 +185,7 @@ mod tests {
 
     fn record(extension: &str) -> ExtensionCallRecord {
         ExtensionCallRecord {
-            at: Instant::now(),
+            at: SystemTime::now(),
             module_kind: None,
             extension: extension.to_string(),
             method: "ping".to_string(),

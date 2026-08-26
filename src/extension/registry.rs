@@ -41,8 +41,8 @@ pub(crate) fn is_safe_extension_name(name: &str) -> bool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum ExtensionLiveState {
     Idle,
     Live,
@@ -184,7 +184,6 @@ impl ExtensionRegistry {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn live_state(&self, name: &str) -> ExtensionLiveState {
         if let Some(state) = lock(&self.failures).get(name) {
             let now = Instant::now();

@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::config::{BarConfig, active_config_path};
 use crate::control::ControlListener;
 use crate::error::Result;
-use crate::extension::{ExtensionCallAudit, ExtensionRegistry};
+use crate::extension::{ExtensionCallAudit, ExtensionRegistry, encode_status_snapshot};
 use crate::host;
 use crate::lock;
 use crate::logging;
@@ -20,9 +20,17 @@ pub(crate) fn run() -> Result<()> {
     let config_dir: PathBuf = crate::config::default_config_dir()?;
     let modules_dir = config_dir.join("modules");
     let config_path = active_config_path(&config_dir)?;
-    let mut config = BarConfig::load(&config_path)?;
-    let mut separator = config.separator();
-    if let Err(err) = logging::init(config.log_days()) {
+    let config = Arc::new(RwLock::new(BarConfig::load(&config_path)?));
+    let mut separator = config
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .separator();
+    if let Err(err) = logging::init(
+        config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .log_days(),
+    ) {
         logging::to_stderr(
             log::Level::Error,
             &format!("failed to initialize logging: {err}"),
@@ -36,6 +44,7 @@ pub(crate) fn run() -> Result<()> {
         lock::lock_dir()?.join("extensions"),
     ));
     let audit = Arc::new(ExtensionCallAudit::new());
+    let extensions_dir = config_dir.join("extensions");
 
     let runtime = ModuleRuntime::new(
         engine,
@@ -43,11 +52,28 @@ pub(crate) fn run() -> Result<()> {
         modules_dir.clone(),
         FUEL_PER_TICK,
         Arc::clone(&extensions),
-        audit,
+        Arc::clone(&audit),
     );
 
     let mut modules = start_modules(&runtime, &config)?;
-    let mut listener = ControlListener::new().map_err(|err| err.to_string())?;
+    let status_registry = Arc::clone(&extensions);
+    let status_audit = Arc::clone(&audit);
+    let status_config = Arc::clone(&config);
+    let status_modules_dir = modules_dir.clone();
+    let status_extensions_dir = extensions_dir.clone();
+    let status_provider = Some(Box::new(move || {
+        let config = status_config.read().unwrap_or_else(PoisonError::into_inner);
+        encode_status_snapshot(
+            status_registry.as_ref(),
+            status_audit.as_ref(),
+            &status_extensions_dir,
+            &status_modules_dir,
+            &config,
+            Some(std::process::id() as i32),
+            ExtensionCallAudit::MAX_RECORDS,
+        )
+    }) as Box<dyn Fn() -> String + Send>);
+    let mut listener = ControlListener::new(status_provider).map_err(|err| err.to_string())?;
     let mut last_logged = String::new();
 
     loop {
@@ -73,14 +99,18 @@ pub(crate) fn run() -> Result<()> {
                 &extensions,
                 &config_dir,
                 modules,
-                &mut config,
+                &config,
                 &mut separator,
             );
         }
     }
 }
 
-fn start_modules(runtime: &ModuleRuntime, config: &BarConfig) -> Result<Vec<ModuleState>> {
+fn start_modules(
+    runtime: &ModuleRuntime,
+    config: &Arc<RwLock<BarConfig>>,
+) -> Result<Vec<ModuleState>> {
+    let config = config.read().unwrap_or_else(PoisonError::into_inner);
     let mut modules = Vec::new();
     for entry in config.module_names()? {
         let (kind, name) = BarConfig::split_module_entry(&entry);
@@ -116,7 +146,7 @@ fn apply_reload_batch(
     extensions: &ExtensionRegistry,
     config_dir: &Path,
     mut modules: Vec<ModuleState>,
-    config: &mut BarConfig,
+    config: &Arc<RwLock<BarConfig>>,
     separator: &mut String,
 ) -> Vec<ModuleState> {
     if batch.config {
@@ -127,7 +157,7 @@ fn apply_reload_batch(
                 *separator = new_config.separator();
                 logging::set_retain_days(new_config.log_days());
                 modules = runtime.reload(modules, &new_config, &[]);
-                *config = new_config;
+                *config.write().unwrap_or_else(PoisonError::into_inner) = new_config;
             }
             Err(err) => {
                 log::error!("config reload failed ({err}); keeping previous configuration running");
@@ -135,8 +165,10 @@ fn apply_reload_batch(
         }
     }
 
+    let config_guard = config.read().unwrap_or_else(PoisonError::into_inner);
+
     if !batch.wasm_kinds.is_empty() {
-        modules = runtime.reload_wasm(modules, &batch.wasm_kinds, config);
+        modules = runtime.reload_wasm(modules, &batch.wasm_kinds, &config_guard);
     }
 
     if !batch.extension_names.is_empty() {
@@ -193,8 +225,8 @@ mod tests {
         let preset_path = base.join("presets").join("default.toml");
         std::fs::create_dir_all(preset_path.parent().unwrap()).unwrap();
         std::fs::write(&preset_path, "modules = []\n").unwrap();
-        let mut config = BarConfig::load(&preset_path).unwrap();
-        let mut separator = config.separator();
+        let mut config = Arc::new(RwLock::new(BarConfig::load(&preset_path).unwrap()));
+        let mut separator = config.read().unwrap().separator();
 
         let (engine, linker) = host::build_engine_and_linker().unwrap();
         let extensions = Arc::new(extensions);

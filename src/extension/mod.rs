@@ -1,11 +1,16 @@
 mod audit;
 mod client;
 mod registry;
+mod status;
 
 pub(crate) use audit::{
-    ExtensionCallAudit, ExtensionCallOutcome, ExtensionCallRecord, redact_payload,
+    ExtensionCallAudit, ExtensionCallOutcome, ExtensionCallRecord, redact_error_message,
+    redact_payload,
 };
-pub(crate) use registry::{ExtensionRegistry, is_safe_extension_name};
+pub(crate) use registry::{ExtensionLiveState, ExtensionRegistry, is_safe_extension_name};
+pub(crate) use status::{
+    ExtensionStatusSnapshot, build_snapshot, cmd_extension_status, encode_status_snapshot,
+};
 
 #[cfg(test)]
 pub(crate) fn test_temp_dir(label: &str) -> std::path::PathBuf {
