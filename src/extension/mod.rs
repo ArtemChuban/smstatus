@@ -8,9 +8,7 @@ pub(crate) use audit::{
     redact_payload,
 };
 pub(crate) use registry::{ExtensionLiveState, ExtensionRegistry, is_safe_extension_name};
-pub(crate) use status::{
-    ExtensionStatusSnapshot, build_snapshot, cmd_extension_status, encode_status_snapshot,
-};
+pub(crate) use status::{cmd_extension_status, encode_status_snapshot};
 
 #[cfg(test)]
 pub(crate) fn test_temp_dir(label: &str) -> std::path::PathBuf {

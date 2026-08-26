@@ -102,6 +102,10 @@ pub(crate) enum ExtensionCommands {
         force: bool,
     },
     List,
+    Status {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     Remove {
         name: String,
     },
