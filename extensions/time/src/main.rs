@@ -27,6 +27,9 @@ fn time_state_json(state: &TimeStateJson) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return protocol::allowlist_check_response(&request.payload, "time");
+    }
     if request.method == "now" {
         Response::Ok(time_state_json(&wall_clock_state()))
     } else {
@@ -99,6 +102,39 @@ mod tests {
                 assert!(value.get("offset_seconds").is_some());
             }
             Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    fn now_check(method: &str, allowed: &str) -> Response {
+        let encoded = protocol::encode_check_payload(
+            vec![protocol::PermissionEntry {
+                extension: "time".to_string(),
+                method: allowed.to_string(),
+                constraints: Default::default(),
+            }],
+            method,
+            "",
+        )
+        .unwrap();
+        handle_request(&Request {
+            method: protocol::CHECK_METHOD.to_string(),
+            payload: encoded,
+        })
+    }
+
+    #[test]
+    fn check_allows_allowlisted_now() {
+        match now_check("now", "now") {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_unlisted_method() {
+        match now_check("other", "now") {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err"),
         }
     }
 }

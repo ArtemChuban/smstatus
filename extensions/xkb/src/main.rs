@@ -76,6 +76,9 @@ fn handle_request_with(
     request: &Request,
     mut read: impl FnMut() -> Result<XkbStateJson, String>,
 ) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return protocol::allowlist_check_response(&request.payload, "xkb");
+    }
     if request.method == "state" {
         match read() {
             Ok(state) => Response::Ok(xkb_state_json(&state)),
@@ -171,6 +174,42 @@ mod tests {
         );
         match response {
             Response::Err(msg) => assert_eq!(msg, "no display"),
+            Response::Ok(_) => panic!("expected Err"),
+        }
+    }
+
+    fn state_check(method: &str, allowed: &str) -> Response {
+        let encoded = protocol::encode_check_payload(
+            vec![protocol::PermissionEntry {
+                extension: "xkb".to_string(),
+                method: allowed.to_string(),
+                constraints: Default::default(),
+            }],
+            method,
+            "",
+        )
+        .unwrap();
+        handle_request_with(
+            &Request {
+                method: protocol::CHECK_METHOD.to_string(),
+                payload: encoded,
+            },
+            || unreachable!("read should not be called for check"),
+        )
+    }
+
+    #[test]
+    fn check_allows_allowlisted_state() {
+        match state_check("state", "state") {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_unlisted_method() {
+        match state_check("other", "state") {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
             Response::Ok(_) => panic!("expected Err"),
         }
     }

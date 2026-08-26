@@ -56,6 +56,9 @@ fn disk_usage_json(usage: &DiskUsage) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return protocol::allowlist_check_response(&request.payload, "disk");
+    }
     if request.method == "usage" {
         match disk_usage(&request.payload) {
             Ok(usage) => Response::Ok(disk_usage_json(&usage)),
@@ -147,6 +150,39 @@ mod tests {
         });
         match response {
             Response::Err(msg) => assert!(msg.contains("not found")),
+            Response::Ok(_) => panic!("expected Err"),
+        }
+    }
+
+    fn usage_check(method: &str, allowed: &str) -> Response {
+        let encoded = protocol::encode_check_payload(
+            vec![protocol::PermissionEntry {
+                extension: "disk".to_string(),
+                method: allowed.to_string(),
+                constraints: Default::default(),
+            }],
+            method,
+            "/dev/sda1",
+        )
+        .unwrap();
+        handle_request(&Request {
+            method: protocol::CHECK_METHOD.to_string(),
+            payload: encoded,
+        })
+    }
+
+    #[test]
+    fn check_allows_allowlisted_usage() {
+        match usage_check("usage", "usage") {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_unlisted_method() {
+        match usage_check("other", "usage") {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
             Response::Ok(_) => panic!("expected Err"),
         }
     }
