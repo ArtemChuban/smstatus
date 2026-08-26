@@ -68,9 +68,11 @@ pub fn run() -> ExitCode {
             ModuleCommands::Install {
                 source,
                 allow_insecure_http,
+                sha256,
             } => {
                 let options = install::InstallOptions {
                     allow_insecure_http,
+                    expected_sha256: sha256,
                     ..Default::default()
                 };
                 match install::install_module(&source, &options) {
@@ -91,9 +93,11 @@ pub fn run() -> ExitCode {
             ExtensionCommands::Install {
                 source,
                 allow_insecure_http,
+                sha256,
             } => {
                 let options = install::InstallOptions {
                     allow_insecure_http,
+                    expected_sha256: sha256,
                     ..Default::default()
                 };
                 match install::install_extension(&source, &options) {
