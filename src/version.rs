@@ -22,6 +22,39 @@ mod logic {
     }
 }
 
+pub(crate) fn parse_package_version(version: &str) -> Result<(u32, u32, u32)> {
+    let version = version.trim();
+    if version.is_empty() {
+        return Err("empty package version".into());
+    }
+    let parts: Vec<&str> = version.split('.').collect();
+    let parse_part = |part: &str, label: &str| -> Result<u32> {
+        if part.is_empty() {
+            return Err(format!("invalid package version `{version}`: empty {label}").into());
+        }
+        part.parse::<u32>().map_err(|_| {
+            format!("invalid package version `{version}`: bad {label} `{part}`").into()
+        })
+    };
+    match parts.as_slice() {
+        [major, minor] => Ok((parse_part(major, "major")?, parse_part(minor, "minor")?, 0)),
+        [major, minor, patch] => Ok((
+            parse_part(major, "major")?,
+            parse_part(minor, "minor")?,
+            parse_part(patch, "patch")?,
+        )),
+        _ => Err(format!("invalid package version `{version}`").into()),
+    }
+}
+
+pub(crate) fn package_version_meets_floor(
+    installed: (u32, u32, u32),
+    required_major: u32,
+    required_minor: u32,
+) -> bool {
+    logic::is_compatible(installed, (required_major, required_minor, 0))
+}
+
 fn check_api_compatible(
     kind: &str,
     name: &str,
@@ -70,8 +103,44 @@ mod tests {
     use super::logic::is_compatible;
     use super::{
         HOST_EXTENSIONS_API, HOST_MODULES_API, check_extensions_api_compatible,
-        check_modules_api_compatible, cli_version_info,
+        check_modules_api_compatible, cli_version_info, package_version_meets_floor,
+        parse_package_version,
     };
+
+    #[test]
+    fn parse_package_version_accepts_x_y_and_x_y_z() {
+        assert_eq!(parse_package_version("0.1").unwrap(), (0, 1, 0));
+        assert_eq!(parse_package_version("0.1.0").unwrap(), (0, 1, 0));
+        assert_eq!(parse_package_version("1.2.3").unwrap(), (1, 2, 3));
+    }
+
+    #[test]
+    fn parse_package_version_rejects_empty_and_garbage() {
+        assert!(parse_package_version("").is_err());
+        assert!(parse_package_version("  ").is_err());
+        assert!(parse_package_version("1").is_err());
+        assert!(parse_package_version("1.2.3.4").is_err());
+        assert!(parse_package_version("a.b.c").is_err());
+        assert!(parse_package_version("1..2").is_err());
+    }
+
+    #[test]
+    fn package_version_floor_match_and_higher_minor_ok() {
+        assert!(package_version_meets_floor((0, 1, 0), 0, 1));
+        assert!(package_version_meets_floor((0, 2, 0), 0, 1));
+    }
+
+    #[test]
+    fn package_version_floor_lower_minor_or_different_major_fails() {
+        assert!(!package_version_meets_floor((0, 0, 9), 0, 1));
+        assert!(!package_version_meets_floor((1, 9, 0), 0, 1));
+    }
+
+    #[test]
+    fn package_version_floor_ignores_patch() {
+        assert!(package_version_meets_floor((0, 1, 0), 0, 1));
+        assert!(package_version_meets_floor((0, 1, 99), 0, 1));
+    }
 
     #[test]
     fn exact_match_is_compatible() {
