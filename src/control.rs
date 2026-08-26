@@ -461,4 +461,27 @@ mod tests {
         server.join().unwrap();
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn query_extension_status_reads_status_json_from_listener() {
+        let path = temp_socket_path("query-status");
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let provider = || r#"{"daemon_pid":9,"extensions":[],"recent_calls":[]}"#.to_string();
+
+        let server = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let outcome = serve_client(stream, Some(&provider));
+            assert_eq!(outcome, ClientOutcome::Status);
+        });
+
+        ready_rx.recv().unwrap();
+        let json = query_extension_status_at(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["daemon_pid"], 9);
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
 }

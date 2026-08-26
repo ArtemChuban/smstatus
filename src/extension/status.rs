@@ -396,4 +396,72 @@ mod tests {
         let required = collect_required_extensions(&modules_dir, &["cpu".to_string()]);
         assert_eq!(required.get("fs"), Some(&vec!["cpu".to_string()]));
     }
+
+    #[test]
+    fn format_snapshot_lines_renders_offline_and_live_sections() {
+        let snapshot = ExtensionStatusSnapshot {
+            daemon_pid: None,
+            err: None,
+            extensions: vec![ExtensionStatusRow {
+                name: "fs".to_string(),
+                installed: true,
+                required_by: vec!["cpu".to_string()],
+                live: ExtensionLiveState::Idle,
+            }],
+            recent_calls: Vec::new(),
+        };
+        let offline = format_snapshot_lines(&snapshot, 20);
+        assert!(offline.iter().any(|line| line.contains("daemon stopped")));
+        assert!(
+            offline
+                .iter()
+                .any(|line| line.contains("unavailable while daemon is stopped"))
+        );
+
+        let live = ExtensionStatusSnapshot {
+            daemon_pid: Some(42),
+            err: None,
+            extensions: vec![ExtensionStatusRow {
+                name: "echo".to_string(),
+                installed: true,
+                required_by: Vec::new(),
+                live: ExtensionLiveState::Live,
+            }],
+            recent_calls: vec![
+                SerializableCallRecord {
+                    at_unix_ms: 1_700_000_000_000,
+                    module_kind: Some("cpu".to_string()),
+                    extension: "echo".to_string(),
+                    method: "ping".to_string(),
+                    payload_preview: "hello".to_string(),
+                    outcome: SerializableCallOutcome::Ok,
+                },
+                SerializableCallRecord {
+                    at_unix_ms: 1_700_000_000_001,
+                    module_kind: None,
+                    extension: "fs".to_string(),
+                    method: "read".to_string(),
+                    payload_preview: "/home/<redacted>".to_string(),
+                    outcome: SerializableCallOutcome::Denied,
+                },
+            ],
+        };
+        let lines = format_snapshot_lines(&live, 1);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("daemon running (pid 42)"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("echo") && line.contains("live"))
+        );
+        let recent_lines: Vec<_> = lines
+            .iter()
+            .filter(|line| line.starts_with("  [") && line.contains("::"))
+            .collect();
+        assert_eq!(recent_lines.len(), 1);
+        assert!(recent_lines[0].contains("fs::read"));
+    }
 }
