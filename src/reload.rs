@@ -83,6 +83,22 @@ impl ReloadRequest {
     }
 }
 
+pub(crate) fn reload_request_from_cli(
+    config: bool,
+    modules: Vec<String>,
+    extensions: Vec<String>,
+) -> ReloadRequest {
+    let mut request = ReloadRequest {
+        modules,
+        extensions,
+        ..ReloadRequest::default()
+    };
+    if config || (request.modules.is_empty() && request.extensions.is_empty()) {
+        request.config = true;
+    }
+    request
+}
+
 pub(crate) fn parse_command_line(line: &str) -> Result<ReloadRequest, String> {
     let line = line.trim();
     if line.is_empty() {
@@ -112,6 +128,32 @@ pub(crate) fn parse_command_line(line: &str) -> Result<ReloadRequest, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_request_from_cli_defaults_to_config_without_flags() {
+        let request = reload_request_from_cli(false, Vec::new(), Vec::new());
+        assert_eq!(request.command_lines(), vec!["config".to_string()]);
+    }
+
+    #[test]
+    fn reload_request_from_cli_maps_module_and_extension_flags() {
+        let request =
+            reload_request_from_cli(true, vec!["cpu".to_string()], vec!["echo".to_string()]);
+        assert_eq!(
+            request.command_lines(),
+            vec![
+                "config".to_string(),
+                "module:cpu".to_string(),
+                "extension:echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reload_request_from_cli_module_only_skips_config_default() {
+        let request = reload_request_from_cli(false, vec!["cpu".to_string()], Vec::new());
+        assert_eq!(request.command_lines(), vec!["module:cpu".to_string()]);
+    }
 
     #[test]
     fn parse_command_line_accepts_known_commands() {
