@@ -2,6 +2,7 @@ mod bar;
 mod bindings;
 mod cli;
 mod config;
+mod control;
 mod daemon;
 mod error;
 mod extension;
@@ -13,11 +14,11 @@ mod manifest;
 mod meta;
 mod module;
 mod probe;
+mod reload;
 mod schema;
 mod schema_probe;
 mod tui;
 mod version;
-mod watcher;
 mod x11;
 
 use std::process::ExitCode;
@@ -50,6 +51,18 @@ pub fn run() -> ExitCode {
         Some(Commands::Start) => daemon::cmd_start(),
         Some(Commands::Stop) => daemon::cmd_stop(),
         Some(Commands::Run) => daemon::cmd_run(),
+        Some(Commands::Reload {
+            config,
+            module,
+            extension,
+        }) => {
+            let request = reload::reload_request_from_cli(config, module, extension);
+            match control::notify_running(request) {
+                Ok(control::NotifyOutcome::Delivered) => cli_ok_line("reload delivered"),
+                Ok(control::NotifyOutcome::NotRunning) => cli_err("smstatus is not running"),
+                Err(err) => cli_err(err),
+            }
+        }
         Some(Commands::Module { command }) => match command {
             ModuleCommands::Install { source } => match install::install_module(&source) {
                 Ok(outcome) => cli_ok_line(&install::format_module_outcome(&outcome)),

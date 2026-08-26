@@ -164,6 +164,18 @@ impl ExtensionRegistry {
         value
     }
 
+    pub(crate) fn drop_running(&self, names: &[String]) {
+        for name in names {
+            if !is_safe_extension_name(name) {
+                log::warn!("skipping extension reload for invalid name `{name}`");
+                continue;
+            }
+            lock(&self.connections).remove(name);
+            self.kill_child(name);
+            log::info!("extension `{name}` reloaded; next host call will use the binary on disk");
+        }
+    }
+
     pub(crate) fn call(&self, name: &str, method: &str, payload: &str) -> Result<String, String> {
         if !is_safe_extension_name(name) {
             return Err(format!("invalid extension name `{name}`"));
@@ -376,5 +388,25 @@ mod tests {
             "expected extensions-api mismatch, got {err}"
         );
         assert!(!socket_dir.exists());
+    }
+
+    #[test]
+    fn drop_running_skips_unsafe_extension_names() {
+        let base = temp_dir();
+        let registry = ExtensionRegistry::new(base.join("extensions"), base.join("sockets"));
+        registry.drop_running(&["../etc/passwd".to_string()]);
+    }
+
+    #[test]
+    fn drop_running_clears_live_extension_connection() {
+        let base = temp_dir();
+        let extensions_dir = base.join("extensions");
+        let socket_dir = base.join("sockets");
+        install_echo(&extensions_dir);
+
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
+        assert_eq!(registry.call("echo", "ping", "before").unwrap(), "before");
+        registry.drop_running(&["echo".to_string()]);
+        assert_eq!(registry.call("echo", "ping", "after").unwrap(), "after");
     }
 }

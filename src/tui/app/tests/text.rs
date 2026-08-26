@@ -353,7 +353,10 @@ fn enter_while_editing_writes_value_updates_separator_and_logs_success() {
 
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.separator, Some(" :: ".to_string()));
-    assert_eq!(action_log(), vec!["Separator updated"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Separator updated"])
+    );
 }
 
 #[test]
@@ -375,6 +378,9 @@ fn enter_with_empty_buffer_writes_empty_separator_successfully() {
 
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.separator, Some(String::new()));
-    assert_eq!(action_log(), vec!["Separator updated"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Separator updated"])
+    );
     assert!(content.contains("separator = \"\""));
 }

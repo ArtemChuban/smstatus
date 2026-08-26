@@ -121,7 +121,10 @@ fn move_module_up_swaps_with_previous_and_persists() {
         ])
     );
     assert_eq!(app.selected_index, Some(0));
-    assert_eq!(action_log(), vec!["Moved disk up"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Moved disk up"])
+    );
     let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
     let names: Vec<&str> = doc["modules"]
         .as_array()
@@ -159,7 +162,10 @@ fn move_module_down_swaps_with_next_and_persists() {
         ])
     );
     assert_eq!(app.selected_index, Some(2));
-    assert_eq!(action_log(), vec!["Moved disk down"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Moved disk down"])
+    );
 }
 
 #[test]
@@ -548,7 +554,7 @@ fn commit_add_module_with_empty_buffer_inserts_bare_kind() {
         Some(vec!["cpu".to_string(), "disk".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(action_log(), vec!["Added disk"]);
+    assert_eq!(action_log(), action_log_with_daemon_notify(&["Added disk"]));
 }
 
 #[test]
@@ -576,7 +582,10 @@ fn commit_add_module_with_buffer_inserts_kind_hash_instance() {
         Some(vec!["cpu".to_string(), "disk#root".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(action_log(), vec!["Added disk#root"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Added disk#root"])
+    );
 }
 
 #[test]
@@ -703,7 +712,10 @@ fn confirming_remove_second_d_removes_and_keeps_selection_on_shifted_entry() {
         Some(vec!["cpu".to_string(), "battery".to_string()])
     );
     assert_eq!(app.selected_index, Some(1));
-    assert_eq!(action_log(), vec!["Removed disk"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Removed disk"])
+    );
 }
 
 #[test]
@@ -727,7 +739,10 @@ fn confirming_remove_on_the_only_remaining_entry_clears_selection() {
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.modules, Some(vec![]));
     assert_eq!(app.selected_index, None);
-    assert_eq!(action_log(), vec!["Removed cpu"]);
+    assert_eq!(
+        action_log(),
+        action_log_with_daemon_notify(&["Removed cpu"])
+    );
 }
 
 #[test]

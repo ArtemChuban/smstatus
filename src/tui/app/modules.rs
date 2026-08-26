@@ -73,6 +73,7 @@ impl App {
                 self.selected_index = Some(target);
                 self.ensure_selected_visible();
                 self.rebuild_module_params(true);
+                self.notify_daemon_config_reload();
                 let direction = if delta < 0 { "up" } else { "down" };
                 self.push_action_message(format!("Moved {name} {direction}"));
             }
@@ -204,6 +205,7 @@ impl App {
                 self.modules = Some(new_modules);
                 self.ensure_selected_visible();
                 self.rebuild_module_params(true);
+                self.notify_daemon_config_reload();
                 self.push_action_message(format!("Added {new_entry}"));
             }
             Err(err) => self.push_action_message(format!("Failed to add module: {err}")),
@@ -261,6 +263,7 @@ impl App {
                     self.panel_focus = PanelFocus::Modules;
                 }
                 self.rebuild_module_params(true);
+                self.notify_daemon_config_reload();
                 self.push_action_message(format!("Removed {name}"));
             }
             Err(err) => self.push_action_message(format!("Failed to remove module: {err}")),

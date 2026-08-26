@@ -33,6 +33,17 @@ pub(crate) enum Commands {
     Start,
     Stop,
     Run,
+    Reload {
+        /// Reload config.toml (module list, separator, log retention, param re-init)
+        #[arg(long)]
+        config: bool,
+        /// Reload wasm for a module kind (repeatable)
+        #[arg(long)]
+        module: Vec<String>,
+        /// Stop and respawn an extension from disk (repeatable; explicit trust event)
+        #[arg(long)]
+        extension: Vec<String>,
+    },
     Module {
         #[command(subcommand)]
         command: ModuleCommands,
