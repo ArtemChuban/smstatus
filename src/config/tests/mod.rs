@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod discover;
 mod params;
+mod presets;
 mod reads;
 mod section;
 mod write_modules;

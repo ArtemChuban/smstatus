@@ -34,7 +34,7 @@ pub(crate) enum Commands {
     Stop,
     Run,
     Reload {
-        /// Reload config.toml (module list, separator, log retention, param re-init)
+        /// Reload active preset (module list, separator, log retention, param re-init)
         #[arg(long)]
         config: bool,
         /// Reload wasm for a module kind (repeatable)
@@ -51,6 +51,27 @@ pub(crate) enum Commands {
     Extension {
         #[command(subcommand)]
         command: ExtensionCommands,
+    },
+    Preset {
+        #[command(subcommand)]
+        command: PresetCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PresetCommands {
+    List,
+    Save {
+        name: String,
+    },
+    Use {
+        name: String,
+        /// Reload a running daemon after switching (without this, the bar keeps the previous preset until `smstatus reload` or restart)
+        #[arg(long)]
+        reload: bool,
+    },
+    Remove {
+        name: String,
     },
 }
 
