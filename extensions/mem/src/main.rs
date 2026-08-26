@@ -47,6 +47,9 @@ fn mem_usage_json(usage: &MemUsageJson) -> String {
 }
 
 fn handle_request(request: &Request) -> Response {
+    if protocol::is_reserved_method(&request.method) {
+        return protocol::allowlist_check_response(&request.payload, "mem");
+    }
     if request.method == "usage" {
         match mem_usage() {
             Ok(usage) => Response::Ok(mem_usage_json(&usage)),
@@ -147,6 +150,39 @@ mod tests {
                 assert!(value.get("free_bytes").is_some());
             }
             Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    fn usage_check(method: &str, allowed: &str) -> Response {
+        let encoded = protocol::encode_check_payload(
+            vec![protocol::PermissionEntry {
+                extension: "mem".to_string(),
+                method: allowed.to_string(),
+                constraints: Default::default(),
+            }],
+            method,
+            "",
+        )
+        .unwrap();
+        handle_request(&Request {
+            method: protocol::CHECK_METHOD.to_string(),
+            payload: encoded,
+        })
+    }
+
+    #[test]
+    fn check_allows_allowlisted_usage() {
+        match usage_check("usage", "usage") {
+            Response::Ok(_) => {}
+            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    #[test]
+    fn check_denies_unlisted_method() {
+        match usage_check("other", "usage") {
+            Response::Err(msg) => assert!(msg.contains("permission denied")),
+            Response::Ok(_) => panic!("expected Err"),
         }
     }
 }

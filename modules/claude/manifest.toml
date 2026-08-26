@@ -8,3 +8,17 @@ required_extensions = [
   { name = "http", version = { major = 0, minor = 1 } },
   { name = "time", version = { major = 0, minor = 1 } },
 ]
+
+[[permissions]]
+extension = "time"
+method = "now"
+
+[[permissions]]
+extension = "fs"
+method = "read"
+path_prefixes = ["~/.claude/"]
+
+[[permissions]]
+extension = "http"
+method = "get"
+url_prefixes = ["https://api.anthropic.com/"]

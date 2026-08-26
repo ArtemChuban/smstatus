@@ -6,3 +6,7 @@ modules-api = { major = 0, minor = 1 }
 required_extensions = [
   { name = "process", version = { major = 0, minor = 1 } },
 ]
+
+[[permissions]]
+extension = "process"
+method = "is-running"
