@@ -5,7 +5,6 @@ use crate::error::Result;
 mod discover;
 mod io;
 mod params;
-#[allow(dead_code)]
 mod presets;
 mod write;
 
