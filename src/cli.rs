@@ -81,6 +81,8 @@ pub(crate) enum ModuleCommands {
         source: String,
         #[arg(long)]
         allow_insecure_http: bool,
+        #[arg(long)]
+        sha256: Option<String>,
     },
     List,
     Remove {
@@ -94,6 +96,8 @@ pub(crate) enum ExtensionCommands {
         source: String,
         #[arg(long)]
         allow_insecure_http: bool,
+        #[arg(long)]
+        sha256: Option<String>,
     },
     List,
     Remove {

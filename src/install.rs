@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use flate2::read::GzDecoder;
 
+use sha2::{Digest, Sha256};
+
 use crate::control::{self, NotifyOutcome};
 use crate::error::Result;
 use crate::extension::is_safe_extension_name;
@@ -54,6 +56,10 @@ impl ResolvedSource {
 
     pub(crate) fn label(&self) -> &Path {
         &self.label
+    }
+
+    pub(crate) fn kind(&self) -> SourceKind {
+        self.kind
     }
 }
 
@@ -219,6 +225,76 @@ struct ScratchDir(PathBuf);
 impl Drop for ScratchDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn resolve_expected_sha256(source: &str, options: &InstallOptions) -> Option<String> {
+    if let Some(hash) = options.expected_sha256.as_ref() {
+        let normalized = hash.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+    let path = Path::new(source);
+    if !path.exists() {
+        return None;
+    }
+    let sidecar = PathBuf::from(format!("{source}.sha256"));
+    if !sidecar.is_file() {
+        return None;
+    }
+    let contents = fs::read_to_string(&sidecar).ok()?;
+    let hash = contents.lines().next()?.trim().to_ascii_lowercase();
+    if hash.is_empty() {
+        return None;
+    }
+    Some(hash)
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    let mut file = fs::File::open(path).map_err(|e| {
+        format!(
+            "failed to open `{}` for SHA-256 verification: {e}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| {
+        format!(
+            "failed to read `{}` for SHA-256 verification: {e}",
+            path.display()
+        )
+    })?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(format!(
+            "SHA-256 mismatch for `{}`: expected {expected}, got {actual}",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+// Catalog (#65) and preset install (#66) should populate InstallOptions.expected_sha256
+// instead of adding a second verifier here.
+fn verify_resolved_source(
+    resolved: &ResolvedSource,
+    source: &str,
+    options: &InstallOptions,
+) -> Result<()> {
+    match resolve_expected_sha256(source, options) {
+        Some(expected) => verify_sha256(resolved.path(), &expected),
+        None if resolved.kind() == SourceKind::Url => {
+            Err("remote install requires --sha256 or a catalog-supplied hash".into())
+        }
+        None => {
+            crate::logging::to_stderr(
+                log::Level::Warn,
+                "installing local archive without SHA-256 verification",
+            );
+            Ok(())
+        }
     }
 }
 
@@ -470,6 +546,7 @@ pub(crate) fn install_module_into(
     options: &InstallOptions,
 ) -> Result<ModuleInstallOutcome> {
     let resolved = resolve_source(source, options)?;
+    verify_resolved_source(&resolved, source, options)?;
     let check_path = resolved.label();
     if !has_tar_gz_extension(check_path) {
         return Err(format!(
@@ -582,6 +659,7 @@ pub(crate) fn install_extension_into(
     options: &InstallOptions,
 ) -> Result<ExtensionInstallOutcome> {
     let resolved = resolve_source(source, options)?;
+    verify_resolved_source(&resolved, source, options)?;
     let check_path = resolved.label();
     if !has_tar_gz_extension(check_path) {
         return Err(format!(
@@ -1036,6 +1114,73 @@ mod tests {
 
     fn install_options() -> InstallOptions {
         InstallOptions::default()
+    }
+
+    fn sha256_hex(path: &Path) -> String {
+        let mut file = fs::File::open(path).unwrap();
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).unwrap();
+        format!("{:x}", hasher.finalize())
+    }
+
+    #[test]
+    fn verify_resolved_source_requires_hash_for_remote() {
+        let resolved = ResolvedSource {
+            path: PathBuf::from("/tmp/smstatus-remote-test.tar.gz"),
+            kind: SourceKind::Url,
+            label: PathBuf::from("remote.tar.gz"),
+        };
+        let err = verify_resolved_source(
+            &resolved,
+            "https://example.com/remote.tar.gz",
+            &install_options(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("requires --sha256"));
+    }
+
+    #[test]
+    fn install_module_into_accepts_matching_local_sidecar() {
+        let modules_dir = temp_modules_dir("sidecar-match");
+        let archive = pack_module_archive("battery", "0.1.0");
+        fs::write(
+            format!("{}.sha256", archive.display()),
+            format!("{}\n", sha256_hex(&archive)),
+        )
+        .unwrap();
+        let outcome =
+            install_module_into(&modules_dir, archive.to_str().unwrap(), &install_options())
+                .unwrap();
+        match outcome {
+            ModuleInstallOutcome::Fresh { kind, .. } => assert_eq!(kind, "battery"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_module_into_rejects_wrong_sha256() {
+        let modules_dir = temp_modules_dir("sidecar-mismatch");
+        let archive = pack_module_archive("battery", "0.1.0");
+        let options = InstallOptions {
+            expected_sha256: Some("0".repeat(64)),
+            ..Default::default()
+        };
+        let err =
+            install_module_into(&modules_dir, archive.to_str().unwrap(), &options).unwrap_err();
+        assert!(err.to_string().contains("SHA-256 mismatch"));
+    }
+
+    #[test]
+    fn install_module_into_local_without_sidecar_succeeds() {
+        let modules_dir = temp_modules_dir("no-sidecar");
+        let archive = pack_module_archive("cpu", "0.1.0");
+        let outcome =
+            install_module_into(&modules_dir, archive.to_str().unwrap(), &install_options())
+                .unwrap();
+        match outcome {
+            ModuleInstallOutcome::Fresh { kind, .. } => assert_eq!(kind, "cpu"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
     }
 
     #[test]
