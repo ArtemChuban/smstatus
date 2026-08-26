@@ -67,6 +67,7 @@ impl App {
         match crate::config::BarConfig::write_separator(&path, &value) {
             Ok(()) => {
                 self.separator = Some(value);
+                self.notify_daemon_config_reload();
                 self.push_action_message("Separator updated".to_string());
             }
             Err(err) => self.push_action_message(format!("Failed to update separator: {err}")),
