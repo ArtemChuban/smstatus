@@ -28,6 +28,10 @@ pub(crate) fn log_file_path() -> Result<PathBuf> {
     Ok(lock_dir()?.join("smstatus.log"))
 }
 
+pub(crate) fn control_socket_path() -> Result<PathBuf> {
+    Ok(lock_dir()?.join("smstatus.ctl.sock"))
+}
+
 pub(crate) fn read_pid(file: &mut File) -> Option<i32> {
     file.seek(SeekFrom::Start(0)).ok()?;
     let mut contents = String::new();
