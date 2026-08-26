@@ -29,20 +29,22 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, app: &App, region: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(super) fn draw_add_overlay(
+pub(super) fn draw_list_overlay(
     frame: &mut Frame,
     region: Rect,
-    available: &[String],
+    title_prefix: &str,
+    count_noun: &str,
+    labels: &[String],
     selected: usize,
     scroll_offset: usize,
 ) {
     let area = overlay_rect(region);
     let viewport_height = Block::default().borders(Borders::ALL).inner(area).height as usize;
-    let (start, end, total) = module_window(available.len(), scroll_offset, viewport_height);
+    let (start, end, total) = module_window(labels.len(), scroll_offset, viewport_height);
     let title = if viewport_height == 0 || total == 0 {
-        format!("add module {total} available")
+        format!("{title_prefix} {total} {count_noun}")
     } else {
-        format!("add module {}-{end}/{total}", start + 1)
+        format!("{title_prefix} {}-{end}/{total}", start + 1)
     };
     let block = Block::default()
         .title(boxed_title(&title))
@@ -52,13 +54,49 @@ pub(super) fn draw_add_overlay(
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     let lines = styled_list_lines(
-        available,
+        labels,
         Some(selected),
         scroll_offset,
         viewport_height,
         inner.width,
     );
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+pub(super) fn draw_add_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    available: &[String],
+    selected: usize,
+    scroll_offset: usize,
+) {
+    draw_list_overlay(
+        frame,
+        region,
+        "add module",
+        "available",
+        available,
+        selected,
+        scroll_offset,
+    );
+}
+
+pub(super) fn draw_extensions_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    labels: &[String],
+    selected: usize,
+    scroll_offset: usize,
+) {
+    draw_list_overlay(
+        frame,
+        region,
+        "extensions",
+        "installed",
+        labels,
+        selected,
+        scroll_offset,
+    );
 }
 
 pub(super) fn draw_naming_overlay(

@@ -868,3 +868,74 @@ fn draw_renders_metadata_with_entry_for_instance_module() {
         )
     );
 }
+
+#[test]
+fn draw_renders_extensions_overlay_title_list_and_hint() {
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        mode: Mode::BrowsingExtensions {
+            selected: 0,
+            scroll_offset: 0,
+        },
+        installed_extensions: vec!["echo".to_string(), "notify".to_string()],
+        extension_overlay_labels: vec!["echo".to_string(), "notify".to_string()],
+        ..App::default()
+    };
+    let height = BASELINE_HEIGHT + 5;
+    let expected_buf = expected_overlay(
+        70,
+        height,
+        Some(DaemonStatus::Stopped),
+        "separator: unknown",
+        "extensions 1-2/2",
+        &["echo", "notify"],
+        "logs",
+        &[],
+        "Select: \u{2191}/\u{2193} | Close: Esc",
+    );
+    let overlay = overlay_area_for_frame(70, height);
+    let inner_y = Block::default().borders(Borders::ALL).inner(overlay).y;
+    let expected_buf = with_reversed_overlay_row(expected_buf, inner_y, 70, height);
+    assert_eq!(render(&app, 70, height), expected_buf);
+}
+
+#[test]
+fn draw_params_column_pins_required_extensions_header() {
+    use crate::manifest::{ApiVersionReq, RequiredExtension};
+    use std::collections::HashMap;
+
+    let app = App {
+        daemon_status: Some(DaemonStatus::Stopped),
+        modules: Some(vec!["cpu".to_string()]),
+        selected_index: Some(0),
+        module_params: Some(params_entries(vec![ParamEntry {
+            key: "a".to_string(),
+            value: ModuleParamValue::String("1".to_string()),
+            origin: ParamOrigin::Explicit,
+        }])),
+        required_extensions_by_kind: HashMap::from([(
+            "cpu".to_string(),
+            vec![RequiredExtension {
+                name: "echo".to_string(),
+                version: ApiVersionReq { major: 1, minor: 0 },
+            }],
+        )]),
+        requirement_lines_by_kind: HashMap::from([(
+            "cpu".to_string(),
+            vec!["echo missing".to_string()],
+        )]),
+        ..App::default()
+    };
+    let lines = visible_params_lines(&app, 10, 40);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].to_string(), "echo missing");
+    assert_eq!(lines[1].to_string(), "a = \"1\"");
+    let buffer = render(&app, 70, BASELINE_HEIGHT + 2);
+    let row: String = (0..70)
+        .map(|x| buffer[(x, 5)].symbol().to_string())
+        .collect();
+    assert!(
+        row.contains("echo missing"),
+        "params column should show requirement status, got {row:?}"
+    );
+}
