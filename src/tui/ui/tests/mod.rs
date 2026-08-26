@@ -11,7 +11,8 @@ use crate::config::{ModuleParamValue, ParamWriteExpect};
 use crate::daemon::DaemonStatus;
 use crate::manifest::Metadata;
 use crate::tui::app::{
-    App, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry, ParamOrigin,
+    App, InstallTarget, Mode, ModuleParamsState, ModuleParamsStatus, PanelFocus, ParamEntry,
+    ParamOrigin,
 };
 
 pub(super) fn install_test_log() {
@@ -292,7 +293,7 @@ pub(super) fn expected_param_text_overlay(
     buf
 }
 
-const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Quit: q | Start: s | Kill: k | Help: ?";
+const NORMAL_HINT_MODULES: &str = "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Install: i | Quit: q | Start: s | Kill: k | Help: ?";
 const NORMAL_HINT_PARAMS: &str = "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?";
 const NORMAL_HINT_LOGS: &str = "Scroll: \u{2191}/\u{2193} | Levels: e/w/i | Back: Esc/\u{2190}/Tab | Quit: q | Start: s | Kill: k | Help: ?";
 const HELP_HINT: &str = "Close: ?/Esc | Scroll: \u{2191}/\u{2193} | Quit: q | Start: s | Kill: k";

@@ -71,7 +71,21 @@ pub(super) enum Mode {
         selected: usize,
         scroll_offset: usize,
     },
+    ChoosingInstallKind {
+        selected: usize,
+    },
+    EnteringInstallSource {
+        target: InstallTarget,
+        buffer: String,
+        cursor: usize,
+    },
     Help,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum InstallTarget {
+    Module,
+    Extension,
 }
 
 #[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
@@ -258,6 +272,8 @@ impl App {
             Mode::ConfirmingRemoveParam { .. } => self.handle_key_confirming_remove_param(key),
             Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
             Mode::BrowsingExtensions { .. } => self.handle_key_browsing_extensions(key),
+            Mode::ChoosingInstallKind { .. } => self.handle_key_choosing_install_kind(key),
+            Mode::EnteringInstallSource { .. } => self.handle_key_entering_install_source(key),
             Mode::Help => self.handle_key_help(key),
         }
     }
@@ -302,6 +318,7 @@ impl App {
             KeyCode::Char('a') => self.begin_add_module(),
             KeyCode::Char('d') => self.begin_remove_module(),
             KeyCode::Char('x') => self.begin_browse_extensions(),
+            KeyCode::Char('i') => self.begin_install(),
             KeyCode::Enter | KeyCode::Right => self.focus_params(),
             KeyCode::Tab => self.focus_logs(),
             _ => {}

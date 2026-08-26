@@ -1,7 +1,7 @@
 use ratatui::Frame;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::app::{App, Mode};
+use super::app::{App, InstallTarget, Mode};
 
 mod layout;
 mod overlay;
@@ -14,8 +14,8 @@ pub(in crate::tui) use render::help_lines;
 
 use layout::{compute_fixed_heights, layout_areas, modules_region};
 use overlay::{
-    draw_add_overlay, draw_extensions_overlay, draw_help_overlay, draw_naming_overlay,
-    draw_param_text_overlay,
+    draw_add_overlay, draw_extensions_overlay, draw_help_overlay, draw_install_kind_overlay,
+    draw_naming_overlay, draw_param_text_overlay,
 };
 use render::{
     SEPARATOR_EDIT_PREFIX, boxed_title, draw_modules_column, draw_params_column, hint_line,
@@ -93,6 +93,22 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
             } => {
                 let labels = app.extension_overlay_labels();
                 draw_extensions_overlay(frame, region, labels, *selected, *scroll_offset)
+            }
+            Mode::ChoosingInstallKind { selected } => {
+                let labels = App::install_kind_labels();
+                let labels = labels.map(str::to_string);
+                draw_install_kind_overlay(frame, region, &labels, *selected)
+            }
+            Mode::EnteringInstallSource {
+                target,
+                buffer,
+                cursor,
+            } => {
+                let title = match target {
+                    InstallTarget::Module => "install module source",
+                    InstallTarget::Extension => "install extension source",
+                };
+                draw_param_text_overlay(frame, region, title, buffer, *cursor)
             }
             Mode::NamingModuleInstance {
                 kind,

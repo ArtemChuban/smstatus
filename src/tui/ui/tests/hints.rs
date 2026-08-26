@@ -90,6 +90,11 @@ fn help_lines_modules_focus_lists_local_module_bindings() {
     assert_eq!(lines[0], "--- Local ---");
     assert!(lines.iter().any(|l| l.contains("Add module: a")));
     assert!(lines.iter().any(|l| l.contains("Browse extensions: x")));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("Install module/extension: i"))
+    );
     assert!(lines.iter().any(|l| l.contains("Focus params")));
     assert!(lines.iter().any(|l| l.contains("Focus logs: Tab")));
     assert!(lines.iter().any(|l| l == "--- Global ---"));
@@ -147,7 +152,7 @@ fn hint_line_browsing_extensions_mode() {
     };
     assert_eq!(
         hint_line(&app).as_ref(),
-        "Select: \u{2191}/\u{2193} | Close: Esc"
+        "Select: \u{2191}/\u{2193} | Install: i | Close: Esc"
     );
 }
 
@@ -162,5 +167,31 @@ fn help_lines_browsing_extensions_lists_close() {
     };
     let lines = help_lines(&app);
     assert!(lines.iter().any(|l| l.contains("Select extension")));
+    assert!(lines.iter().any(|l| l.contains("Install: i")));
     assert!(lines.iter().any(|l| l.contains("Close: Esc")));
+}
+
+#[test]
+fn hint_line_choosing_install_kind_mode() {
+    let app = App {
+        mode: Mode::ChoosingInstallKind { selected: 0 },
+        ..App::default()
+    };
+    assert_eq!(
+        hint_line(&app).as_ref(),
+        "Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc"
+    );
+}
+
+#[test]
+fn hint_line_entering_install_source_mode() {
+    let app = App {
+        mode: Mode::EnteringInstallSource {
+            target: InstallTarget::Module,
+            buffer: String::new(),
+            cursor: 0,
+        },
+        ..App::default()
+    };
+    assert_eq!(hint_line(&app).as_ref(), "Confirm: Enter | Cancel: Esc");
 }

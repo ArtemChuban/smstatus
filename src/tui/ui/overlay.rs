@@ -99,6 +99,26 @@ pub(super) fn draw_extensions_overlay(
     );
 }
 
+pub(super) fn draw_install_kind_overlay(
+    frame: &mut Frame,
+    region: Rect,
+    labels: &[String],
+    selected: usize,
+) {
+    let area = overlay_rect(region);
+    let viewport_height = Block::default().borders(Borders::ALL).inner(area).height as usize;
+    let title = "install";
+    let block = Block::default()
+        .title(boxed_title(title))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let lines = styled_list_lines(labels, Some(selected), 0, viewport_height, inner.width);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 pub(super) fn draw_naming_overlay(
     frame: &mut Frame,
     region: Rect,

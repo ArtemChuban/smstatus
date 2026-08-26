@@ -79,6 +79,8 @@ pub(super) fn separator_line(app: &App) -> String {
         | Mode::ConfirmingRemoveParam { .. }
         | Mode::RenamingParamKey { .. }
         | Mode::BrowsingExtensions { .. }
+        | Mode::ChoosingInstallKind { .. }
+        | Mode::EnteringInstallSource { .. }
         | Mode::Help => match &app.separator {
             Some(sep) => format!("separator: {sep:?}"),
             None => "separator: unknown".to_string(),
@@ -100,7 +102,7 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
     match &app.mode {
         Mode::Normal => match app.panel_focus {
             PanelFocus::Modules => Cow::Borrowed(
-                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Quit: q | Start: s | Kill: k | Help: ?",
+                "Select: \u{2191}/\u{2193} | Params: Enter/\u{2192} | Logs: Tab | Ext: x | Install: i | Quit: q | Start: s | Kill: k | Help: ?",
             ),
             PanelFocus::Params => Cow::Borrowed(
                 "Select: \u{2191}/\u{2193} | Edit: e/Enter | Add: a | Del: d | Rename: r | Logs: Tab | Back: Esc/\u{2190} | Quit: q | Start: s | Kill: k | Help: ?",
@@ -113,7 +115,13 @@ pub(super) fn hint_line(app: &App) -> Cow<'static, str> {
         Mode::AddingModule { .. } => {
             Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
         }
-        Mode::BrowsingExtensions { .. } => Cow::Borrowed("Select: \u{2191}/\u{2193} | Close: Esc"),
+        Mode::BrowsingExtensions { .. } => {
+            Cow::Borrowed("Select: \u{2191}/\u{2193} | Install: i | Close: Esc")
+        }
+        Mode::ChoosingInstallKind { .. } => {
+            Cow::Borrowed("Select: \u{2191}/\u{2193} | Next: Enter | Cancel: Esc")
+        }
+        Mode::EnteringInstallSource { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::NamingModuleInstance { .. } => Cow::Borrowed("Confirm: Enter | Cancel: Esc"),
         Mode::ConfirmingRemove { name, .. } => {
             Cow::Owned(format!("Remove {name}? Confirm: d | Cancel: any key"))
@@ -403,6 +411,7 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
                 lines.push("Add module: a".to_string());
                 lines.push("Remove module: d".to_string());
                 lines.push("Browse extensions: x".to_string());
+                lines.push("Install module/extension: i".to_string());
                 lines.push("Edit separator: e".to_string());
                 lines.push("Focus params: Enter/\u{2192}".to_string());
                 lines.push("Focus logs: Tab".to_string());
@@ -428,7 +437,17 @@ pub(in crate::tui) fn help_lines(app: &App) -> Vec<String> {
         }
         Mode::BrowsingExtensions { .. } => {
             lines.push("Select extension: \u{2191}/\u{2193}".to_string());
+            lines.push("Install: i".to_string());
             lines.push("Close: Esc".to_string());
+        }
+        Mode::ChoosingInstallKind { .. } => {
+            lines.push("Select install kind: \u{2191}/\u{2193}".to_string());
+            lines.push("Next: Enter".to_string());
+            lines.push("Cancel: Esc".to_string());
+        }
+        Mode::EnteringInstallSource { .. } => {
+            lines.push("Confirm source: Enter".to_string());
+            lines.push("Cancel: Esc".to_string());
         }
         _ => {}
     }

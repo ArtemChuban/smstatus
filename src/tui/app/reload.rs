@@ -130,7 +130,7 @@ impl App {
             .retain(|kind| configured.contains(kind));
     }
 
-    fn refresh_wasm_derived_state_for_kinds(&mut self, wasm_kinds: &[String]) {
+    pub(super) fn refresh_wasm_derived_state_for_kinds(&mut self, wasm_kinds: &[String]) {
         let configured = self.configured_kinds();
         for kind in wasm_kinds {
             if !configured.contains(kind) {
