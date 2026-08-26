@@ -891,7 +891,7 @@ fn draw_renders_extensions_overlay_title_list_and_hint() {
         &["echo", "notify"],
         "logs",
         &[],
-        "Select: \u{2191}/\u{2193} | Close: Esc",
+        "Select: \u{2191}/\u{2193} | Install: i | Close: Esc",
     );
     let overlay = overlay_area_for_frame(70, height);
     let inner_y = Block::default().borders(Borders::ALL).inner(overlay).y;
