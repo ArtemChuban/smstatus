@@ -90,6 +90,16 @@ pub(super) enum Mode {
         buffer: String,
         cursor: usize,
     },
+    EnteringInstallSha256 {
+        target: InstallTarget,
+        source: String,
+        buffer: String,
+        cursor: usize,
+    },
+    ConfirmingInstallReplace {
+        source: String,
+        name: String,
+    },
     Help,
 }
 
@@ -308,6 +318,10 @@ impl App {
             Mode::RenamingParamKey { .. } => self.handle_key_renaming_param_key(key),
             Mode::ChoosingInstallKind { .. } => self.handle_key_choosing_install_kind(key),
             Mode::EnteringInstallSource { .. } => self.handle_key_entering_install_source(key),
+            Mode::EnteringInstallSha256 { .. } => self.handle_key_entering_install_sha256(key),
+            Mode::ConfirmingInstallReplace { .. } => {
+                self.handle_key_confirming_install_replace(key)
+            }
             Mode::ChoosingPreset { .. } => self.handle_key_choosing_preset(key),
             Mode::NamingPreset { .. } => self.handle_key_naming_preset(key),
             Mode::ConfirmingRemovePreset { .. } => self.handle_key_confirming_remove_preset(key),
