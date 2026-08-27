@@ -111,6 +111,8 @@ pub(crate) enum ModuleCommands {
     },
     Doctor {
         kind: String,
+        #[arg(long)]
+        probe: bool,
     },
 }
 
