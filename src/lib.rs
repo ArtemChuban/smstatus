@@ -108,6 +108,7 @@ pub fn run() -> ExitCode {
                     allow_insecure_http,
                     expected_sha256: sha256,
                     force,
+                    ..Default::default()
                 };
                 match install::install_extension(&source, &options) {
                     Ok(output) => {
@@ -165,7 +166,12 @@ pub fn run() -> ExitCode {
                     allow_insecure_http,
                 };
                 match pin::apply_pin_file(&file, &global) {
-                    Ok(lines) => cli_ok_lines(lines),
+                    Ok(output) => {
+                        for warning in &output.warnings {
+                            logging::to_stderr(log::Level::Warn, warning);
+                        }
+                        cli_ok_lines(output.outcomes)
+                    }
                     Err(err) => cli_err(err),
                 }
             }

@@ -18,6 +18,7 @@ use crate::reload::ReloadRequest;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
@@ -27,6 +28,8 @@ pub(crate) struct InstallOptions {
     pub allow_insecure_http: bool,
     pub expected_sha256: Option<String>,
     pub force: bool,
+    pub expected_name: Option<String>,
+    pub expected_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -409,6 +412,100 @@ fn verify_resolved_source(
     }
 }
 
+fn skip_tar_entry<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<()> {
+    if entry.size() == 0 {
+        return Ok(());
+    }
+    std::io::copy(entry, &mut std::io::sink())
+        .map_err(|e| format!("failed to skip archive entry: {e}"))?;
+    Ok(())
+}
+
+fn read_manifest_toml_from_archive(archive: &Path) -> Result<String> {
+    let file = fs::File::open(archive)
+        .map_err(|e| format!("failed to open archive `{}`: {e}", archive.display()))?;
+    let decoder = DecompressLimit::new(GzDecoder::new(file), MAX_UNPACKED_BYTES);
+    let mut tar = tar::Archive::new(decoder);
+    for entry in tar.entries().map_err(|e| {
+        format!(
+            "failed to read archive entries from `{}`: {e}",
+            archive.display()
+        )
+    })? {
+        let mut entry = entry.map_err(|e| {
+            format!(
+                "failed to read archive entry from `{}`: {e}",
+                archive.display()
+            )
+        })?;
+        match entry.header().entry_type() {
+            tar::EntryType::Regular | tar::EntryType::GNUSparse => {}
+            tar::EntryType::Directory => {
+                skip_tar_entry(&mut entry)?;
+                continue;
+            }
+            other => {
+                return Err(format!(
+                    "unsupported archive entry type `{other:?}` in `{}`",
+                    archive.display()
+                )
+                .into());
+            }
+        }
+        let path = entry
+            .path()
+            .map_err(|e| format!("invalid archive entry path in `{}`: {e}", archive.display()))?;
+        validate_tar_entry_path(&path)?;
+        if path.file_name() != Some(std::ffi::OsStr::new("manifest.toml")) {
+            skip_tar_entry(&mut entry)?;
+            continue;
+        }
+        let size = entry.header().size().unwrap_or(0);
+        if size > MAX_MANIFEST_BYTES {
+            return Err(format!(
+                "manifest.toml exceeds maximum size of {MAX_MANIFEST_BYTES} bytes in `{}`",
+                archive.display()
+            )
+            .into());
+        }
+        let mut buf = vec![0u8; size as usize];
+        std::io::Read::read_exact(&mut entry, &mut buf).map_err(|e| {
+            format!(
+                "failed to read manifest.toml from `{}`: {e}",
+                archive.display()
+            )
+        })?;
+        return String::from_utf8(buf).map_err(|e| {
+            format!(
+                "manifest.toml in `{}` is not valid UTF-8: {e}",
+                archive.display()
+            )
+            .into()
+        });
+    }
+    Err(format!("archive `{}` missing manifest.toml", archive.display()).into())
+}
+
+fn validate_expected_manifest(name: &str, version: &str, options: &InstallOptions) -> Result<()> {
+    if let Some(expected_name) = &options.expected_name
+        && name != expected_name
+    {
+        return Err(format!(
+            "pin entry name `{expected_name}` does not match manifest name `{name}`"
+        )
+        .into());
+    }
+    if let Some(expected_version) = &options.expected_version
+        && version != expected_version
+    {
+        return Err(format!(
+            "pin entry version `{expected_version}` does not match manifest version `{version}`"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn validate_tar_entry_path(path: &Path) -> Result<()> {
     for component in path.components() {
         match component {
@@ -651,6 +748,15 @@ fn stage_extension_package(root: &Path) -> Result<(ScratchDir, PathBuf)> {
     Ok((scratch, staged))
 }
 
+fn place_staged_extension(extensions_dir: &Path, root: &Path, name: &str) -> Result<()> {
+    let dest = manifest::extension_dir(extensions_dir, name);
+    let (_scratch, staged) = stage_extension_package(root)?;
+    place_package_dir(&staged, &dest)?;
+    set_executable(&manifest::extension_binary_path(extensions_dir, name))?;
+    let _ = manifest::read_extension_manifest(extensions_dir, name)?;
+    Ok(())
+}
+
 pub(crate) fn install_module_into(
     modules_dir: &Path,
     source: &str,
@@ -674,6 +780,7 @@ pub(crate) fn install_module_into(
     let root = package_root(&unpack.0)?;
     require_module_files(&root)?;
     let manifest = manifest::read_module_manifest_from(&root.join("manifest.toml"))?;
+    validate_expected_manifest(&manifest.name, &manifest.version, options)?;
     let kind = manifest.name.clone();
     let candidate = manifest.to_metadata();
     let dest = manifest::module_dir(modules_dir, &kind);
@@ -803,11 +910,9 @@ pub(crate) fn install_extension_into(
     let resolved = resolve_source(source, options)?;
     verify_resolved_source(&resolved, source, options, &mut warnings)?;
 
-    let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
-    unpack_archive(resolved.path(), &unpack.0)?;
-    let root = package_root(&unpack.0)?;
-    require_extension_files(&root)?;
-    let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
+    let manifest_toml = read_manifest_toml_from_archive(resolved.path())?;
+    let manifest = manifest::parse_extension_manifest_str(&manifest_toml)?;
+    validate_expected_manifest(&manifest.name, &manifest.version, options)?;
     let name = manifest.name.clone();
     let candidate = manifest.to_metadata();
     let dest = manifest::extension_dir(extensions_dir, &name);
@@ -827,10 +932,11 @@ pub(crate) fn install_extension_into(
                         });
                     }
                     ModuleInstallAction::Replace => {
-                        let (_scratch, staged) = stage_extension_package(&root)?;
-                        place_package_dir(&staged, &dest)?;
-                        set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
-                        let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+                        let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
+                        unpack_archive(resolved.path(), &unpack.0)?;
+                        let root = package_root(&unpack.0)?;
+                        require_extension_files(&root)?;
+                        place_staged_extension(extensions_dir, &root, &name)?;
                         return Ok(InstallOutput {
                             value: ExtensionInstallOutcome::Replace { name },
                             warnings,
@@ -842,10 +948,11 @@ pub(crate) fn install_extension_into(
                 }
             }
             Err(_) => {
-                let (_scratch, staged) = stage_extension_package(&root)?;
-                place_package_dir(&staged, &dest)?;
-                set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
-                let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+                let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
+                unpack_archive(resolved.path(), &unpack.0)?;
+                let root = package_root(&unpack.0)?;
+                require_extension_files(&root)?;
+                place_staged_extension(extensions_dir, &root, &name)?;
                 return Ok(InstallOutput {
                     value: ExtensionInstallOutcome::Replace { name },
                     warnings,
@@ -854,10 +961,11 @@ pub(crate) fn install_extension_into(
         }
     }
 
-    let (_scratch, staged) = stage_extension_package(&root)?;
-    place_package_dir(&staged, &dest)?;
-    set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
-    let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+    let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
+    unpack_archive(resolved.path(), &unpack.0)?;
+    let root = package_root(&unpack.0)?;
+    require_extension_files(&root)?;
+    place_staged_extension(extensions_dir, &root, &name)?;
 
     Ok(InstallOutput {
         value: ExtensionInstallOutcome::Fresh { name },
@@ -874,18 +982,21 @@ pub(crate) fn install_extension(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum PackageKind {
     Module,
     Extension,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct PackageManifestPeek {
     pub kind: PackageKind,
     pub name: String,
     pub version: String,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn peek_package_manifest(
     source: &str,
     options: &InstallOptions,
@@ -1492,6 +1603,43 @@ mod tests {
         assert_eq!(
             decide_extension_install(Some(&installed), &candidate, true),
             ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
+    fn peek_package_manifest_reads_module_archive() {
+        let archive = pack_module_archive("battery", "0.1.0");
+        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
+        assert_eq!(peek.kind, PackageKind::Module);
+        assert_eq!(peek.name, "battery");
+        assert_eq!(peek.version, "0.1.0");
+    }
+
+    #[test]
+    fn peek_package_manifest_reads_extension_archive() {
+        let archive = pack_echo_archive();
+        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
+        assert_eq!(peek.kind, PackageKind::Extension);
+        assert_eq!(peek.name, "echo");
+        assert_eq!(peek.version, "0.1.0");
+    }
+
+    #[test]
+    fn peek_package_manifest_rejects_ambiguous_archive() {
+        let staging = temp_modules_dir("peek-ambiguous");
+        fs::write(
+            staging.join("manifest.toml"),
+            extension_manifest_toml("echo", "0.1.0"),
+        )
+        .unwrap();
+        fs::write(staging.join("module.wasm"), b"wasm").unwrap();
+        fs::write(staging.join("extension"), b"bin").unwrap();
+        let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
+        write_tar_gz(&staging, &archive).unwrap();
+        let err = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("not a recognized module or extension package")
         );
     }
 
