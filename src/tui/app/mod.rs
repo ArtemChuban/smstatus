@@ -5,7 +5,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::bindings::ConfigParam;
 use crate::config::{
-    BarConfig, ModuleParamValue, ParamWriteExpect, active_config_path, read_active_name,
+    BarConfig, DEFAULT_LOG_DAYS, ModuleParamValue, ParamWriteExpect, active_config_path,
+    read_active_name,
 };
 use crate::manifest::{Metadata, RequiredExtension};
 use crate::schema_probe::SchemaProbe;
@@ -282,7 +283,7 @@ impl App {
                     }
                     Err(err) => {
                         app.push_action_message(format!("{err}"));
-                        if let Err(init_err) = crate::logging::init(7) {
+                        if let Err(init_err) = crate::logging::init(DEFAULT_LOG_DAYS) {
                             crate::logging::to_stderr(
                                 log::Level::Error,
                                 &format!("failed to initialize logging: {init_err}"),
