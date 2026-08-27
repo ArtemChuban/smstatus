@@ -16,7 +16,7 @@ impl App {
         match list_preset_names(&config_dir) {
             Ok(names) if names.is_empty() => {
                 self.push_action_message(
-                    "no presets found; save one here or run init when available (#64)".to_string(),
+                    "no presets found; run smstatus init or save one here".to_string(),
                 );
             }
             Ok(names) => {

@@ -54,6 +54,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ExtensionCommands,
     },
+    Init {
+        /// Overwrite existing config skeleton files
+        #[arg(long)]
+        force: bool,
+    },
     Preset {
         #[command(subcommand)]
         command: PresetCommands,

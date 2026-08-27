@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn list_presets_marks_active() {
         let dir = test_fixtures::unique_config_dir("list-active");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
         let lines = list_presets_in(&dir).unwrap();
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn save_preset_copies_active() {
         let dir = test_fixtures::unique_config_dir("save");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         std::fs::write(
             active_config_path(&dir).unwrap(),
             "modules = [\"cpu\"]\nseparator = \" :: \"\n",
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn use_preset_switches_active_pointer() {
         let dir = test_fixtures::unique_config_dir("use");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
         use_preset_in(&dir, "work", false).unwrap();
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn use_preset_reload_succeeds_when_daemon_not_running() {
         let dir = test_fixtures::unique_config_dir("use-reload-not-running");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
         assert_eq!(
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn remove_preset_rejects_active_and_last() {
         let dir = test_fixtures::unique_config_dir("remove");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
         let err = remove_preset_in(&dir, "default").unwrap_err();
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn remove_preset_errors_when_missing() {
         let dir = test_fixtures::unique_config_dir("remove-missing");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
         let err = remove_preset_in(&dir, "ghost").unwrap_err();
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn write_active_name_updates_program_config() {
         let dir = test_fixtures::unique_config_dir("program-config");
-        create_default_preset(&dir).unwrap();
+        create_default_preset(&dir, false).unwrap();
         test_fixtures::write_preset(&dir, "work", "modules = []\n");
         use_preset_in(&dir, "work", false).unwrap();
 

@@ -2,15 +2,20 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 
+mod bar_load;
 mod discover;
 mod io;
 mod params;
 mod presets;
 mod write;
 
+pub(crate) const DEFAULT_LOG_DAYS: u64 = 7;
+
+pub(crate) use bar_load::{BarConfigLoad, IDLE_STATUS_MESSAGE, load_bar_config};
+
 pub(crate) use presets::{
-    active_config_path, copy_preset, list_preset_names, preset_file, read_active_name,
-    remove_preset_file, write_active_name,
+    active_config_path, copy_preset, init_config_layout, list_preset_names, preset_file,
+    read_active_name, remove_preset_file, write_active_name,
 };
 
 #[cfg(test)]
@@ -54,6 +59,10 @@ impl BarConfig {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         Ok(Self(toml::from_str(&content)?))
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self(toml::Table::new())
     }
 
     pub(crate) fn module_config_json(&self, module_name: &str) -> String {
@@ -105,7 +114,7 @@ impl BarConfig {
             .and_then(|v| v.as_integer())
             .filter(|&n| n >= 0)
             .map(|n| n as u64)
-            .unwrap_or(7)
+            .unwrap_or(DEFAULT_LOG_DAYS)
     }
 
     pub(crate) fn module_names(&self) -> Result<Vec<String>> {
