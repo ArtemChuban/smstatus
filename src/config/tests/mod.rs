@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod bar_load;
 mod discover;
 mod params;
 mod presets;

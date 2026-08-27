@@ -28,7 +28,7 @@ fn bar_config_separator_should_default_to_pipe_when_not_configured() {
 #[test]
 fn bar_config_log_days_should_default_to_seven_when_not_configured() {
     let config = BarConfig::from_table(toml::Table::new());
-    assert_eq!(config.log_days(), 7);
+    assert_eq!(config.log_days(), DEFAULT_LOG_DAYS);
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn bar_config_log_days_should_return_configured_value() {
 fn bar_config_log_days_should_default_when_value_is_invalid() {
     let table: toml::Table = toml::from_str(r#"log_days = "nope""#).unwrap();
     let config = BarConfig::from_table(table);
-    assert_eq!(config.log_days(), 7);
+    assert_eq!(config.log_days(), DEFAULT_LOG_DAYS);
 }
 
 #[test]
