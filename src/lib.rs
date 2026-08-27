@@ -7,6 +7,7 @@ mod daemon;
 mod error;
 mod extension;
 mod host;
+mod init;
 mod install;
 mod lock;
 mod logging;
@@ -132,6 +133,10 @@ pub fn run() -> ExitCode {
                 Ok(()) => cli_ok_line(&format!("removed extension `{name}`")),
                 Err(err) => cli_err(err),
             },
+        },
+        Some(Commands::Init { force }) => match init::cmd_init(force) {
+            Ok(message) => cli_ok_line(&message),
+            Err(err) => cli_err(err),
         },
         Some(Commands::Preset { command }) => match command {
             PresetCommands::List => match preset::list_presets() {

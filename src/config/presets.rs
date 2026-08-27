@@ -15,6 +15,15 @@ pub(crate) const PROGRAM_CONFIG_FILE: &str = "config.toml";
 #[allow(dead_code)]
 pub(crate) const DEFAULT_PRESET_NAME: &str = "default";
 
+const DEFAULT_PRESET_SKELETON: &str = r#"# bar layout preset
+# Install modules: smstatus module install <source>
+# Presets: smstatus preset list | save | use
+separator = " | "
+modules = []
+"#;
+
+const PROGRAM_CONFIG_SKELETON: &str = "[presets]\nactive = \"default\"\n";
+
 pub(crate) fn program_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join(PROGRAM_CONFIG_FILE)
 }
@@ -120,31 +129,41 @@ pub(crate) fn active_config_path(config_dir: &Path) -> Result<PathBuf> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn create_default_preset(config_dir: &Path) -> Result<()> {
+pub(crate) fn create_default_preset(config_dir: &Path, force: bool) -> Result<()> {
     let program_path = program_config_path(config_dir);
-    if program_path.exists() {
-        return Err(format!("{} already exists", program_path.display()).into());
-    }
-
     let default_preset = preset_file(config_dir, DEFAULT_PRESET_NAME)?;
-    if default_preset.exists() {
-        return Err(format!("{} already exists", default_preset.display()).into());
+
+    if !force {
+        if program_path.exists() {
+            return Err(format!("{} already exists", program_path.display()).into());
+        }
+        if default_preset.exists() {
+            return Err(format!("{} already exists", default_preset.display()).into());
+        }
     }
 
     std::fs::create_dir_all(presets_dir(config_dir))
         .map_err(|e| format!("cannot create {}: {e}", presets_dir(config_dir).display()))?;
 
-    let preset_content = "# bar layout preset\nseparator = \" | \"\nmodules = []\n";
-    atomic_write(&default_preset, preset_content)?;
+    atomic_write(&default_preset, DEFAULT_PRESET_SKELETON)?;
 
-    let program_content = "[presets]\nactive = \"default\"\n";
     if let Some(parent) = program_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    atomic_write(&program_path, program_content)?;
+    atomic_write(&program_path, PROGRAM_CONFIG_SKELETON)?;
 
     Ok(())
+}
+
+pub(crate) fn init_config_layout(config_dir: &Path, force: bool) -> Result<()> {
+    std::fs::create_dir_all(config_dir)
+        .map_err(|e| format!("cannot create {}: {e}", config_dir.display()))?;
+    std::fs::create_dir_all(config_dir.join("modules"))
+        .map_err(|e| format!("cannot create modules directory: {e}"))?;
+    std::fs::create_dir_all(config_dir.join("extensions"))
+        .map_err(|e| format!("cannot create extensions directory: {e}"))?;
+    create_default_preset(config_dir, force)
 }
 
 pub(crate) fn copy_preset(config_dir: &Path, from: &str, to: &str) -> Result<()> {

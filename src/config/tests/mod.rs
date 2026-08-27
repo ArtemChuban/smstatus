@@ -2,7 +2,7 @@ use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod bar_load;
-mod discover;
+mod init;
 mod params;
 mod presets;
 mod reads;

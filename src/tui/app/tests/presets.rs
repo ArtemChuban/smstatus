@@ -23,7 +23,7 @@ fn app_with_presets(config_dir: &std::path::Path) -> App {
 fn switch_preset_updates_modules_from_new_file() {
     install_test_log();
     let dir = unique_config_dir("switch-modules");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
     std::fs::write(
         active_config_path(&dir).unwrap(),
         "modules = [\"cpu\"]\nseparator = \" | \"\n",
@@ -51,7 +51,7 @@ fn switch_preset_updates_modules_from_new_file() {
 fn save_preset_creates_file_and_appears_in_list() {
     install_test_log();
     let dir = unique_config_dir("save-list");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
     std::fs::write(
         active_config_path(&dir).unwrap(),
         "modules = [\"cpu\"]\nseparator = \" | \"\n",
@@ -82,7 +82,7 @@ fn cannot_remove_active_preset_pushes_message() {
     install_test_log();
     clear_action_log();
     let dir = unique_config_dir("remove-active");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
     test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
     let mut app = app_with_presets(&dir);
@@ -110,7 +110,7 @@ fn switch_preset_notifies_daemon_when_not_running() {
     install_test_log();
     clear_action_log();
     let dir = unique_config_dir("switch-notify");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
     test_fixtures::write_preset(&dir, "work", "modules = []\n");
 
     let mut app = app_with_presets(&dir);
@@ -135,7 +135,7 @@ fn switch_preset_notifies_daemon_when_not_running() {
 #[test]
 fn refresh_config_drops_stale_choosing_preset_when_list_changes() {
     let dir = unique_config_dir("stale-choosing");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
 
     let mut app = app_with_presets(&dir);
     app.mode = Mode::ChoosingPreset {
@@ -161,7 +161,7 @@ fn refresh_config_drops_stale_choosing_preset_when_list_changes() {
 #[test]
 fn refresh_config_resyncs_active_preset_after_external_switch() {
     let dir = unique_config_dir("external-switch");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
     test_fixtures::write_preset(&dir, "work", "modules = [\"ram\"]\nseparator = \" :: \"\n");
     std::fs::write(
         active_config_path(&dir).unwrap(),

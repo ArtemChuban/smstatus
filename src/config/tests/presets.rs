@@ -70,7 +70,7 @@ fn preset_name_validation_rejects_unsafe_names() {
 #[test]
 fn create_default_preset_writes_both_files() {
     let dir = unique_temp_config_dir("create-default");
-    create_default_preset(&dir).unwrap();
+    create_default_preset(&dir, false).unwrap();
 
     assert!(program_config_path(&dir).is_file());
     assert!(preset_file(&dir, DEFAULT_PRESET_NAME).unwrap().is_file());
