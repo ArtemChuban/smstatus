@@ -873,6 +873,65 @@ pub(crate) fn install_extension(
     install_extension_into(&extensions_dir, source, options)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageKind {
+    Module,
+    Extension,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackageManifestPeek {
+    pub kind: PackageKind,
+    pub name: String,
+    pub version: String,
+}
+
+pub(crate) fn peek_package_manifest(
+    source: &str,
+    options: &InstallOptions,
+) -> Result<PackageManifestPeek> {
+    let check_path = source_label_for_install(source);
+    if !has_tar_gz_extension(&check_path) {
+        return Err(format!(
+            "package source must be a `.tar.gz` archive, got `{}`",
+            check_path.display()
+        )
+        .into());
+    }
+
+    let mut warnings = Vec::new();
+    let resolved = resolve_source(source, options)?;
+    verify_resolved_source(&resolved, source, options, &mut warnings)?;
+
+    let unpack = ScratchDir(unique_temp_dir("peek-unpack")?);
+    unpack_archive(resolved.path(), &unpack.0)?;
+    let root = package_root(&unpack.0)?;
+
+    let has_module = root.join("module.wasm").is_file();
+    let has_extension = root.join("extension").is_file();
+    match (has_module, has_extension) {
+        (true, false) => {
+            require_module_files(&root)?;
+            let manifest = manifest::read_module_manifest_from(&root.join("manifest.toml"))?;
+            Ok(PackageManifestPeek {
+                kind: PackageKind::Module,
+                name: manifest.name,
+                version: manifest.version,
+            })
+        }
+        (false, true) => {
+            require_extension_files(&root)?;
+            let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
+            Ok(PackageManifestPeek {
+                kind: PackageKind::Extension,
+                name: manifest.name,
+                version: manifest.version,
+            })
+        }
+        _ => Err("archive is not a recognized module or extension package".into()),
+    }
+}
+
 pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
     let kinds = crate::config::discover_module_kinds(modules_dir)?;
     let mut lines = Vec::with_capacity(kinds.len());

@@ -13,6 +13,7 @@ mod logging;
 mod manifest;
 mod meta;
 mod module;
+mod pin;
 mod preset;
 mod probe;
 mod reload;
@@ -24,7 +25,9 @@ mod x11;
 
 use std::process::ExitCode;
 
-use cli::{Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PresetCommands};
+use cli::{
+    Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PinCommands, PresetCommands,
+};
 
 fn cli_ok_line(message: &str) -> ExitCode {
     logging::to_stdout(log::Level::Info, message);
@@ -152,6 +155,20 @@ pub fn run() -> ExitCode {
                 Ok(()) => cli_ok_line(&format!("removed preset `{name}`")),
                 Err(err) => cli_err(err),
             },
+        },
+        Some(Commands::Pin { command }) => match command {
+            PinCommands::Apply {
+                file,
+                allow_insecure_http,
+            } => {
+                let global = pin::PinApplyOptions {
+                    allow_insecure_http,
+                };
+                match pin::apply_pin_file(&file, &global) {
+                    Ok(lines) => cli_ok_lines(lines),
+                    Err(err) => cli_err(err),
+                }
+            }
         },
         None => tui::run(),
     }
