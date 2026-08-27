@@ -77,14 +77,32 @@ pub(crate) enum PresetCommands {
 
 #[derive(Subcommand)]
 pub(crate) enum ModuleCommands {
-    Install { source: String },
+    Install {
+        source: String,
+        #[arg(long)]
+        allow_insecure_http: bool,
+        #[arg(long)]
+        sha256: Option<String>,
+    },
     List,
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
 pub(crate) enum ExtensionCommands {
-    Install { source: String },
+    Install {
+        source: String,
+        #[arg(long)]
+        allow_insecure_http: bool,
+        #[arg(long)]
+        sha256: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
     List,
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
 }

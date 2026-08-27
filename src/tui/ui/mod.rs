@@ -111,6 +111,18 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
                 };
                 draw_param_text_overlay(frame, region, title, buffer, *cursor)
             }
+            Mode::EnteringInstallSha256 {
+                target,
+                source,
+                buffer,
+                cursor,
+            } => {
+                let title = match target {
+                    InstallTarget::Module => format!("SHA-256 for module {source}"),
+                    InstallTarget::Extension => format!("SHA-256 for extension {source}"),
+                };
+                draw_param_text_overlay(frame, region, &title, buffer, *cursor)
+            }
             Mode::NamingModuleInstance {
                 kind,
                 buffer,
@@ -158,7 +170,8 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
             | Mode::EditingSeparator { .. }
             | Mode::ConfirmingRemove { .. }
             | Mode::ConfirmingRemoveParam { .. }
-            | Mode::ConfirmingRemovePreset { .. } => {}
+            | Mode::ConfirmingRemovePreset { .. }
+            | Mode::ConfirmingInstallReplace { .. } => {}
         }
     }
 }
