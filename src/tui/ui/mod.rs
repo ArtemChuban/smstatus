@@ -170,8 +170,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
             | Mode::EditingSeparator { .. }
             | Mode::ConfirmingRemove { .. }
             | Mode::ConfirmingRemoveParam { .. }
-            | Mode::ConfirmingRemovePreset { .. }
-            | Mode::ConfirmingInstallReplace { .. } => {}
+            | Mode::ConfirmingRemovePreset { .. } => {}
         }
     }
 }

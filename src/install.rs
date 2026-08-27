@@ -28,6 +28,8 @@ pub(crate) struct InstallOptions {
     pub allow_insecure_http: bool,
     pub expected_sha256: Option<String>,
     pub force: bool,
+    pub expected_name: Option<String>,
+    pub expected_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -35,23 +37,6 @@ pub(crate) struct InstallOutput<T> {
     pub value: T,
     pub warnings: Vec<String>,
 }
-
-#[derive(Debug)]
-pub(crate) struct ExtensionAlreadyInstalled {
-    pub name: String,
-}
-
-impl std::fmt::Display for ExtensionAlreadyInstalled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "extension `{}` is already installed; pass --force to replace",
-            self.name
-        )
-    }
-}
-
-impl std::error::Error for ExtensionAlreadyInstalled {}
 
 struct DecompressLimit<R> {
     inner: R,
@@ -146,6 +131,24 @@ pub(crate) fn decide_module_install(
     match installed {
         None => ModuleInstallAction::Fresh,
         Some(existing) if existing.version == candidate.version => ModuleInstallAction::Skip,
+        Some(_) => ModuleInstallAction::Replace,
+    }
+}
+
+pub(crate) fn decide_extension_install(
+    installed: Option<&Metadata>,
+    candidate: &Metadata,
+    force: bool,
+) -> ModuleInstallAction {
+    match installed {
+        None => ModuleInstallAction::Fresh,
+        Some(existing) if existing.version == candidate.version => {
+            if force {
+                ModuleInstallAction::Replace
+            } else {
+                ModuleInstallAction::Skip
+            }
+        }
         Some(_) => ModuleInstallAction::Replace,
     }
 }
@@ -409,25 +412,6 @@ fn verify_resolved_source(
     }
 }
 
-fn validate_tar_entry_path(path: &Path) -> Result<()> {
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                return Err(format!("archive entry path `{}` is absolute", path.display()).into());
-            }
-            std::path::Component::ParentDir => {
-                return Err(format!(
-                    "archive entry path `{}` contains parent directory component",
-                    path.display()
-                )
-                .into());
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 fn skip_tar_entry<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<()> {
     if entry.size() == 0 {
         return Ok(());
@@ -502,9 +486,43 @@ fn read_manifest_toml_from_archive(archive: &Path) -> Result<String> {
     Err(format!("archive `{}` missing manifest.toml", archive.display()).into())
 }
 
-fn extension_name_from_archive(archive: &Path) -> Result<String> {
-    let manifest = read_manifest_toml_from_archive(archive)?;
-    Ok(manifest::parse_extension_manifest_str(&manifest)?.name)
+fn validate_expected_manifest(name: &str, version: &str, options: &InstallOptions) -> Result<()> {
+    if let Some(expected_name) = &options.expected_name
+        && name != expected_name
+    {
+        return Err(format!(
+            "pin entry name `{expected_name}` does not match manifest name `{name}`"
+        )
+        .into());
+    }
+    if let Some(expected_version) = &options.expected_version
+        && version != expected_version
+    {
+        return Err(format!(
+            "pin entry version `{expected_version}` does not match manifest version `{version}`"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_tar_entry_path(path: &Path) -> Result<()> {
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                return Err(format!("archive entry path `{}` is absolute", path.display()).into());
+            }
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "archive entry path `{}` contains parent directory component",
+                    path.display()
+                )
+                .into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn unpack_archive(archive: &Path, dest: &Path) -> Result<()> {
@@ -730,6 +748,15 @@ fn stage_extension_package(root: &Path) -> Result<(ScratchDir, PathBuf)> {
     Ok((scratch, staged))
 }
 
+fn place_staged_extension(extensions_dir: &Path, root: &Path, name: &str) -> Result<()> {
+    let dest = manifest::extension_dir(extensions_dir, name);
+    let (_scratch, staged) = stage_extension_package(root)?;
+    place_package_dir(&staged, &dest)?;
+    set_executable(&manifest::extension_binary_path(extensions_dir, name))?;
+    let _ = manifest::read_extension_manifest(extensions_dir, name)?;
+    Ok(())
+}
+
 pub(crate) fn install_module_into(
     modules_dir: &Path,
     source: &str,
@@ -753,6 +780,7 @@ pub(crate) fn install_module_into(
     let root = package_root(&unpack.0)?;
     require_module_files(&root)?;
     let manifest = manifest::read_module_manifest_from(&root.join("manifest.toml"))?;
+    validate_expected_manifest(&manifest.name, &manifest.version, options)?;
     let kind = manifest.name.clone();
     let candidate = manifest.to_metadata();
     let dest = manifest::module_dir(modules_dir, &kind);
@@ -826,6 +854,7 @@ pub(crate) fn install_module(
 #[derive(Debug)]
 pub(crate) enum ExtensionInstallOutcome {
     Fresh { name: String },
+    Skip { name: String, metadata: Metadata },
     Replace { name: String },
 }
 
@@ -848,6 +877,12 @@ pub(crate) fn format_extension_outcome(outcome: &ExtensionInstallOutcome) -> Str
     match outcome {
         ExtensionInstallOutcome::Fresh { name } => {
             format!("installed extension `{name}`")
+        }
+        ExtensionInstallOutcome::Skip { name, metadata } => {
+            format!(
+                "extension `{name}` already installed ({})",
+                format_meta(metadata)
+            )
         }
         ExtensionInstallOutcome::Replace { name } => {
             format!(
@@ -875,31 +910,65 @@ pub(crate) fn install_extension_into(
     let resolved = resolve_source(source, options)?;
     verify_resolved_source(&resolved, source, options, &mut warnings)?;
 
-    let name = extension_name_from_archive(resolved.path())?;
+    let manifest_toml = read_manifest_toml_from_archive(resolved.path())?;
+    let manifest = manifest::parse_extension_manifest_str(&manifest_toml)?;
+    validate_expected_manifest(&manifest.name, &manifest.version, options)?;
+    let name = manifest.name.clone();
+    let candidate = manifest.to_metadata();
     let dest = manifest::extension_dir(extensions_dir, &name);
-    if dest.exists() && !options.force {
-        return Err(ExtensionAlreadyInstalled { name }.into());
+
+    if dest.exists() {
+        match manifest::read_extension_manifest(extensions_dir, &name) {
+            Ok(installed_manifest) => {
+                let installed = installed_manifest.to_metadata();
+                match decide_extension_install(Some(&installed), &candidate, options.force) {
+                    ModuleInstallAction::Skip => {
+                        return Ok(InstallOutput {
+                            value: ExtensionInstallOutcome::Skip {
+                                name,
+                                metadata: installed,
+                            },
+                            warnings,
+                        });
+                    }
+                    ModuleInstallAction::Replace => {
+                        let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
+                        unpack_archive(resolved.path(), &unpack.0)?;
+                        let root = package_root(&unpack.0)?;
+                        require_extension_files(&root)?;
+                        place_staged_extension(extensions_dir, &root, &name)?;
+                        return Ok(InstallOutput {
+                            value: ExtensionInstallOutcome::Replace { name },
+                            warnings,
+                        });
+                    }
+                    ModuleInstallAction::Fresh => {
+                        unreachable!("dest exists implies installed is Some")
+                    }
+                }
+            }
+            Err(_) => {
+                let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
+                unpack_archive(resolved.path(), &unpack.0)?;
+                let root = package_root(&unpack.0)?;
+                require_extension_files(&root)?;
+                place_staged_extension(extensions_dir, &root, &name)?;
+                return Ok(InstallOutput {
+                    value: ExtensionInstallOutcome::Replace { name },
+                    warnings,
+                });
+            }
+        }
     }
-    let replaced = dest.exists();
 
     let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
     unpack_archive(resolved.path(), &unpack.0)?;
     let root = package_root(&unpack.0)?;
     require_extension_files(&root)?;
-    let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
-    let name = manifest.name.clone();
-
-    let (_scratch, staged) = stage_extension_package(&root)?;
-    place_package_dir(&staged, &dest)?;
-    set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
-    let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+    place_staged_extension(extensions_dir, &root, &name)?;
 
     Ok(InstallOutput {
-        value: if replaced {
-            ExtensionInstallOutcome::Replace { name }
-        } else {
-            ExtensionInstallOutcome::Fresh { name }
-        },
+        value: ExtensionInstallOutcome::Fresh { name },
         warnings,
     })
 }
@@ -910,6 +979,68 @@ pub(crate) fn install_extension(
 ) -> Result<InstallOutput<ExtensionInstallOutcome>> {
     let extensions_dir = crate::config::default_config_dir()?.join("extensions");
     install_extension_into(&extensions_dir, source, options)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum PackageKind {
+    Module,
+    Extension,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct PackageManifestPeek {
+    pub kind: PackageKind,
+    pub name: String,
+    pub version: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn peek_package_manifest(
+    source: &str,
+    options: &InstallOptions,
+) -> Result<PackageManifestPeek> {
+    let check_path = source_label_for_install(source);
+    if !has_tar_gz_extension(&check_path) {
+        return Err(format!(
+            "package source must be a `.tar.gz` archive, got `{}`",
+            check_path.display()
+        )
+        .into());
+    }
+
+    let mut warnings = Vec::new();
+    let resolved = resolve_source(source, options)?;
+    verify_resolved_source(&resolved, source, options, &mut warnings)?;
+
+    let unpack = ScratchDir(unique_temp_dir("peek-unpack")?);
+    unpack_archive(resolved.path(), &unpack.0)?;
+    let root = package_root(&unpack.0)?;
+
+    let has_module = root.join("module.wasm").is_file();
+    let has_extension = root.join("extension").is_file();
+    match (has_module, has_extension) {
+        (true, false) => {
+            require_module_files(&root)?;
+            let manifest = manifest::read_module_manifest_from(&root.join("manifest.toml"))?;
+            Ok(PackageManifestPeek {
+                kind: PackageKind::Module,
+                name: manifest.name,
+                version: manifest.version,
+            })
+        }
+        (false, true) => {
+            require_extension_files(&root)?;
+            let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
+            Ok(PackageManifestPeek {
+                kind: PackageKind::Extension,
+                name: manifest.name,
+                version: manifest.version,
+            })
+        }
+        _ => Err("archive is not a recognized module or extension package".into()),
+    }
 }
 
 pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
@@ -1172,11 +1303,15 @@ mod tests {
     }
 
     fn pack_echo_archive() -> PathBuf {
+        pack_echo_archive_version("0.1.0")
+    }
+
+    fn pack_echo_archive_version(version: &str) -> PathBuf {
         let echo = find_or_build_echo();
-        let staging = temp_modules_dir("pack-echo");
+        let staging = temp_modules_dir(&format!("pack-echo-{version}"));
         fs::write(
             staging.join("manifest.toml"),
-            extension_manifest_toml("echo", "0.1.0"),
+            extension_manifest_toml("echo", version),
         )
         .unwrap();
         fs::copy(&echo, staging.join("extension")).unwrap();
@@ -1442,6 +1577,73 @@ mod tests {
     }
 
     #[test]
+    fn decide_extension_install_skip_same_version_without_force() {
+        let installed = meta("1.0.0");
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, false),
+            ModuleInstallAction::Skip
+        );
+    }
+
+    #[test]
+    fn decide_extension_install_replace_different_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("2.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, false),
+            ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
+    fn decide_extension_install_force_replaces_same_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, true),
+            ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
+    fn peek_package_manifest_reads_module_archive() {
+        let archive = pack_module_archive("battery", "0.1.0");
+        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
+        assert_eq!(peek.kind, PackageKind::Module);
+        assert_eq!(peek.name, "battery");
+        assert_eq!(peek.version, "0.1.0");
+    }
+
+    #[test]
+    fn peek_package_manifest_reads_extension_archive() {
+        let archive = pack_echo_archive();
+        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
+        assert_eq!(peek.kind, PackageKind::Extension);
+        assert_eq!(peek.name, "echo");
+        assert_eq!(peek.version, "0.1.0");
+    }
+
+    #[test]
+    fn peek_package_manifest_rejects_ambiguous_archive() {
+        let staging = temp_modules_dir("peek-ambiguous");
+        fs::write(
+            staging.join("manifest.toml"),
+            extension_manifest_toml("echo", "0.1.0"),
+        )
+        .unwrap();
+        fs::write(staging.join("module.wasm"), b"wasm").unwrap();
+        fs::write(staging.join("extension"), b"bin").unwrap();
+        let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
+        write_tar_gz(&staging, &archive).unwrap();
+        let err = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("not a recognized module or extension package")
+        );
+    }
+
+    #[test]
     fn install_module_into_fresh_and_skip_same_version() {
         let modules_dir = temp_modules_dir("fresh-skip");
         let archive = pack_module_archive("battery", "0.1.0");
@@ -1617,20 +1819,72 @@ mod tests {
         let again = extension_value(install_extension_into(
             &extensions_dir,
             archive.to_str().unwrap(),
-            &InstallOptions {
-                force: true,
-                ..Default::default()
-            },
+            &install_options(),
         ));
         match again {
-            ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
-            other => panic!("expected Replace, got {other:?}"),
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
         }
         assert!(registry.is_installed("echo"));
     }
 
     #[test]
-    fn install_extension_into_requires_force_to_replace() {
+    fn install_extension_into_fresh_and_skip_same_version() {
+        let base = temp_modules_dir("ext-fresh-skip");
+        let extensions_dir = base.join("extensions");
+        let archive = pack_echo_archive();
+
+        let first = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+        match &first {
+            ExtensionInstallOutcome::Fresh { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        assert!(manifest::extension_manifest_path(&extensions_dir, "echo").exists());
+        assert!(manifest::extension_binary_path(&extensions_dir, "echo").exists());
+
+        let second = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+        match second {
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_extension_into_replaces_different_version_without_force() {
+        let base = temp_modules_dir("ext-replace-version");
+        let extensions_dir = base.join("extensions");
+        let archive = pack_echo_archive();
+
+        let _ = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+
+        let newer = pack_echo_archive_version("9.9.9");
+        let outcome = extension_value(install_extension_into(
+            &extensions_dir,
+            newer.to_str().unwrap(),
+            &install_options(),
+        ));
+        match outcome {
+            ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        let installed = manifest::read_extension_manifest(&extensions_dir, "echo").unwrap();
+        assert_eq!(installed.version, "9.9.9");
+    }
+
+    #[test]
+    fn install_extension_into_same_version_skips_without_force_and_replaces_with_force() {
         let base = temp_modules_dir("ext-force");
         let extensions_dir = base.join("extensions");
         let archive = pack_echo_archive();
@@ -1641,14 +1895,15 @@ mod tests {
             &install_options(),
         ));
 
-        let err = install_extension_into(
+        let outcome = extension_value(install_extension_into(
             &extensions_dir,
             archive.to_str().unwrap(),
             &install_options(),
-        )
-        .unwrap_err();
-        let already = err.downcast::<ExtensionAlreadyInstalled>().unwrap();
-        assert_eq!(already.name, "echo");
+        ));
+        match outcome {
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
+        }
 
         let outcome = extension_value(install_extension_into(
             &extensions_dir,

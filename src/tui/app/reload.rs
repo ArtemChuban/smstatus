@@ -128,7 +128,6 @@ impl App {
         }
         self.refresh_installed_extensions();
         self.drop_stale_confirming_remove_mode();
-        self.drop_stale_confirming_install_replace_mode();
         self.drop_stale_param_modes();
         self.drop_stale_preset_modes();
     }
@@ -436,27 +435,6 @@ impl App {
             .and_then(|modules| modules.get(*index))
             .is_some_and(|current| current == name);
         if !still_armed {
-            self.mode = Mode::Normal;
-        }
-    }
-
-    pub(super) fn drop_stale_confirming_install_replace_mode(&mut self) {
-        let Mode::ConfirmingInstallReplace { source, name } = &self.mode else {
-            return;
-        };
-        let Some(extensions_dir) = self.extensions_dir.as_ref() else {
-            self.mode = Mode::Normal;
-            return;
-        };
-        let dest = crate::manifest::extension_dir(extensions_dir, name);
-        if !dest.exists() {
-            self.mode = Mode::Normal;
-            return;
-        }
-        let source_still_valid = source.starts_with("http://")
-            || source.starts_with("https://")
-            || std::path::Path::new(source.as_str()).exists();
-        if !source_still_valid {
             self.mode = Mode::Normal;
         }
     }

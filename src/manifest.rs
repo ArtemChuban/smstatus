@@ -72,6 +72,16 @@ impl ModulePermission {
     }
 }
 
+impl ExtensionManifest {
+    pub(crate) fn to_metadata(&self) -> Metadata {
+        Metadata {
+            display_name: self.name.clone(),
+            version: self.version.clone(),
+            author: self.author.clone(),
+        }
+    }
+}
+
 impl ModuleManifest {
     pub(crate) fn to_metadata(&self) -> Metadata {
         Metadata {

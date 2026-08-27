@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 pub(crate) const DAEMON_ENV_VAR: &str = "SMSTATUS_DAEMON_CHILD";
@@ -56,6 +58,10 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: PresetCommands,
     },
+    Pin {
+        #[command(subcommand)]
+        command: PinCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -72,6 +78,15 @@ pub(crate) enum PresetCommands {
     },
     Remove {
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PinCommands {
+    Apply {
+        file: PathBuf,
+        #[arg(long)]
+        allow_insecure_http: bool,
     },
 }
 

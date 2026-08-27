@@ -88,10 +88,10 @@ fn tui_install_extension_from_archive_updates_list_and_logs_outcome() {
 }
 
 #[test]
-fn tui_extension_reinstall_enters_confirm_mode_and_force_succeeds() {
+fn tui_extension_reinstall_logs_skip_and_stays_normal() {
     install_test_log();
     clear_action_log();
-    let base = unique_temp_path("tui-install-ext-replace").with_extension("");
+    let base = unique_temp_path("tui-install-ext-skip").with_extension("");
     let extensions_dir = base.join("extensions");
     std::fs::create_dir_all(&extensions_dir).unwrap();
     let archive = pack_minimal_extension_archive("probe").unwrap();
@@ -115,20 +115,11 @@ fn tui_extension_reinstall_enters_confirm_mode_and_force_succeeds() {
         cursor: 0,
     };
     app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(
-        app.mode,
-        Mode::ConfirmingInstallReplace {
-            source: source.clone(),
-            name: "probe".to_string(),
-        }
-    );
-
-    app.handle_key(key(KeyCode::Char('d'), KeyModifiers::NONE));
     assert_eq!(app.mode, Mode::Normal);
     assert!(
         action_log()
             .iter()
-            .any(|m| m.contains("replaced extension `probe`")),
+            .any(|m| m.contains("extension `probe` already installed")),
         "unexpected log: {:?}",
         action_log()
     );
