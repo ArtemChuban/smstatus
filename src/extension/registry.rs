@@ -41,6 +41,14 @@ pub(crate) fn is_safe_extension_name(name: &str) -> bool {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum ExtensionLiveState {
+    Idle,
+    Live,
+    BackingOff { retry_in_secs: u64 },
+}
+
 pub(crate) struct ExtensionRegistry {
     extensions_dir: PathBuf,
     socket_dir: PathBuf,
@@ -174,6 +182,28 @@ impl ExtensionRegistry {
             self.kill_child(name);
             log::info!("extension `{name}` reloaded; next host call will use the binary on disk");
         }
+    }
+
+    pub(crate) fn live_state(&self, name: &str) -> ExtensionLiveState {
+        if let Some(state) = lock(&self.failures).get(name) {
+            let now = Instant::now();
+            if now < state.retry_after {
+                return ExtensionLiveState::BackingOff {
+                    retry_in_secs: state
+                        .retry_after
+                        .saturating_duration_since(now)
+                        .as_secs()
+                        .max(1),
+                };
+            }
+        }
+        if lock(&self.connections).contains_key(name) {
+            return ExtensionLiveState::Live;
+        }
+        if lock(&self.children).contains_key(name) {
+            return ExtensionLiveState::Live;
+        }
+        ExtensionLiveState::Idle
     }
 
     pub(crate) fn call(&self, name: &str, method: &str, payload: &str) -> Result<String, String> {
@@ -408,5 +438,49 @@ mod tests {
         assert_eq!(registry.call("echo", "ping", "before").unwrap(), "before");
         registry.drop_running(&["echo".to_string()]);
         assert_eq!(registry.call("echo", "ping", "after").unwrap(), "after");
+    }
+
+    #[test]
+    fn live_state_is_live_after_successful_call() {
+        let base = temp_dir();
+        let extensions_dir = base.join("extensions");
+        let socket_dir = base.join("sockets");
+        install_echo(&extensions_dir);
+
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
+        assert_eq!(registry.live_state("echo"), ExtensionLiveState::Idle);
+        registry.call("echo", "ping", "hello").unwrap();
+        assert_eq!(registry.live_state("echo"), ExtensionLiveState::Live);
+    }
+
+    #[test]
+    fn live_state_is_idle_after_drop_running() {
+        let base = temp_dir();
+        let extensions_dir = base.join("extensions");
+        let socket_dir = base.join("sockets");
+        install_echo(&extensions_dir);
+
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
+        registry.call("echo", "ping", "hello").unwrap();
+        assert_eq!(registry.live_state("echo"), ExtensionLiveState::Live);
+        registry.drop_running(&["echo".to_string()]);
+        assert_eq!(registry.live_state("echo"), ExtensionLiveState::Idle);
+    }
+
+    #[test]
+    fn live_state_reports_backoff_after_repeated_failures() {
+        let base = temp_dir();
+        let extensions_dir = base.join("extensions");
+        let socket_dir = base.join("sockets");
+        install_failing(&extensions_dir, "broken");
+
+        let registry = ExtensionRegistry::new(extensions_dir, socket_dir);
+        let _ = registry.call("broken", "ping", "hello");
+        match registry.live_state("broken") {
+            ExtensionLiveState::BackingOff { retry_in_secs } => {
+                assert!(retry_in_secs > 0);
+            }
+            other => panic!("expected backoff, got {other:?}"),
+        }
     }
 }

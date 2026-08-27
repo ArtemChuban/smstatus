@@ -120,6 +120,10 @@ pub fn run() -> ExitCode {
                 Ok(lines) => cli_ok_lines(lines),
                 Err(err) => cli_err(err),
             },
+            ExtensionCommands::Status { limit } => match extension::cmd_extension_status(limit) {
+                Ok(lines) => cli_ok_lines(lines),
+                Err(err) => cli_err(err),
+            },
             ExtensionCommands::Remove { name } => match install::remove_extension(&name) {
                 Ok(()) => cli_ok_line(&format!("removed extension `{name}`")),
                 Err(err) => cli_err(err),

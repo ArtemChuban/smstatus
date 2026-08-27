@@ -391,8 +391,6 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
-// Catalog (#65) and preset install (#66) should populate InstallOptions.expected_sha256
-// instead of adding a second verifier here.
 fn verify_resolved_source(
     resolved: &ResolvedSource,
     source: &str,
