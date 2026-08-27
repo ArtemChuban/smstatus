@@ -286,9 +286,28 @@ build-extension-by-package name:
     if [ "{{profile}}" = "release" ]; then flags="--release"; fi
     cargo build -p "{{name}}" $flags
 
-pack-modules: (pack-module "battery") (pack-module "datetime") (pack-module "keyboard") (pack-module "disk") (pack-module "ram") (pack-module "cpu") (pack-module "process") (pack-module "claude")
+# Shipped names come from .github/scripts/pack-release-archives.sh (single allowlist).
+pack-modules:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    while IFS= read -r name; do
+      [ -z "${name}" ] && continue
+      just --set profile "{{profile}}" pack-module "${name}"
+    done < <(.github/scripts/pack-release-archives.sh --list-modules)
 
-pack-extensions: (pack-extension "echo" "echo") (pack-extension "smstatus-time" "time") (pack-extension "smstatus-fs" "fs") (pack-extension "smstatus-mem" "mem") (pack-extension "smstatus-xkb" "xkb") (pack-extension "smstatus-disk" "disk") (pack-extension "smstatus-process" "process") (pack-extension "smstatus-http" "http")
+pack-extensions:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    while IFS= read -r pair; do
+      [ -z "${pair}" ] && continue
+      just --set profile "{{profile}}" pack-extension "${pair%%:*}" "${pair#*:}"
+    done < <(.github/scripts/pack-release-archives.sh --list-extension-pairs)
+
+# Versioned archives + checksums under dist/release/ (see .github/scripts/pack-release-archives.sh).
+pack-release-archives *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    .github/scripts/pack-release-archives.sh {{args}}
 
 stage-module name dest: (pack-module name)
     #!/usr/bin/env bash
