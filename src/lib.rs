@@ -25,6 +25,11 @@ mod tui;
 mod version;
 mod x11;
 
+pub use version::{
+    HOST_EXTENSIONS_API, HOST_MODULES_API, calver_ord, format_api_version, format_calver,
+    is_legal_api_step, parse_alpha_release_tag, parse_calver, release_notes_body,
+};
+
 use std::process::ExitCode;
 
 use cli::{
