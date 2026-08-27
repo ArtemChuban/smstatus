@@ -147,11 +147,13 @@ pub(crate) fn create_default_preset(config_dir: &Path, force: bool) -> Result<()
 
     atomic_write(&default_preset, DEFAULT_PRESET_SKELETON)?;
 
-    if let Some(parent) = program_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    if !program_path.exists() {
+        if let Some(parent) = program_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+        atomic_write(&program_path, PROGRAM_CONFIG_SKELETON)?;
     }
-    atomic_write(&program_path, PROGRAM_CONFIG_SKELETON)?;
 
     Ok(())
 }

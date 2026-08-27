@@ -30,7 +30,7 @@ fn init_config_layout_active_pointer_resolves() {
 }
 
 #[test]
-fn init_config_layout_force_refreshes_skeleton() {
+fn init_config_layout_force_refreshes_default_preset_only() {
     let dir = unique_config_dir("config-init-force");
     init_config_layout(&dir, false).unwrap();
     test_fixtures::write_program_config(&dir, "broken\n");
@@ -39,13 +39,29 @@ fn init_config_layout_force_refreshes_skeleton() {
     init_config_layout(&dir, true).unwrap();
 
     let program = std::fs::read_to_string(program_config_path(&dir)).unwrap();
-    assert!(program.contains("[presets]"));
-    assert!(program.contains("active = \"default\""));
+    assert_eq!(program, "broken\n");
 
     let preset = std::fs::read_to_string(preset_file(&dir, "default").unwrap()).unwrap();
     assert!(preset.contains("modules = []"));
     assert!(preset.contains("# bar layout preset"));
-    assert!(active_config_path(&dir).is_ok());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn init_config_layout_force_preserves_active_preset_pointer() {
+    let dir = unique_config_dir("config-init-force-active");
+    init_config_layout(&dir, false).unwrap();
+    test_fixtures::write_preset(&dir, "work", "modules = [\"cpu\"]\n");
+    test_fixtures::write_program_config(&dir, "[presets]\nactive = \"work\"\n");
+
+    init_config_layout(&dir, true).unwrap();
+
+    assert_eq!(read_active_name(&dir).unwrap(), "work");
+    assert_eq!(
+        active_config_path(&dir).unwrap(),
+        preset_file(&dir, "work").unwrap()
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
