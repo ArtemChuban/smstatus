@@ -49,12 +49,12 @@ pub(crate) struct ModuleRuntime {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum UnmetExtension {
+pub(crate) enum UnmetExtension {
     Missing(String),
     Incompatible(String),
 }
 
-fn unmet_extensions(
+pub(crate) fn unmet_extensions(
     required: &[RequiredExtension],
     registry: &ExtensionRegistry,
 ) -> Vec<UnmetExtension> {

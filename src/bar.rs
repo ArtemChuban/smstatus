@@ -34,10 +34,6 @@ fn activate_config(
 ) -> Option<(Vec<ModuleState>, String)> {
     let separator = loaded.separator();
     let log_days = loaded.log_days();
-    let module_names = loaded.module_names().ok()?;
-    if module_names.is_empty() {
-        return None;
-    }
 
     if init_logging {
         if let Err(err) = logging::init(log_days) {
@@ -53,6 +49,7 @@ fn activate_config(
     *config.write().unwrap_or_else(PoisonError::into_inner) = loaded;
     let modules = start_modules(runtime, config).ok()?;
     if modules.is_empty() {
+        log::warn!("configured modules failed to start; staying idle ({IDLE_STATUS_MESSAGE})");
         *config.write().unwrap_or_else(PoisonError::into_inner) = BarConfig::empty();
         return None;
     }
@@ -290,7 +287,8 @@ fn apply_reload_batch(
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
-    use std::sync::Arc;
+    use std::path::PathBuf;
+    use std::sync::{Arc, OnceLock};
 
     use super::*;
     use crate::config::test_fixtures::{self, unique_config_dir};
@@ -333,6 +331,106 @@ mod tests {
         std::fs::write(
             pkg.join("manifest.toml"),
             "name = \"echo\"\nversion = \"0.1.0\"\nauthor = \"test\"\nextensions-api = { major = 0, minor = 1 }\n",
+        )
+        .unwrap();
+    }
+
+    fn find_or_build_extension(name: &str) -> PathBuf {
+        static TIME: OnceLock<PathBuf> = OnceLock::new();
+
+        let (cache, package) = match name {
+            "time" => (&TIME, "smstatus-time"),
+            other => panic!("unsupported extension fixture `{other}`"),
+        };
+
+        cache
+            .get_or_init(|| {
+                if let Ok(path) = std::env::var(format!("CARGO_BIN_EXE_{name}")) {
+                    let path = PathBuf::from(path);
+                    if path.exists() {
+                        return path;
+                    }
+                }
+
+                let mut dir = std::env::current_exe().unwrap();
+                dir.pop();
+                if dir.ends_with("deps") {
+                    dir.pop();
+                }
+                let bin = dir.join(name);
+                if bin.exists() {
+                    return bin;
+                }
+
+                let target_dir = dir.parent().expect("debug dir has a target-dir parent");
+                let status = std::process::Command::new(env!("CARGO"))
+                    .current_dir(env!("CARGO_MANIFEST_DIR"))
+                    .args(["build", "-p", package, "--target-dir"])
+                    .arg(target_dir)
+                    .status()
+                    .unwrap_or_else(|e| panic!("failed to spawn cargo build -p {package}: {e}"));
+                assert!(
+                    status.success() && bin.exists(),
+                    "extension fixture missing at {}; build with `cargo build -p {package} --target-dir {}`",
+                    bin.display(),
+                    target_dir.display()
+                );
+                bin
+            })
+            .clone()
+    }
+
+    fn find_or_build_datetime_wasm() -> PathBuf {
+        static DATETIME: OnceLock<PathBuf> = OnceLock::new();
+        DATETIME
+            .get_or_init(|| {
+                let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let wasm = manifest_dir
+                    .join("target/wasm32-wasip2/debug")
+                    .join("datetime.wasm");
+                if wasm.exists() {
+                    return wasm;
+                }
+
+                let status = std::process::Command::new(env!("CARGO"))
+                    .current_dir(&manifest_dir)
+                    .args([
+                        "build",
+                        "-p",
+                        "datetime",
+                        "--target",
+                        "wasm32-wasip2",
+                    ])
+                    .status()
+                    .unwrap_or_else(|e| panic!("failed to spawn cargo build -p datetime: {e}"));
+                assert!(
+                    status.success() && wasm.exists(),
+                    "datetime wasm missing at {}; build with `cargo build -p datetime --target wasm32-wasip2`",
+                    wasm.display()
+                );
+                wasm
+            })
+            .clone()
+    }
+
+    fn install_time_extension(extensions_dir: &Path) {
+        let pkg = extensions_dir.join("time");
+        std::fs::create_dir_all(&pkg).unwrap();
+        symlink(find_or_build_extension("time"), pkg.join("extension")).unwrap();
+        std::fs::write(
+            pkg.join("manifest.toml"),
+            "name = \"time\"\nversion = \"0.1.0\"\nauthor = \"test\"\nextensions-api = { major = 0, minor = 1 }\n",
+        )
+        .unwrap();
+    }
+
+    fn install_datetime_module(modules_dir: &Path) {
+        let pkg = modules_dir.join("datetime");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::copy(find_or_build_datetime_wasm(), pkg.join("module.wasm")).unwrap();
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("modules/datetime/manifest.toml"),
+            pkg.join("manifest.toml"),
         )
         .unwrap();
     }
@@ -386,6 +484,39 @@ mod tests {
         assert!(matches!(load_bar_config(&dir), BarConfigLoad::Ready { .. }));
 
         assert!(try_leave_idle(&dir, &config, &runtime).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idle_promotes_to_active_when_modules_installed() {
+        let dir = unique_config_dir("bar-idle-promote-ok");
+        std::fs::create_dir_all(dir.join("modules")).unwrap();
+        std::fs::create_dir_all(dir.join("extensions")).unwrap();
+        test_fixtures::write_program_config(&dir, "[presets]\nactive = \"default\"\n");
+        test_fixtures::write_preset(&dir, "default", "modules = []\n");
+
+        let config = Arc::new(RwLock::new(BarConfig::empty()));
+        let runtime = test_runtime(&dir);
+
+        assert!(matches!(
+            resolve_initial_bar_mode(&dir, &runtime, &config),
+            InitialBarMode::Idle
+        ));
+
+        install_time_extension(&dir.join("extensions"));
+        install_datetime_module(&dir.join("modules"));
+        test_fixtures::write_preset(&dir, "default", "modules = [\"datetime\"]\n");
+
+        let result = try_leave_idle(&dir, &config, &runtime);
+        assert!(result.is_some());
+        let (modules, separator) = result.unwrap();
+        assert!(!modules.is_empty());
+        assert_eq!(
+            config.read().unwrap().module_names().unwrap(),
+            vec!["datetime".to_string()]
+        );
+        assert_eq!(separator, " | ");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

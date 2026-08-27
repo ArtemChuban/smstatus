@@ -14,8 +14,8 @@ pub(crate) const DEFAULT_LOG_DAYS: u64 = 7;
 pub(crate) use bar_load::{BarConfigLoad, IDLE_STATUS_MESSAGE, load_bar_config};
 
 pub(crate) use presets::{
-    active_config_path, copy_preset, init_config_layout, list_preset_names, preset_file,
-    read_active_name, remove_preset_file, write_active_name,
+    PROGRAM_CONFIG_FILE, active_config_path, copy_preset, init_config_layout, list_preset_names,
+    preset_file, read_active_name, remove_preset_file, write_active_name,
 };
 
 #[cfg(test)]
