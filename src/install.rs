@@ -18,7 +18,6 @@ use crate::reload::ReloadRequest;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UNPACKED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
@@ -35,23 +34,6 @@ pub(crate) struct InstallOutput<T> {
     pub value: T,
     pub warnings: Vec<String>,
 }
-
-#[derive(Debug)]
-pub(crate) struct ExtensionAlreadyInstalled {
-    pub name: String,
-}
-
-impl std::fmt::Display for ExtensionAlreadyInstalled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "extension `{}` is already installed; pass --force to replace",
-            self.name
-        )
-    }
-}
-
-impl std::error::Error for ExtensionAlreadyInstalled {}
 
 struct DecompressLimit<R> {
     inner: R,
@@ -146,6 +128,24 @@ pub(crate) fn decide_module_install(
     match installed {
         None => ModuleInstallAction::Fresh,
         Some(existing) if existing.version == candidate.version => ModuleInstallAction::Skip,
+        Some(_) => ModuleInstallAction::Replace,
+    }
+}
+
+pub(crate) fn decide_extension_install(
+    installed: Option<&Metadata>,
+    candidate: &Metadata,
+    force: bool,
+) -> ModuleInstallAction {
+    match installed {
+        None => ModuleInstallAction::Fresh,
+        Some(existing) if existing.version == candidate.version => {
+            if force {
+                ModuleInstallAction::Replace
+            } else {
+                ModuleInstallAction::Skip
+            }
+        }
         Some(_) => ModuleInstallAction::Replace,
     }
 }
@@ -426,85 +426,6 @@ fn validate_tar_entry_path(path: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn skip_tar_entry<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<()> {
-    if entry.size() == 0 {
-        return Ok(());
-    }
-    std::io::copy(entry, &mut std::io::sink())
-        .map_err(|e| format!("failed to skip archive entry: {e}"))?;
-    Ok(())
-}
-
-fn read_manifest_toml_from_archive(archive: &Path) -> Result<String> {
-    let file = fs::File::open(archive)
-        .map_err(|e| format!("failed to open archive `{}`: {e}", archive.display()))?;
-    let decoder = DecompressLimit::new(GzDecoder::new(file), MAX_UNPACKED_BYTES);
-    let mut tar = tar::Archive::new(decoder);
-    for entry in tar.entries().map_err(|e| {
-        format!(
-            "failed to read archive entries from `{}`: {e}",
-            archive.display()
-        )
-    })? {
-        let mut entry = entry.map_err(|e| {
-            format!(
-                "failed to read archive entry from `{}`: {e}",
-                archive.display()
-            )
-        })?;
-        match entry.header().entry_type() {
-            tar::EntryType::Regular | tar::EntryType::GNUSparse => {}
-            tar::EntryType::Directory => {
-                skip_tar_entry(&mut entry)?;
-                continue;
-            }
-            other => {
-                return Err(format!(
-                    "unsupported archive entry type `{other:?}` in `{}`",
-                    archive.display()
-                )
-                .into());
-            }
-        }
-        let path = entry
-            .path()
-            .map_err(|e| format!("invalid archive entry path in `{}`: {e}", archive.display()))?;
-        validate_tar_entry_path(&path)?;
-        if path.file_name() != Some(std::ffi::OsStr::new("manifest.toml")) {
-            skip_tar_entry(&mut entry)?;
-            continue;
-        }
-        let size = entry.header().size().unwrap_or(0);
-        if size > MAX_MANIFEST_BYTES {
-            return Err(format!(
-                "manifest.toml exceeds maximum size of {MAX_MANIFEST_BYTES} bytes in `{}`",
-                archive.display()
-            )
-            .into());
-        }
-        let mut buf = vec![0u8; size as usize];
-        std::io::Read::read_exact(&mut entry, &mut buf).map_err(|e| {
-            format!(
-                "failed to read manifest.toml from `{}`: {e}",
-                archive.display()
-            )
-        })?;
-        return String::from_utf8(buf).map_err(|e| {
-            format!(
-                "manifest.toml in `{}` is not valid UTF-8: {e}",
-                archive.display()
-            )
-            .into()
-        });
-    }
-    Err(format!("archive `{}` missing manifest.toml", archive.display()).into())
-}
-
-fn extension_name_from_archive(archive: &Path) -> Result<String> {
-    let manifest = read_manifest_toml_from_archive(archive)?;
-    Ok(manifest::parse_extension_manifest_str(&manifest)?.name)
 }
 
 fn unpack_archive(archive: &Path, dest: &Path) -> Result<()> {
@@ -826,6 +747,7 @@ pub(crate) fn install_module(
 #[derive(Debug)]
 pub(crate) enum ExtensionInstallOutcome {
     Fresh { name: String },
+    Skip { name: String, metadata: Metadata },
     Replace { name: String },
 }
 
@@ -848,6 +770,12 @@ pub(crate) fn format_extension_outcome(outcome: &ExtensionInstallOutcome) -> Str
     match outcome {
         ExtensionInstallOutcome::Fresh { name } => {
             format!("installed extension `{name}`")
+        }
+        ExtensionInstallOutcome::Skip { name, metadata } => {
+            format!(
+                "extension `{name}` already installed ({})",
+                format_meta(metadata)
+            )
         }
         ExtensionInstallOutcome::Replace { name } => {
             format!(
@@ -875,19 +803,56 @@ pub(crate) fn install_extension_into(
     let resolved = resolve_source(source, options)?;
     verify_resolved_source(&resolved, source, options, &mut warnings)?;
 
-    let name = extension_name_from_archive(resolved.path())?;
-    let dest = manifest::extension_dir(extensions_dir, &name);
-    if dest.exists() && !options.force {
-        return Err(ExtensionAlreadyInstalled { name }.into());
-    }
-    let replaced = dest.exists();
-
     let unpack = ScratchDir(unique_temp_dir("ext-unpack")?);
     unpack_archive(resolved.path(), &unpack.0)?;
     let root = package_root(&unpack.0)?;
     require_extension_files(&root)?;
     let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
     let name = manifest.name.clone();
+    let candidate = manifest.to_metadata();
+    let dest = manifest::extension_dir(extensions_dir, &name);
+
+    if dest.exists() {
+        match manifest::read_extension_manifest(extensions_dir, &name) {
+            Ok(installed_manifest) => {
+                let installed = installed_manifest.to_metadata();
+                match decide_extension_install(Some(&installed), &candidate, options.force) {
+                    ModuleInstallAction::Skip => {
+                        return Ok(InstallOutput {
+                            value: ExtensionInstallOutcome::Skip {
+                                name,
+                                metadata: installed,
+                            },
+                            warnings,
+                        });
+                    }
+                    ModuleInstallAction::Replace => {
+                        let (_scratch, staged) = stage_extension_package(&root)?;
+                        place_package_dir(&staged, &dest)?;
+                        set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
+                        let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+                        return Ok(InstallOutput {
+                            value: ExtensionInstallOutcome::Replace { name },
+                            warnings,
+                        });
+                    }
+                    ModuleInstallAction::Fresh => {
+                        unreachable!("dest exists implies installed is Some")
+                    }
+                }
+            }
+            Err(_) => {
+                let (_scratch, staged) = stage_extension_package(&root)?;
+                place_package_dir(&staged, &dest)?;
+                set_executable(&manifest::extension_binary_path(extensions_dir, &name))?;
+                let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
+                return Ok(InstallOutput {
+                    value: ExtensionInstallOutcome::Replace { name },
+                    warnings,
+                });
+            }
+        }
+    }
 
     let (_scratch, staged) = stage_extension_package(&root)?;
     place_package_dir(&staged, &dest)?;
@@ -895,11 +860,7 @@ pub(crate) fn install_extension_into(
     let _ = manifest::read_extension_manifest(extensions_dir, &name)?;
 
     Ok(InstallOutput {
-        value: if replaced {
-            ExtensionInstallOutcome::Replace { name }
-        } else {
-            ExtensionInstallOutcome::Fresh { name }
-        },
+        value: ExtensionInstallOutcome::Fresh { name },
         warnings,
     })
 }
@@ -1172,11 +1133,15 @@ mod tests {
     }
 
     fn pack_echo_archive() -> PathBuf {
+        pack_echo_archive_version("0.1.0")
+    }
+
+    fn pack_echo_archive_version(version: &str) -> PathBuf {
         let echo = find_or_build_echo();
-        let staging = temp_modules_dir("pack-echo");
+        let staging = temp_modules_dir(&format!("pack-echo-{version}"));
         fs::write(
             staging.join("manifest.toml"),
-            extension_manifest_toml("echo", "0.1.0"),
+            extension_manifest_toml("echo", version),
         )
         .unwrap();
         fs::copy(&echo, staging.join("extension")).unwrap();
@@ -1442,6 +1407,36 @@ mod tests {
     }
 
     #[test]
+    fn decide_extension_install_skip_same_version_without_force() {
+        let installed = meta("1.0.0");
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, false),
+            ModuleInstallAction::Skip
+        );
+    }
+
+    #[test]
+    fn decide_extension_install_replace_different_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("2.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, false),
+            ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
+    fn decide_extension_install_force_replaces_same_version() {
+        let installed = meta("1.0.0");
+        let candidate = meta("1.0.0");
+        assert_eq!(
+            decide_extension_install(Some(&installed), &candidate, true),
+            ModuleInstallAction::Replace
+        );
+    }
+
+    #[test]
     fn install_module_into_fresh_and_skip_same_version() {
         let modules_dir = temp_modules_dir("fresh-skip");
         let archive = pack_module_archive("battery", "0.1.0");
@@ -1617,20 +1612,72 @@ mod tests {
         let again = extension_value(install_extension_into(
             &extensions_dir,
             archive.to_str().unwrap(),
-            &InstallOptions {
-                force: true,
-                ..Default::default()
-            },
+            &install_options(),
         ));
         match again {
-            ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
-            other => panic!("expected Replace, got {other:?}"),
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
         }
         assert!(registry.is_installed("echo"));
     }
 
     #[test]
-    fn install_extension_into_requires_force_to_replace() {
+    fn install_extension_into_fresh_and_skip_same_version() {
+        let base = temp_modules_dir("ext-fresh-skip");
+        let extensions_dir = base.join("extensions");
+        let archive = pack_echo_archive();
+
+        let first = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+        match &first {
+            ExtensionInstallOutcome::Fresh { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+        assert!(manifest::extension_manifest_path(&extensions_dir, "echo").exists());
+        assert!(manifest::extension_binary_path(&extensions_dir, "echo").exists());
+
+        let second = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+        match second {
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_extension_into_replaces_different_version_without_force() {
+        let base = temp_modules_dir("ext-replace-version");
+        let extensions_dir = base.join("extensions");
+        let archive = pack_echo_archive();
+
+        let _ = extension_value(install_extension_into(
+            &extensions_dir,
+            archive.to_str().unwrap(),
+            &install_options(),
+        ));
+
+        let newer = pack_echo_archive_version("9.9.9");
+        let outcome = extension_value(install_extension_into(
+            &extensions_dir,
+            newer.to_str().unwrap(),
+            &install_options(),
+        ));
+        match outcome {
+            ExtensionInstallOutcome::Replace { name } => assert_eq!(name, "echo"),
+            other => panic!("expected Replace, got {other:?}"),
+        }
+        let installed = manifest::read_extension_manifest(&extensions_dir, "echo").unwrap();
+        assert_eq!(installed.version, "9.9.9");
+    }
+
+    #[test]
+    fn install_extension_into_same_version_skips_without_force_and_replaces_with_force() {
         let base = temp_modules_dir("ext-force");
         let extensions_dir = base.join("extensions");
         let archive = pack_echo_archive();
@@ -1641,14 +1688,15 @@ mod tests {
             &install_options(),
         ));
 
-        let err = install_extension_into(
+        let outcome = extension_value(install_extension_into(
             &extensions_dir,
             archive.to_str().unwrap(),
             &install_options(),
-        )
-        .unwrap_err();
-        let already = err.downcast::<ExtensionAlreadyInstalled>().unwrap();
-        assert_eq!(already.name, "echo");
+        ));
+        match outcome {
+            ExtensionInstallOutcome::Skip { name, .. } => assert_eq!(name, "echo"),
+            other => panic!("expected Skip, got {other:?}"),
+        }
 
         let outcome = extension_value(install_extension_into(
             &extensions_dir,

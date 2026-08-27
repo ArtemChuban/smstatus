@@ -251,49 +251,9 @@ impl App {
                         ));
                         self.refresh_installed_extensions();
                     }
-                    Err(err) => match err.downcast::<crate::install::ExtensionAlreadyInstalled>() {
-                        Ok(already) => {
-                            self.mode = Mode::ConfirmingInstallReplace {
-                                source,
-                                name: already.name,
-                            };
-                        }
-                        Err(err) => self.push_action_message(err.to_string()),
-                    },
+                    Err(err) => self.push_action_message(err.to_string()),
                 }
             }
-        }
-    }
-
-    pub(super) fn handle_key_confirming_install_replace(&mut self, key: KeyEvent) {
-        let Mode::ConfirmingInstallReplace { .. } = &self.mode else {
-            return;
-        };
-        match key.code {
-            KeyCode::Char('d') => self.commit_install_replace(),
-            _ => self.mode = Mode::Normal,
-        }
-    }
-
-    fn commit_install_replace(&mut self) {
-        let Mode::ConfirmingInstallReplace { source, name: _ } = std::mem::take(&mut self.mode)
-        else {
-            return;
-        };
-        let options = crate::install::InstallOptions {
-            force: true,
-            ..Default::default()
-        };
-        let extensions_dir = self.extensions_dir.clone().expect("confirmed replace");
-        match crate::install::install_extension_into(&extensions_dir, &source, &options) {
-            Ok(output) => {
-                for warning in &output.warnings {
-                    self.push_action_message(warning.clone());
-                }
-                self.push_action_message(crate::install::format_extension_outcome(&output.value));
-                self.refresh_installed_extensions();
-            }
-            Err(err) => self.push_action_message(err.to_string()),
         }
     }
 
