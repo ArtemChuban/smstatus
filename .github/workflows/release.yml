@@ -10,32 +10,42 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  quality:
+  verify-ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-          targets: wasm32-wasip2
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ github.job }}
-      - uses: taiki-e/install-action@just
-      - run: just fmt-check
-      - run: just clippy
-      - run: just test-all
-      - run: just build-all
+      - name: Require green CI on this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          runs_json="$(gh run list --workflow=ci.yml --commit "${SHA}" --limit 20 \
+            --json status,conclusion,url,databaseId,event,createdAt)"
+          success_url="$(printf '%s\n' "${runs_json}" | jq -r \
+            '[.[] | select(.status == "completed" and .conclusion == "success")]
+             | sort_by(.createdAt) | last | .url // empty')"
+          if [ -n "${success_url}" ]; then
+            echo "CI green for ${SHA}: ${success_url}"
+            exit 0
+          fi
+          latest="$(printf '%s\n' "${runs_json}" | jq -r \
+            'sort_by(.createdAt) | last // empty
+             | if . == null or . == "" then "none"
+               else "\(.status)/\(.conclusion // "null") \(.url)"
+               end')"
+          echo "::error::No successful CI run for ${SHA} (latest: ${latest}). Run CI first, then re-dispatch Release." >&2
+          exit 1
 
   release:
-    needs: quality
+    needs: verify-ci
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
