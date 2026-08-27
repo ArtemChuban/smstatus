@@ -1,0 +1,17 @@
+[package]
+name = "release-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "release-check"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+smstatus = { path = "../.." }
+toml_edit = "0.25"
+
+[dev-dependencies]
+tempfile = "3"

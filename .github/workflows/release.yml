@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      calver:
+        description: Unpadded CalVer (YYYY.M.D). Defaults to today UTC.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require green CI on this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          runs_json="$(gh run list --workflow=ci.yml --commit "${SHA}" --limit 20 \
+            --json status,conclusion,url,databaseId,event,createdAt)"
+          success_url="$(printf '%s\n' "${runs_json}" | jq -r \
+            '[.[] | select(.status == "completed" and .conclusion == "success")]
+             | sort_by(.createdAt) | last | .url // empty')"
+          if [ -n "${success_url}" ]; then
+            echo "CI green for ${SHA}: ${success_url}"
+            exit 0
+          fi
+          latest="$(printf '%s\n' "${runs_json}" | jq -r \
+            'sort_by(.createdAt) | last // empty
+             | if . == null or . == "" then "none"
+               else "\(.status)/\(.conclusion // "null") \(.url)"
+               end')"
+          echo "::error::No successful CI run for ${SHA} (latest: ${latest}). Run CI first, then re-dispatch Release." >&2
+          exit 1
+
+  release:
+    needs: verify-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ github.job }}
+      - uses: taiki-e/install-action@just
+      - name: Prepare alpha release
+        env:
+          INPUT_CALVER: ${{ inputs.calver }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_CALVER}" ]; then
+            CALVER="${INPUT_CALVER}"
+          else
+            CALVER="$(date -u +%-Y.%-m.%-d)"
+          fi
+          TAG="v${CALVER}-alpha"
+          echo "CALVER=${CALVER}" >> "${GITHUB_ENV}"
+          echo "TAG=${TAG}" >> "${GITHUB_ENV}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "error: tag ${TAG} already exists locally" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "error: tag ${TAG} already exists on origin" >&2
+            exit 1
+          fi
+          bash .github/scripts/prepare-alpha-release.sh "${CALVER}"
+      - name: Validate release metadata
+        run: |
+          set -euo pipefail
+          RELEASE_JSON="$(gh release list --limit 1 --json tagName,body)"
+          if [ "${RELEASE_JSON}" = "[]" ]; then
+            cargo run -q -p release-check -- validate --tag "${TAG}" --bootstrap
+          else
+            PREV_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
+            PREV_BODY="$(gh release list --limit 1 --json body --jq '.[0].body')"
+            PREV_CALVER="$(printf '%s\n' "${PREV_TAG}" | sed 's/^v//' | sed 's/-alpha$//')"
+            PREV_MODULES="$(printf '%s\n' "${PREV_BODY}" | grep '^modules-api ' | sed 's/^modules-api //')"
+            PREV_EXTENSIONS="$(printf '%s\n' "${PREV_BODY}" | grep '^extensions-api ' | sed 's/^extensions-api //')"
+            cargo run -q -p release-check -- validate --tag "${TAG}" \
+              --previous-calver "${PREV_CALVER}" \
+              --previous-modules-api "${PREV_MODULES}" \
+              --previous-extensions-api "${PREV_EXTENSIONS}"
+          fi
+      - name: Create and push alpha tag
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "error: tag ${TAG} already exists locally" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "error: tag ${TAG} appeared on origin before push (race detected)" >&2
+            exit 1
+          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
+      - name: Build release notes
+        run: cargo run -q -p release-check -- format-release-body > release-body.txt
+      - run: just build-app-release
+      - name: Publish GitHub release
+        run: |
+          gh release create "${TAG}" target/release/smstatus#smstatus-linux-x86_64 \
+            --title "smstatus ${TAG}" \
+            --notes-file release-body.txt \
+            --prerelease \
+            --generate-notes=false

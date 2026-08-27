@@ -156,7 +156,10 @@ test-modules: test-battery test-datetime test-keyboard test-disk test-ram test-c
 test-scaffold:
     cargo test -p scaffold
 
-test-packages: test-fmt-common test-extension-protocol test-scaffold
+test-release-check:
+    cargo test -p release-check
+
+test-packages: test-fmt-common test-extension-protocol test-scaffold test-release-check
 
 test-extensions: test-echo test-time test-fs test-mem test-xkb test-disk-extension test-smstatus-process test-http
 
@@ -222,6 +225,7 @@ fmt-check:
 clippy:
     cargo clippy -p fmt-common -p extension-protocol -- -D warnings
     cargo clippy -p scaffold -- -D warnings
+    cargo clippy -p release-check -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
     cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
     cargo clippy -p smstatus -- -D warnings
@@ -234,6 +238,9 @@ dist-dir := "dist"
 
 new-module name:
     cargo run -q -p scaffold -- module {{name}}
+
+release-check *args:
+    cargo run -q -p release-check -- {{args}}
 
 new-extension name:
     cargo run -q -p scaffold -- extension {{name}}
