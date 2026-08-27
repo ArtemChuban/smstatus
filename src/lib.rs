@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod control;
 mod daemon;
+mod doctor;
 mod error;
 mod extension;
 mod host;
@@ -45,6 +46,22 @@ fn cli_ok_lines(lines: impl IntoIterator<Item = String>) -> ExitCode {
 fn cli_err(err: impl std::fmt::Display) -> ExitCode {
     logging::to_stderr(log::Level::Error, &err.to_string());
     ExitCode::FAILURE
+}
+
+fn cli_doctor_report(result: crate::error::Result<(Vec<String>, bool)>) -> ExitCode {
+    match result {
+        Ok((lines, failed)) => {
+            for line in lines {
+                logging::to_stdout(log::Level::Info, &line);
+            }
+            if failed {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(err) => cli_err(err),
+    }
 }
 
 pub fn run() -> ExitCode {
@@ -97,6 +114,9 @@ pub fn run() -> ExitCode {
                 Ok(()) => cli_ok_line(&format!("removed module `{name}`")),
                 Err(err) => cli_err(err),
             },
+            ModuleCommands::Doctor { kind, probe } => {
+                cli_doctor_report(doctor::cmd_module_doctor(&kind, probe))
+            }
         },
         Some(Commands::Extension { command }) => match command {
             ExtensionCommands::Install {
@@ -138,6 +158,7 @@ pub fn run() -> ExitCode {
             Ok(message) => cli_ok_line(&message),
             Err(err) => cli_err(err),
         },
+        Some(Commands::Doctor) => cli_doctor_report(doctor::cmd_doctor()),
         Some(Commands::Preset { command }) => match command {
             PresetCommands::List => match preset::list_presets() {
                 Ok(lines) => cli_ok_lines(lines),

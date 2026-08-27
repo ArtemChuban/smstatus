@@ -67,6 +67,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: PinCommands,
     },
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -107,6 +108,9 @@ pub(crate) enum ModuleCommands {
     List,
     Remove {
         name: String,
+    },
+    Doctor {
+        kind: String,
     },
 }
 
