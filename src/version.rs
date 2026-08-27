@@ -98,7 +98,7 @@ mod logic {
     }
 }
 
-pub(crate) fn parse_package_version(version: &str) -> Result<(u32, u32, u32)> {
+pub fn parse_package_version(version: &str) -> Result<(u32, u32, u32)> {
     let version = version.trim();
     if version.is_empty() {
         return Err("empty package version".into());
