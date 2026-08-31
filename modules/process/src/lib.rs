@@ -12,6 +12,7 @@ use std::cell::RefCell;
 const DEFAULT_FORMAT: &str = "{}";
 const DEFAULT_ACTIVE_LABEL: &str = "on";
 const DEFAULT_INACTIVE_LABEL: &str = "off";
+const FALLBACK_INTERVAL_MS: u32 = 300_000;
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -26,13 +27,48 @@ thread_local! {
     static FORMAT: RefCell<String> = RefCell::new(DEFAULT_FORMAT.to_string());
     static ACTIVE_LABEL: RefCell<String> = RefCell::new(DEFAULT_ACTIVE_LABEL.to_string());
     static INACTIVE_LABEL: RefCell<String> = RefCell::new(DEFAULT_INACTIVE_LABEL.to_string());
+    static SUBSCRIBE_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static LAST_RUNNING: RefCell<Option<bool>> = const { RefCell::new(None) };
 }
 
 mod logic {
     use super::Config;
+    use serde::Deserialize;
+
+    const COMM_MAX_LEN: usize = 15;
+
+    #[derive(Deserialize)]
+    struct RunningChanged {
+        process: String,
+        running: bool,
+    }
 
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
+    }
+
+    pub fn process_name_matches(comm_contents: &str, target_name: &str) -> bool {
+        let comm = comm_contents.trim();
+        if comm == target_name {
+            return true;
+        }
+        if target_name.len() <= COMM_MAX_LEN {
+            return false;
+        }
+        let mut boundary = COMM_MAX_LEN;
+        while !target_name.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        Some(comm) == target_name.get(..boundary)
+    }
+
+    pub fn running_from_matching_payload(json: &str, configured: &str) -> Option<bool> {
+        let parsed: RunningChanged = serde_json::from_str(json).ok()?;
+        if process_name_matches(&parsed.process, configured) {
+            Some(parsed.running)
+        } else {
+            None
+        }
     }
 
     pub fn format_status(
@@ -54,6 +90,46 @@ mod logic {
     }
 }
 
+enum DrainResult {
+    Matched(bool),
+    UnrelatedOnly,
+    Empty,
+}
+
+fn take_matching_running_changed(configured: &str) -> DrainResult {
+    let mut latest = None;
+    let mut saw_any = false;
+    while let Some(event) = host::take_extension_event() {
+        saw_any = true;
+        if event.extension == "process"
+            && event.event == "running-changed"
+            && let Some(running) = logic::running_from_matching_payload(&event.payload, configured)
+        {
+            latest = Some(running);
+        }
+    }
+    match latest {
+        Some(running) => DrainResult::Matched(running),
+        None if saw_any => DrainResult::UnrelatedOnly,
+        None => DrainResult::Empty,
+    }
+}
+
+fn format_with_labels(running: bool) -> String {
+    FORMAT.with(|f| {
+        ACTIVE_LABEL.with(|a| {
+            INACTIVE_LABEL
+                .with(|i| logic::format_status(&f.borrow(), running, &a.borrow(), &i.borrow()))
+        })
+    })
+}
+
+fn running_via_rpc(process: &str) -> Result<bool, String> {
+    let body = host::call_extension("process", "is-running", process)?;
+    body.parse::<bool>()
+        .map_err(|err| format!("malformed process-running response: {err}"))
+}
+
 struct Component;
 
 impl Guest for Component {
@@ -71,33 +147,57 @@ impl Guest for Component {
             FORMAT.with(|f| *f.borrow_mut() = format);
             ACTIVE_LABEL.with(|a| *a.borrow_mut() = active_label);
             INACTIVE_LABEL.with(|i| *i.borrow_mut() = inactive_label);
+            LAST_RUNNING.with(|s| *s.borrow_mut() = None);
+        }
+        match host::subscribe_extension_event("process", "running-changed") {
+            Ok(()) => SUBSCRIBE_ERROR.with(|err| *err.borrow_mut() = None),
+            Err(err) => SUBSCRIBE_ERROR.with(|slot| *slot.borrow_mut() = Some(err)),
         }
     }
 
     fn update() -> Output {
         let process = PROCESS.with(|p| p.borrow().clone());
-        let text = if process.is_empty() {
-            logic::format_error("no process configured")
-        } else {
-            match host::call_extension("process", "is-running", &process) {
-                Ok(body) => match body.parse::<bool>() {
-                    Ok(running) => FORMAT.with(|f| {
-                        ACTIVE_LABEL.with(|a| {
-                            INACTIVE_LABEL.with(|i| {
-                                logic::format_status(&f.borrow(), running, &a.borrow(), &i.borrow())
-                            })
-                        })
-                    }),
-                    Err(err) => {
-                        logic::format_error(&format!("malformed process-running response: {err}"))
-                    }
-                },
-                Err(err) => logic::format_error(&err),
+        if process.is_empty() {
+            return Output {
+                text: logic::format_error("no process configured"),
+                interval_ms: FALLBACK_INTERVAL_MS,
+            };
+        }
+        if let Some(err) = SUBSCRIBE_ERROR.with(|slot| slot.borrow().clone()) {
+            return Output {
+                text: logic::format_error(&format!("subscribe: {err}")),
+                interval_ms: FALLBACK_INTERVAL_MS,
+            };
+        }
+        let text = match take_matching_running_changed(&process) {
+            DrainResult::Matched(running) => {
+                LAST_RUNNING.with(|s| *s.borrow_mut() = Some(running));
+                format_with_labels(running)
             }
+            DrainResult::UnrelatedOnly => {
+                if let Some(running) = LAST_RUNNING.with(|s| *s.borrow()) {
+                    format_with_labels(running)
+                } else {
+                    match running_via_rpc(&process) {
+                        Ok(running) => {
+                            LAST_RUNNING.with(|s| *s.borrow_mut() = Some(running));
+                            format_with_labels(running)
+                        }
+                        Err(err) => logic::format_error(&err),
+                    }
+                }
+            }
+            DrainResult::Empty => match running_via_rpc(&process) {
+                Ok(running) => {
+                    LAST_RUNNING.with(|s| *s.borrow_mut() = Some(running));
+                    format_with_labels(running)
+                }
+                Err(err) => logic::format_error(&err),
+            },
         };
         Output {
             text,
-            interval_ms: 5000,
+            interval_ms: FALLBACK_INTERVAL_MS,
         }
     }
 
@@ -280,5 +380,58 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn process_name_matches_exact_comm() {
+        assert!(process_name_matches("firefox", "firefox"));
+    }
+
+    #[test]
+    fn process_name_matches_truncated_prefix_of_long_config() {
+        assert!(process_name_matches(
+            "some-very-long-",
+            "some-very-long-process-name"
+        ));
+    }
+
+    #[test]
+    fn process_name_matches_rejects_unrelated_comm() {
+        assert!(!process_name_matches(
+            "other-name",
+            "some-very-long-process-name"
+        ));
+    }
+
+    #[test]
+    fn running_from_matching_payload_accepts_match() {
+        assert_eq!(
+            running_from_matching_payload(r#"{"process":"firefox","running":true}"#, "firefox"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn running_from_matching_payload_filters_non_match() {
+        assert_eq!(
+            running_from_matching_payload(r#"{"process":"chrome","running":true}"#, "firefox"),
+            None
+        );
+    }
+
+    #[test]
+    fn running_from_matching_payload_matches_truncated_comm() {
+        assert_eq!(
+            running_from_matching_payload(
+                r#"{"process":"some-very-long-","running":false}"#,
+                "some-very-long-process-name"
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn running_from_matching_payload_rejects_garbage() {
+        assert_eq!(running_from_matching_payload("not json", "firefox"), None);
     }
 }

@@ -10,3 +10,7 @@ required_extensions = [
 [[permissions]]
 extension = "process"
 method = "is-running"
+
+[[permissions]]
+extension = "process"
+method = "running-changed"
