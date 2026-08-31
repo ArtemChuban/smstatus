@@ -2,7 +2,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use extension_protocol::{self as protocol, FromExtension, Request, Response};
+use extension_protocol::{self as protocol};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -23,16 +23,20 @@ pub(crate) fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream, St
     Ok(stream)
 }
 
+#[cfg(test)]
 pub(crate) fn call(stream: &mut UnixStream, method: &str, payload: &str) -> Result<String, String> {
     call_with_events(stream, method, payload, |_, _| {})
 }
 
+#[cfg(test)]
 pub(crate) fn call_with_events(
     stream: &mut UnixStream,
     method: &str,
     payload: &str,
     mut on_event: impl FnMut(&str, &str),
 ) -> Result<String, String> {
+    use extension_protocol::{FromExtension, Request, Response};
+
     set_stream_timeouts(stream)?;
     protocol::write_frame(
         stream,
@@ -57,6 +61,8 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+
+    use extension_protocol::{FromExtension, Request, Response};
 
     use super::*;
 

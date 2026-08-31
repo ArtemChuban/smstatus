@@ -7,7 +7,9 @@ use crate::config::{
 };
 use crate::control::ControlListener;
 use crate::error::Result;
-use crate::extension::{ExtensionCallAudit, ExtensionRegistry, encode_status_snapshot};
+use crate::extension::{
+    ExtensionCallAudit, ExtensionEventBus, ExtensionRegistry, encode_status_snapshot,
+};
 use crate::host;
 use crate::lock;
 use crate::logging;
@@ -97,10 +99,12 @@ pub(crate) fn run() -> Result<()> {
 
     let (engine, linker) = host::build_engine_and_linker()?;
     let x11_bar = X11Bar::connect()?;
-    let extensions = Arc::new(ExtensionRegistry::new(
+    let extensions = Arc::new(ExtensionRegistry::with_bus(
         config_dir.join("extensions"),
         lock::lock_dir()?.join("extensions"),
+        Arc::new(ExtensionEventBus::new()),
     ));
+    let _extension_events = extensions.event_bus().subscribe();
     let audit = Arc::new(ExtensionCallAudit::new());
     let extensions_dir = config_dir.join("extensions");
 

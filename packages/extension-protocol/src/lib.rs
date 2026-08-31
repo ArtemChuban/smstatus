@@ -141,6 +141,7 @@ impl EventEmit {
 enum ServerMsg {
     Request(Request),
     Event(Event),
+    Shutdown,
 }
 
 pub fn allowlist_check_response(payload: &str, extension: &str) -> Response {
@@ -210,14 +211,16 @@ fn drive_loop_with_events(
     thread::spawn(move || {
         while let Ok(request) = read_frame::<_, Request>(&mut reader) {
             if req_tx.send(ServerMsg::Request(request)).is_err() {
-                break;
+                return;
             }
         }
+        let _ = req_tx.send(ServerMsg::Shutdown);
     });
 
     let mut writer = stream;
     for msg in rx {
         let frame = match msg {
+            ServerMsg::Shutdown => break,
             ServerMsg::Request(request) => FromExtension::Response(respond(&request)),
             ServerMsg::Event(event) => FromExtension::Event(event),
         };
@@ -259,7 +262,7 @@ where
     serve_with_events_at(&socket_path, factory).expect("extension server failed");
 }
 
-fn serve_with_events_at<F, H>(socket_path: &str, factory: F) -> Result<(), String>
+pub fn serve_with_events_at<F, H>(socket_path: &str, factory: F) -> Result<(), String>
 where
     F: FnOnce(EventEmit) -> H,
     H: FnMut(&Request) -> Response,

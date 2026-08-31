@@ -2,16 +2,21 @@ use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use extension_protocol::{self as protocol, FromExtension, Request, Response};
+
+use super::bus::{ExtensionEvent, ExtensionEventBus};
 use super::client;
 
 const BASE_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 const SPAWN_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(1);
+const RPC_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct FailureState {
     count: u32,
@@ -49,23 +54,141 @@ pub(crate) enum ExtensionLiveState {
     BackingOff { retry_in_secs: u64 },
 }
 
+type PendingResponseTx = mpsc::Sender<Result<String, String>>;
+
+struct LiveConnection {
+    writer: Mutex<UnixStream>,
+    pending: Arc<Mutex<Option<PendingResponseTx>>>,
+    rpc_gate: Mutex<()>,
+}
+
+impl Drop for LiveConnection {
+    fn drop(&mut self) {
+        if let Ok(writer) = self.writer.get_mut() {
+            let _ = writer.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+impl LiveConnection {
+    fn start(extension: String, stream: UnixStream, bus: Arc<ExtensionEventBus>) -> Self {
+        let writer = stream
+            .try_clone()
+            .expect("UnixStream::try_clone for extension writer");
+        let mut reader = stream;
+        let pending: Arc<Mutex<Option<PendingResponseTx>>> = Arc::new(Mutex::new(None));
+        let pending_reader = Arc::clone(&pending);
+
+        thread::spawn(move || {
+            loop {
+                match protocol::read_frame::<_, FromExtension>(&mut reader) {
+                    Ok(FromExtension::Event(event)) => {
+                        bus.publish(ExtensionEvent {
+                            extension: extension.clone(),
+                            event: event.name,
+                            payload: event.payload,
+                        });
+                    }
+                    Ok(FromExtension::Response(response)) => {
+                        let tx = lock(&pending_reader).take();
+                        if let Some(tx) = tx {
+                            let result = match response {
+                                Response::Ok(value) => Ok(value),
+                                Response::Err(err) => Err(err),
+                            };
+                            let _ = tx.send(result);
+                        }
+                    }
+                    Err(_) => {
+                        if let Some(tx) = lock(&pending_reader).take() {
+                            let _ = tx.send(Err("extension connection closed".to_string()));
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            writer: Mutex::new(writer),
+            pending,
+            rpc_gate: Mutex::new(()),
+        }
+    }
+
+    fn rpc(&self, method: &str, payload: &str) -> Result<String, String> {
+        let _gate = lock(&self.rpc_gate);
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut pending = lock(&self.pending);
+            if pending.is_some() {
+                return Err("extension already has an in-flight request".to_string());
+            }
+            *pending = Some(tx);
+        }
+
+        {
+            let mut writer = lock(&self.writer);
+            writer
+                .set_write_timeout(Some(RPC_TIMEOUT))
+                .map_err(|e| e.to_string())?;
+            if let Err(err) = protocol::write_frame(
+                &mut *writer,
+                &Request {
+                    method: method.to_string(),
+                    payload: payload.to_string(),
+                },
+            ) {
+                lock(&self.pending).take();
+                return Err(err.to_string());
+            }
+        }
+
+        match rx.recv_timeout(RPC_TIMEOUT) {
+            Ok(result) => result,
+            Err(_) => {
+                lock(&self.pending).take();
+                Err("timed out waiting for extension response".to_string())
+            }
+        }
+    }
+}
+
 pub(crate) struct ExtensionRegistry {
     extensions_dir: PathBuf,
     socket_dir: PathBuf,
-    connections: Mutex<HashMap<String, UnixStream>>,
+    bus: Arc<ExtensionEventBus>,
+    connections: Mutex<HashMap<String, Arc<LiveConnection>>>,
     children: Mutex<HashMap<String, Child>>,
     failures: Mutex<HashMap<String, FailureState>>,
 }
 
 impl ExtensionRegistry {
     pub(crate) fn new(extensions_dir: PathBuf, socket_dir: PathBuf) -> Self {
+        Self::with_bus(
+            extensions_dir,
+            socket_dir,
+            Arc::new(ExtensionEventBus::new()),
+        )
+    }
+
+    pub(crate) fn with_bus(
+        extensions_dir: PathBuf,
+        socket_dir: PathBuf,
+        bus: Arc<ExtensionEventBus>,
+    ) -> Self {
         Self {
             extensions_dir,
             socket_dir,
+            bus,
             connections: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn event_bus(&self) -> Arc<ExtensionEventBus> {
+        Arc::clone(&self.bus)
     }
 
     fn binary_path(&self, name: &str) -> Result<PathBuf, String> {
@@ -166,10 +289,14 @@ impl ExtensionRegistry {
         state.retry_after = Instant::now() + backoff_for(state.count);
     }
 
-    fn on_success(&self, name: &str, stream: UnixStream, value: String) -> String {
-        lock(&self.connections).insert(name.to_string(), stream);
-        lock(&self.failures).remove(name);
-        value
+    fn attach_connection(&self, name: &str, stream: UnixStream) -> Arc<LiveConnection> {
+        let conn = Arc::new(LiveConnection::start(
+            name.to_string(),
+            stream,
+            Arc::clone(&self.bus),
+        ));
+        lock(&self.connections).insert(name.to_string(), Arc::clone(&conn));
+        conn
     }
 
     pub(crate) fn drop_running(&self, names: &[String]) {
@@ -219,18 +346,33 @@ impl ExtensionRegistry {
             ));
         }
 
-        let reused = lock(&self.connections).remove(name);
-        if let Some(mut stream) = reused
-            && let Ok(value) = client::call(&mut stream, method, payload)
-        {
-            return Ok(self.on_success(name, stream, value));
+        if let Some(conn) = lock(&self.connections).get(name).cloned() {
+            match conn.rpc(method, payload) {
+                Ok(value) => {
+                    lock(&self.failures).remove(name);
+                    return Ok(value);
+                }
+                Err(_) => {
+                    lock(&self.connections).remove(name);
+                }
+            }
         }
 
-        match self
-            .spawn_and_connect(name)
-            .and_then(|mut stream| client::call(&mut stream, method, payload).map(|v| (stream, v)))
-        {
-            Ok((stream, value)) => Ok(self.on_success(name, stream, value)),
+        match self.spawn_and_connect(name) {
+            Ok(stream) => {
+                let conn = self.attach_connection(name, stream);
+                match conn.rpc(method, payload) {
+                    Ok(value) => {
+                        lock(&self.failures).remove(name);
+                        Ok(value)
+                    }
+                    Err(err) => {
+                        lock(&self.connections).remove(name);
+                        self.record_failure(name);
+                        Err(format!("extension `{name}` call failed: {err}"))
+                    }
+                }
+            }
             Err(err) => {
                 self.record_failure(name);
                 Err(format!("extension `{name}` call failed: {err}"))
@@ -241,6 +383,7 @@ impl ExtensionRegistry {
 
 impl Drop for ExtensionRegistry {
     fn drop(&mut self) {
+        lock(&self.connections).clear();
         let mut children = lock(&self.children);
         for (_, mut child) in children.drain() {
             let _ = child.kill();
@@ -482,5 +625,65 @@ mod tests {
             }
             other => panic!("expected backoff, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bus_receives_events_emitted_around_rpc() {
+        use std::os::unix::net::UnixListener;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let socket_path = std::env::temp_dir().join(format!("smstatus-bus-event-{nanos}.sock"));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            protocol::perform_handshake_server(&mut stream).unwrap();
+            let request: Request = protocol::read_frame(&mut stream).unwrap();
+            assert_eq!(request.method, "ping");
+            protocol::write_event(&mut stream, "tick", "1").unwrap();
+            protocol::write_frame(
+                &mut stream,
+                &FromExtension::Response(Response::Ok(format!("pong:{}", request.payload))),
+            )
+            .unwrap();
+        });
+
+        let mut stream = None;
+        for _ in 0..100 {
+            match UnixStream::connect(&socket_path) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        let mut stream = stream.expect("connect");
+        protocol::perform_handshake_client(&mut stream).unwrap();
+
+        let bus = Arc::new(ExtensionEventBus::new());
+        let rx = bus.subscribe();
+        let registry = ExtensionRegistry::with_bus(
+            temp_dir().join("extensions"),
+            temp_dir().join("sockets"),
+            Arc::clone(&bus),
+        );
+        registry.attach_connection("emitter", stream);
+
+        let result = registry.call("emitter", "ping", "hi").unwrap();
+        assert_eq!(result, "pong:hi");
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(event.extension, "emitter");
+        assert_eq!(event.event, "tick");
+        assert_eq!(event.payload, "1");
+
+        drop(registry);
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&socket_path);
     }
 }
