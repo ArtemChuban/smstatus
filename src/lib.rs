@@ -1,5 +1,6 @@
 mod bar;
 mod bindings;
+mod catalog;
 mod cli;
 mod config;
 mod control;
@@ -34,7 +35,8 @@ pub use version::{
 use std::process::ExitCode;
 
 use cli::{
-    Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PinCommands, PresetCommands,
+    CatalogCommands, Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PinCommands,
+    PresetCommands,
 };
 
 fn cli_ok_line(message: &str) -> ExitCode {
@@ -207,6 +209,38 @@ pub fn run() -> ExitCode {
                     Err(err) => cli_err(err),
                 }
             }
+        },
+        Some(Commands::Catalog { command }) => match command {
+            CatalogCommands::List { kind, query, file } => {
+                match catalog::cmd_list(kind, query.as_deref(), file.as_deref()) {
+                    Ok(lines) => cli_ok_lines(lines),
+                    Err(err) => cli_err(err),
+                }
+            }
+            CatalogCommands::Install {
+                name,
+                kind,
+                version,
+                force,
+                allow_insecure_http,
+                file,
+            } => match catalog::cmd_install(
+                &name,
+                kind,
+                version.as_deref(),
+                force,
+                allow_insecure_http,
+                file.as_deref(),
+            ) {
+                Ok(output) => {
+                    logging::to_stderr(log::Level::Info, &output.trust_line);
+                    for warning in &output.warnings {
+                        logging::to_stderr(log::Level::Warn, warning);
+                    }
+                    cli_ok_line(&catalog::format_install_outcome(&output.outcome))
+                }
+                Err(err) => cli_err(err),
+            },
         },
         None => tui::run(),
     }
