@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::catalog::CatalogKind;
+
 pub(crate) const DAEMON_ENV_VAR: &str = "SMSTATUS_DAEMON_CHILD";
 pub(crate) const EXIT_ALREADY_RUNNING: u8 = 3;
 
@@ -67,7 +69,23 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: PinCommands,
     },
+    Catalog {
+        #[command(subcommand)]
+        command: CatalogCommands,
+    },
     Doctor,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CatalogCommands {
+    List {
+        #[arg(long, value_enum)]
+        kind: Option<CatalogKind>,
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

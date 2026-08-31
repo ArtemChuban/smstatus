@@ -1,5 +1,6 @@
 mod bar;
 mod bindings;
+mod catalog;
 mod cli;
 mod config;
 mod control;
@@ -34,7 +35,8 @@ pub use version::{
 use std::process::ExitCode;
 
 use cli::{
-    Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PinCommands, PresetCommands,
+    CatalogCommands, Cli, Commands, DAEMON_ENV_VAR, ExtensionCommands, ModuleCommands, PinCommands,
+    PresetCommands,
 };
 
 fn cli_ok_line(message: &str) -> ExitCode {
@@ -204,6 +206,14 @@ pub fn run() -> ExitCode {
                         }
                         cli_ok_lines(output.outcomes)
                     }
+                    Err(err) => cli_err(err),
+                }
+            }
+        },
+        Some(Commands::Catalog { command }) => match command {
+            CatalogCommands::List { kind, query, file } => {
+                match catalog::cmd_list(kind, query.as_deref(), file.as_deref()) {
+                    Ok(lines) => cli_ok_lines(lines),
                     Err(err) => cli_err(err),
                 }
             }
