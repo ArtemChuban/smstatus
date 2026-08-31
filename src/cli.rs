@@ -86,6 +86,19 @@ pub(crate) enum CatalogCommands {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    Install {
+        name: String,
+        #[arg(long, value_enum)]
+        kind: Option<CatalogKind>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        allow_insecure_http: bool,
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

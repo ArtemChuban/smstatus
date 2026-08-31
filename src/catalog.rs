@@ -8,6 +8,7 @@ use serde::Deserialize;
 use ureq::ResponseExt;
 
 use crate::error::Result;
+use crate::install::{self, InstallOptions, InstallOutput};
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
@@ -330,7 +331,6 @@ pub(crate) fn list_entries<'a>(
         .collect()
 }
 
-#[allow(dead_code)]
 pub(crate) fn find_entry<'a>(
     index: &'a CatalogIndex,
     name: &str,
@@ -389,6 +389,108 @@ pub(crate) fn cmd_list(
         .into_iter()
         .map(|entry| format_list_line(entry, resolved.official_eligible))
         .collect())
+}
+
+pub(crate) fn install_options_from_entry(
+    entry: &CatalogEntry,
+    force: bool,
+    allow_insecure_http: bool,
+) -> InstallOptions {
+    InstallOptions {
+        allow_insecure_http,
+        expected_sha256: Some(entry.sha256.clone()),
+        force,
+        expected_name: Some(entry.name.clone()),
+        expected_version: Some(entry.version.clone()),
+    }
+}
+
+pub(crate) fn format_trust_line(entry: &CatalogEntry, official_eligible: bool) -> String {
+    format!(
+        "catalog {} {} {} {}",
+        entry.kind.as_str(),
+        entry.name,
+        entry.version,
+        trust_tag(entry, official_eligible)
+    )
+}
+
+#[derive(Debug)]
+pub(crate) enum CatalogInstallOutcome {
+    Module(install::ModuleInstallOutcome),
+    Extension(install::ExtensionInstallOutcome),
+}
+
+#[derive(Debug)]
+pub(crate) struct CatalogInstallOutput {
+    pub trust_line: String,
+    pub outcome: CatalogInstallOutcome,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn cmd_install(
+    name: &str,
+    kind: Option<CatalogKind>,
+    version: Option<&str>,
+    force: bool,
+    allow_insecure_http: bool,
+    cli_file: Option<&Path>,
+) -> Result<CatalogInstallOutput> {
+    let config_dir = crate::config::default_config_dir()?;
+    cmd_install_into(
+        &config_dir,
+        name,
+        kind,
+        version,
+        force,
+        allow_insecure_http,
+        cli_file,
+    )
+}
+
+pub(crate) fn cmd_install_into(
+    config_dir: &Path,
+    name: &str,
+    kind: Option<CatalogKind>,
+    version: Option<&str>,
+    force: bool,
+    allow_insecure_http: bool,
+    cli_file: Option<&Path>,
+) -> Result<CatalogInstallOutput> {
+    let resolved = resolve_catalog_source(cli_file)?;
+    let index = load_catalog(&resolved.source)?;
+    let entry = find_entry(&index, name, kind, version)?;
+    let trust_line = format_trust_line(entry, resolved.official_eligible);
+    let options = install_options_from_entry(entry, force, allow_insecure_http);
+    match entry.kind {
+        CatalogKind::Module => {
+            let modules_dir = config_dir.join("modules");
+            let InstallOutput { value, warnings } =
+                install::install_module_into(&modules_dir, &entry.url, &options)?;
+            Ok(CatalogInstallOutput {
+                trust_line,
+                outcome: CatalogInstallOutcome::Module(value),
+                warnings,
+            })
+        }
+        CatalogKind::Extension => {
+            let extensions_dir = config_dir.join("extensions");
+            let InstallOutput { value, warnings } =
+                install::install_extension_into(&extensions_dir, &entry.url, &options)?;
+            Ok(CatalogInstallOutput {
+                trust_line,
+                outcome: CatalogInstallOutcome::Extension(value),
+                warnings,
+            })
+        }
+    }
+}
+
+pub(crate) fn format_install_outcome(outcome: &CatalogInstallOutcome) -> String {
+    match outcome {
+        CatalogInstallOutcome::Module(outcome) => install::format_module_outcome(outcome),
+        CatalogInstallOutcome::Extension(outcome) => install::format_extension_outcome(outcome),
+    }
 }
 
 #[cfg(test)]
@@ -678,5 +780,136 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("extension\tpower\t0.1.0\tpower\t[unofficial]\t"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_options_bridge_from_fixture_entry() {
+        let index = parse_catalog_json(&sample_json()).unwrap();
+        let entry = &index.modules[0];
+        let options = install_options_from_entry(entry, true, true);
+        assert!(options.force);
+        assert!(options.allow_insecure_http);
+        assert_eq!(options.expected_sha256.as_deref(), Some(VALID_SHA));
+        assert_eq!(options.expected_name.as_deref(), Some("battery"));
+        assert_eq!(options.expected_version.as_deref(), Some("0.1.0"));
+    }
+
+    fn sha256_hex(path: &Path) -> String {
+        use sha2::{Digest, Sha256};
+        let bytes = fs::read(path).unwrap();
+        let digest = Sha256::digest(&bytes);
+        digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn cmd_install_into_installs_module_from_file_catalog() {
+        let archive = install::test_fixtures::pack_minimal_module_archive("catmod").unwrap();
+        let hash = sha256_hex(&archive);
+        let dir = std::env::temp_dir().join(format!(
+            "smstatus-catalog-install-mod-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let catalog_path = dir.join("index.json");
+        let catalog = format!(
+            r#"{{
+  "schema_version": 1,
+  "modules": [
+    {{
+      "name": "catmod",
+      "version": "0.1.0",
+      "display_name": "Catmod",
+      "url": "{}",
+      "sha256": "{hash}",
+      "official": true
+    }}
+  ],
+  "extensions": []
+}}"#,
+            archive.display(),
+            hash = hash
+        );
+        fs::write(&catalog_path, catalog).unwrap();
+
+        let config_dir = dir.join("config");
+        fs::create_dir_all(config_dir.join("modules")).unwrap();
+        let output = cmd_install_into(
+            &config_dir,
+            "catmod",
+            Some(CatalogKind::Module),
+            None,
+            false,
+            false,
+            Some(&catalog_path),
+        )
+        .unwrap();
+        assert!(output.trust_line.contains("[unofficial]"));
+        match output.outcome {
+            CatalogInstallOutcome::Module(install::ModuleInstallOutcome::Fresh {
+                kind, ..
+            }) => {
+                assert_eq!(kind, "catmod");
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(config_dir.join("modules").join("catmod").is_dir());
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&archive);
+    }
+
+    #[test]
+    fn cmd_install_into_installs_extension_from_file_catalog() {
+        let archive = install::test_fixtures::pack_minimal_extension_archive("catext").unwrap();
+        let hash = sha256_hex(&archive);
+        let dir = std::env::temp_dir().join(format!(
+            "smstatus-catalog-install-ext-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let catalog_path = dir.join("index.json");
+        let catalog = format!(
+            r#"{{
+  "schema_version": 1,
+  "modules": [],
+  "extensions": [
+    {{
+      "name": "catext",
+      "version": "0.1.0",
+      "url": "{}",
+      "sha256": "{hash}",
+      "arch": "linux-x86_64",
+      "official": true
+    }}
+  ]
+}}"#,
+            archive.display(),
+            hash = hash
+        );
+        fs::write(&catalog_path, catalog).unwrap();
+
+        let config_dir = dir.join("config");
+        fs::create_dir_all(config_dir.join("extensions")).unwrap();
+        let output = cmd_install_into(
+            &config_dir,
+            "catext",
+            Some(CatalogKind::Extension),
+            None,
+            false,
+            false,
+            Some(&catalog_path),
+        )
+        .unwrap();
+        assert!(output.trust_line.contains("[unofficial]"));
+        match output.outcome {
+            CatalogInstallOutcome::Extension(install::ExtensionInstallOutcome::Fresh { name }) => {
+                assert_eq!(name, "catext");
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(config_dir.join("extensions").join("catext").is_dir());
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_file(&archive);
     }
 }

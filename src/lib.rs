@@ -217,6 +217,30 @@ pub fn run() -> ExitCode {
                     Err(err) => cli_err(err),
                 }
             }
+            CatalogCommands::Install {
+                name,
+                kind,
+                version,
+                force,
+                allow_insecure_http,
+                file,
+            } => match catalog::cmd_install(
+                &name,
+                kind,
+                version.as_deref(),
+                force,
+                allow_insecure_http,
+                file.as_deref(),
+            ) {
+                Ok(output) => {
+                    logging::to_stderr(log::Level::Info, &output.trust_line);
+                    for warning in &output.warnings {
+                        logging::to_stderr(log::Level::Warn, warning);
+                    }
+                    cli_ok_line(&catalog::format_install_outcome(&output.outcome))
+                }
+                Err(err) => cli_err(err),
+            },
         },
         None => tui::run(),
     }
