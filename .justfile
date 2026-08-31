@@ -69,6 +69,11 @@ build-xkb flags="":
 
 build-xkb-release: (build-xkb "--release")
 
+build-power flags="":
+    cargo build -p smstatus-power {{flags}}
+
+build-power-release: (build-power "--release")
+
 build-disk-extension flags="":
     cargo build -p smstatus-disk {{flags}}
 
@@ -84,9 +89,9 @@ build-http flags="":
 
 build-http-release: (build-http "--release")
 
-build-extensions: build-echo build-time build-fs build-mem build-xkb build-disk-extension build-smstatus-process build-http
+build-extensions: build-echo build-time build-fs build-mem build-xkb build-power build-disk-extension build-smstatus-process build-http
 
-build-extensions-release: build-echo-release build-time-release build-fs-release build-mem-release build-xkb-release build-disk-extension-release build-smstatus-process-release build-http-release
+build-extensions-release: build-echo-release build-time-release build-fs-release build-mem-release build-xkb-release build-power-release build-disk-extension-release build-smstatus-process-release build-http-release
 
 build-app flags="":
     cargo build -p smstatus {{flags}}
@@ -142,6 +147,9 @@ test-mem:
 test-xkb:
     cargo test -p smstatus-xkb
 
+test-power:
+    cargo test -p smstatus-power
+
 test-disk-extension:
     cargo test -p smstatus-disk
 
@@ -161,7 +169,7 @@ test-release-check:
 
 test-packages: test-fmt-common test-extension-protocol test-scaffold test-release-check
 
-test-extensions: test-echo test-time test-fs test-mem test-xkb test-disk-extension test-smstatus-process test-http
+test-extensions: test-echo test-time test-fs test-mem test-xkb test-power test-disk-extension test-smstatus-process test-http
 
 # Registry integration tests need the echo binary on disk.
 test-app: build-echo
@@ -193,6 +201,9 @@ cov-mem:
 cov-xkb:
     cargo llvm-cov -p smstatus-xkb --summary-only
 
+cov-power:
+    cargo llvm-cov -p smstatus-power --summary-only
+
 cov-disk-extension:
     cargo llvm-cov -p smstatus-disk --summary-only
 
@@ -207,7 +218,7 @@ cov-packages: cov-fmt-common cov-extension-protocol
 cov-modules:
     cargo llvm-cov -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --summary-only
 
-cov-extensions: cov-echo cov-time cov-fs cov-mem cov-xkb cov-disk-extension cov-smstatus-process cov-http
+cov-extensions: cov-echo cov-time cov-fs cov-mem cov-xkb cov-power cov-disk-extension cov-smstatus-process cov-http
 
 cov-all:
     cargo llvm-cov --workspace --summary-only
@@ -227,7 +238,7 @@ clippy:
     cargo clippy -p scaffold -- -D warnings
     cargo clippy -p release-check -- -D warnings
     cargo clippy -p battery -p datetime -p keyboard -p disk -p ram -p cpu -p process -p claude --target {{wasm-target}} -- -D warnings
-    cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
+    cargo clippy -p echo -p smstatus-time -p smstatus-fs -p smstatus-mem -p smstatus-xkb -p smstatus-power -p smstatus-disk -p smstatus-process -p smstatus-http -- -D warnings
     cargo clippy -p smstatus -- -D warnings
 
 profile := "debug"

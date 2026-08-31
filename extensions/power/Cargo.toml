@@ -1,0 +1,15 @@
+[package]
+name = "smstatus-power"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "power"
+path = "src/main.rs"
+
+[dependencies]
+extension-protocol = { workspace = true }
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }

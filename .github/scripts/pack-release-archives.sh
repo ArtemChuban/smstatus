@@ -38,6 +38,7 @@ ALL_EXTENSIONS=(
   "smstatus-fs:fs"
   "smstatus-mem:mem"
   "smstatus-xkb:xkb"
+  "smstatus-power:power"
   "smstatus-disk:disk"
   "smstatus-process:process"
   "smstatus-http:http"

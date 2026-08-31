@@ -11,6 +11,7 @@ use std::cell::RefCell;
 
 const DEFAULT_PATH: &str = "/sys/class/power_supply/BAT0/capacity";
 const DEFAULT_FORMAT: &str = "BAT {:3}%";
+const FALLBACK_INTERVAL_MS: u32 = 300_000;
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -21,10 +22,18 @@ struct Config {
 thread_local! {
     static PATH: RefCell<String> = RefCell::new(DEFAULT_PATH.to_string());
     static FORMAT: RefCell<String> = RefCell::new(DEFAULT_FORMAT.to_string());
+    static SUBSCRIBE_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 mod logic {
     use super::Config;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct CapacityChangedJson {
+        path: String,
+        capacity: String,
+    }
 
     pub fn parse_config(config: &str) -> Option<Config> {
         serde_json::from_str::<Config>(config).ok()
@@ -37,6 +46,28 @@ mod logic {
     pub fn format_error(err: &str) -> String {
         format!("BAT error: {err}")
     }
+
+    pub fn capacity_from_event_json(json: &str, expected_path: &str) -> Option<String> {
+        let parsed: CapacityChangedJson = serde_json::from_str(json).ok()?;
+        if parsed.path == expected_path {
+            Some(parsed.capacity)
+        } else {
+            None
+        }
+    }
+}
+
+fn take_latest_capacity_changed(path: &str) -> Option<String> {
+    let mut latest = None;
+    while let Some(event) = host::take_extension_event() {
+        if event.extension == "power"
+            && event.event == "capacity-changed"
+            && let Some(capacity) = logic::capacity_from_event_json(&event.payload, path)
+        {
+            latest = Some(capacity);
+        }
+    }
+    latest
 }
 
 struct Component;
@@ -49,17 +80,31 @@ impl Guest for Component {
             PATH.with(|p| *p.borrow_mut() = path);
             FORMAT.with(|f| *f.borrow_mut() = format);
         }
+        match host::subscribe_extension_event("power", "capacity-changed") {
+            Ok(()) => SUBSCRIBE_ERROR.with(|err| *err.borrow_mut() = None),
+            Err(err) => SUBSCRIBE_ERROR.with(|slot| *slot.borrow_mut() = Some(err)),
+        }
     }
 
     fn update() -> Output {
+        if let Some(err) = SUBSCRIBE_ERROR.with(|slot| slot.borrow().clone()) {
+            return Output {
+                text: logic::format_error(&format!("subscribe: {err}")),
+                interval_ms: FALLBACK_INTERVAL_MS,
+            };
+        }
         let path = PATH.with(|p| p.borrow().clone());
-        let text = match host::call_extension("fs", "read", &path) {
-            Ok(content) => FORMAT.with(|f| logic::format_battery(&f.borrow(), &content)),
-            Err(err) => logic::format_error(&err),
+        let format = FORMAT.with(|f| f.borrow().clone());
+        let text = match take_latest_capacity_changed(&path) {
+            Some(content) => logic::format_battery(&format, &content),
+            None => match host::call_extension("power", "capacity", &path) {
+                Ok(content) => logic::format_battery(&format, &content),
+                Err(err) => logic::format_error(&err),
+            },
         };
         Output {
             text,
-            interval_ms: 5000,
+            interval_ms: FALLBACK_INTERVAL_MS,
         }
     }
 
@@ -219,6 +264,32 @@ mod tests {
         assert_eq!(
             format_error("err\nwith\nnewlines"),
             "BAT error: err\nwith\nnewlines"
+        );
+    }
+
+    #[test]
+    fn capacity_from_event_json_returns_none_for_malformed() {
+        assert_eq!(
+            capacity_from_event_json("not json", "/sys/class/power_supply/BAT0/capacity"),
+            None
+        );
+    }
+
+    #[test]
+    fn capacity_from_event_json_returns_none_on_path_mismatch() {
+        let json = r#"{"path":"/sys/class/power_supply/BAT1/capacity","capacity":"50"}"#;
+        assert_eq!(
+            capacity_from_event_json(json, "/sys/class/power_supply/BAT0/capacity"),
+            None
+        );
+    }
+
+    #[test]
+    fn capacity_from_event_json_returns_capacity_on_path_match() {
+        let json = r#"{"path":"/sys/class/power_supply/BAT0/capacity","capacity":"87\n"}"#;
+        assert_eq!(
+            capacity_from_event_json(json, "/sys/class/power_supply/BAT0/capacity"),
+            Some("87\n".to_string())
         );
     }
 

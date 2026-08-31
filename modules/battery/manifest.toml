@@ -4,10 +4,14 @@ version = "0.1.0"
 author = "ArtemChuban"
 modules-api = { major = 0, minor = 1 }
 required_extensions = [
-  { name = "fs", version = { major = 0, minor = 1 } },
+  { name = "power", version = { major = 0, minor = 1 } },
 ]
 
 [[permissions]]
-extension = "fs"
-method = "read"
+extension = "power"
+method = "capacity"
 path_prefixes = ["/sys/class/power_supply/"]
+
+[[permissions]]
+extension = "power"
+method = "capacity-changed"

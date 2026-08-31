@@ -1,0 +1,4 @@
+name = "power"
+version = "0.1.0"
+author = "ArtemChuban"
+extensions-api = { major = 0, minor = 1 }
