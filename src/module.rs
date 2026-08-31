@@ -11,7 +11,7 @@ use wasmtime::{Engine, Store};
 use crate::bindings::GuestModule;
 use crate::config::BarConfig;
 use crate::error::Result;
-use crate::extension::{ExtensionCallAudit, ExtensionRegistry};
+use crate::extension::{ExtensionCallAudit, ExtensionEventHub, ExtensionRegistry};
 use crate::host::{self, HostState};
 use crate::manifest::RequiredExtension;
 use crate::version;
@@ -29,12 +29,20 @@ pub(crate) struct ModuleState {
 }
 
 impl ModuleState {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     pub(crate) fn last_output(&self) -> &str {
         &self.last_output
     }
 
     pub(crate) fn next_due(&self) -> Instant {
         self.next_due
+    }
+
+    pub(crate) fn force_due(&mut self, now: Instant) {
+        self.next_due = now;
     }
 }
 
@@ -45,6 +53,7 @@ pub(crate) struct ModuleRuntime {
     fuel_per_tick: u64,
     extensions: Arc<ExtensionRegistry>,
     audit: Arc<ExtensionCallAudit>,
+    event_hub: Arc<ExtensionEventHub>,
     validated_kinds: RefCell<HashSet<String>>,
 }
 
@@ -95,7 +104,10 @@ impl ModuleRuntime {
         fuel_per_tick: u64,
         extensions: Arc<ExtensionRegistry>,
         audit: Arc<ExtensionCallAudit>,
+        event_wake_tx: Option<std::sync::mpsc::Sender<Vec<String>>>,
     ) -> Self {
+        let event_hub = Arc::new(ExtensionEventHub::new());
+        event_hub.spawn_bus_pump(extensions.event_bus().as_ref(), event_wake_tx);
         Self {
             engine,
             linker,
@@ -103,8 +115,18 @@ impl ModuleRuntime {
             fuel_per_tick,
             extensions,
             audit,
+            event_hub,
             validated_kinds: RefCell::new(HashSet::new()),
         }
+    }
+
+    pub(crate) fn clear_extension_event_state(&self) {
+        self.event_hub.clear_all();
+    }
+
+    fn sync_extension_event_instances(&self, modules: &[ModuleState]) {
+        let keep: HashSet<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+        self.event_hub.retain_instances(&keep);
     }
 
     fn wasm_path(&self, kind: &str) -> PathBuf {
@@ -129,6 +151,7 @@ impl ModuleRuntime {
             Arc::clone(&self.extensions),
             permissions,
             Arc::clone(&self.audit),
+            Arc::clone(&self.event_hub),
             self.fuel_per_tick,
         )
     }
@@ -170,6 +193,12 @@ impl ModuleRuntime {
         let component = Component::from_file(&self.engine, self.wasm_path(kind))?;
         let (mut store, module) = self.instantiate(&component, Arc::clone(&permissions))?;
 
+        {
+            let host = store.data_mut();
+            host.set_caller_module_kind(Some(kind.to_string()));
+            host.set_caller_module_name(Some(name.to_string()));
+        }
+
         if self.validated_kinds.borrow_mut().insert(kind.to_string()) {
             let schema = module
                 .smstatus_module_guest()
@@ -180,6 +209,13 @@ impl ModuleRuntime {
         module
             .smstatus_module_guest()
             .call_init(&mut store, config)?;
+
+        {
+            let host = store.data_mut();
+            host.set_caller_module_kind(None);
+            host.set_caller_module_name(None);
+        }
+
         Ok(ModuleState {
             kind: kind.to_string(),
             name: name.to_string(),
@@ -199,10 +235,11 @@ impl ModuleRuntime {
         }
 
         state.store.set_fuel(self.fuel_per_tick)?;
-        state
-            .store
-            .data_mut()
-            .set_caller_module_kind(Some(state.kind.clone()));
+        {
+            let host = state.store.data_mut();
+            host.set_caller_module_kind(Some(state.kind.clone()));
+            host.set_caller_module_name(Some(state.name.clone()));
+        }
 
         let tick_result = match state
             .module
@@ -223,11 +260,18 @@ impl ModuleRuntime {
                 log::error!("re-instantiating module after trap");
                 match self.instantiate(&state.component, Arc::clone(&state.permissions)) {
                     Ok((mut store, module)) => {
+                        {
+                            let host = store.data_mut();
+                            host.set_caller_module_kind(Some(state.kind.clone()));
+                            host.set_caller_module_name(Some(state.name.clone()));
+                        }
                         match module
                             .smstatus_module_guest()
                             .call_init(&mut store, &state.config)
                         {
                             Ok(()) => {
+                                store.data_mut().set_caller_module_kind(None);
+                                store.data_mut().set_caller_module_name(None);
                                 state.store = store;
                                 state.module = module;
                             }
@@ -246,7 +290,11 @@ impl ModuleRuntime {
             }
         };
 
-        state.store.data_mut().set_caller_module_kind(None);
+        {
+            let host = state.store.data_mut();
+            host.set_caller_module_kind(None);
+            host.set_caller_module_name(None);
+        }
         tick_result
     }
 
@@ -308,11 +356,22 @@ impl ModuleRuntime {
                         .set_fuel(self.fuel_per_tick)
                         .map_err(|e| e.to_string())
                         .and_then(|()| {
-                            existing
+                            {
+                                let host = existing.store.data_mut();
+                                host.set_caller_module_kind(Some(existing.kind.clone()));
+                                host.set_caller_module_name(Some(existing.name.clone()));
+                            }
+                            let result = existing
                                 .module
                                 .smstatus_module_guest()
                                 .call_init(&mut existing.store, &config)
-                                .map_err(|e| e.to_string())
+                                .map_err(|e| e.to_string());
+                            {
+                                let host = existing.store.data_mut();
+                                host.set_caller_module_kind(None);
+                                host.set_caller_module_name(None);
+                            }
+                            result
                         });
                     match reinit_result {
                         Ok(()) => {
@@ -333,6 +392,7 @@ impl ModuleRuntime {
                 },
             }
         }
+        self.sync_extension_event_instances(&new_modules);
         new_modules
     }
 
@@ -392,6 +452,7 @@ impl ModuleRuntime {
             }
         }
 
+        self.sync_extension_event_instances(&kept);
         kept
     }
 }

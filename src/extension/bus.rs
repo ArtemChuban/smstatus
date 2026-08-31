@@ -33,6 +33,15 @@ impl ExtensionEventBus {
         let mut listeners = lock(&self.listeners);
         listeners.retain(|tx| tx.send(event.clone()).is_ok());
     }
+
+    #[cfg(test)]
+    pub(crate) fn publish_parts(&self, extension: &str, event: &str, payload: &str) {
+        self.publish(ExtensionEvent {
+            extension: extension.to_string(),
+            event: event.to_string(),
+            payload: payload.to_string(),
+        });
+    }
 }
 
 #[cfg(test)]

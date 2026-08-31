@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::config::{
     BarConfig, BarConfigLoad, DEFAULT_LOG_DAYS, IDLE_STATUS_MESSAGE, load_bar_config,
 };
-use crate::control::ControlListener;
+use crate::control::{ControlListener, WaitResult};
 use crate::error::Result;
 use crate::extension::{
     ExtensionCallAudit, ExtensionEventBus, ExtensionRegistry, encode_status_snapshot,
@@ -104,10 +104,10 @@ pub(crate) fn run() -> Result<()> {
         lock::lock_dir()?.join("extensions"),
         Arc::new(ExtensionEventBus::new()),
     ));
-    let _extension_events = extensions.event_bus().subscribe();
     let audit = Arc::new(ExtensionCallAudit::new());
     let extensions_dir = config_dir.join("extensions");
 
+    let (event_wake_tx, event_wake_rx) = std::sync::mpsc::channel();
     let runtime = ModuleRuntime::new(
         engine,
         linker,
@@ -115,6 +115,7 @@ pub(crate) fn run() -> Result<()> {
         FUEL_PER_TICK,
         Arc::clone(&extensions),
         Arc::clone(&audit),
+        Some(event_wake_tx),
     );
 
     let config = Arc::new(RwLock::new(BarConfig::empty()));
@@ -151,7 +152,8 @@ pub(crate) fn run() -> Result<()> {
             ExtensionCallAudit::MAX_RECORDS,
         )
     }) as Box<dyn Fn() -> String + Send>);
-    let mut listener = ControlListener::new(status_provider).map_err(|err| err.to_string())?;
+    let mut listener =
+        ControlListener::new(status_provider, event_wake_rx).map_err(|err| err.to_string())?;
     let mut last_logged = String::new();
 
     loop {
@@ -181,36 +183,46 @@ pub(crate) fn run() -> Result<()> {
             next_sleep_duration(&modules)
         };
 
-        if let Some(batch) = listener.wait_for_reload_or_timeout(sleep_for) {
-            if idle {
-                if batch.config
-                    && let Some((new_modules, new_separator)) =
-                        try_leave_idle(&config_dir, &config, &runtime)
-                {
-                    modules = new_modules;
-                    separator = new_separator;
-                    idle = false;
-                    last_logged.clear();
-                }
-            } else {
-                let (updated_modules, enter_idle) = apply_reload_batch(
-                    batch,
-                    &runtime,
-                    &extensions,
-                    &config_dir,
-                    modules,
-                    &config,
-                    &mut separator,
-                );
-                modules = updated_modules;
-                if enter_idle {
-                    modules.clear();
-                    *config.write().unwrap_or_else(PoisonError::into_inner) = BarConfig::empty();
-                    idle = true;
-                    log::warn!("{IDLE_STATUS_MESSAGE}");
-                    last_logged.clear();
+        match listener.wait_for_reload_or_timeout(sleep_for) {
+            Some(WaitResult::ExtensionWake(names)) => {
+                if !idle {
+                    mark_modules_due(&mut modules, &names);
                 }
             }
+            Some(WaitResult::Reload(batch)) => {
+                if idle {
+                    if batch.config
+                        && let Some((new_modules, new_separator)) =
+                            try_leave_idle(&config_dir, &config, &runtime)
+                    {
+                        modules = new_modules;
+                        separator = new_separator;
+                        idle = false;
+                        last_logged.clear();
+                    }
+                } else {
+                    let (updated_modules, enter_idle) = apply_reload_batch(
+                        batch,
+                        &runtime,
+                        &extensions,
+                        &config_dir,
+                        modules,
+                        &config,
+                        &mut separator,
+                    );
+                    modules = updated_modules;
+                    if enter_idle {
+                        modules.clear();
+                        runtime.clear_extension_event_state();
+                        *config.write().unwrap_or_else(PoisonError::into_inner) =
+                            BarConfig::empty();
+                        idle = true;
+                        log::warn!("{IDLE_STATUS_MESSAGE}");
+                        last_logged.clear();
+                    }
+                }
+            }
+            None => {}
         }
     }
 }
@@ -247,6 +259,15 @@ fn next_sleep_duration(modules: &[ModuleState]) -> Duration {
         .map(|s| s.next_due().saturating_duration_since(Instant::now()))
         .min()
         .unwrap_or(DEFAULT_TICK_INTERVAL)
+}
+
+fn mark_modules_due(modules: &mut [ModuleState], names: &[String]) {
+    let now = Instant::now();
+    for state in modules {
+        if names.iter().any(|name| name == state.name()) {
+            state.force_due(now);
+        }
+    }
 }
 
 fn apply_reload_batch(
@@ -313,6 +334,7 @@ mod tests {
             FUEL_PER_TICK,
             extensions,
             audit,
+            None,
         )
     }
 
@@ -590,6 +612,7 @@ mod tests {
             FUEL_PER_TICK,
             Arc::clone(&extensions),
             audit,
+            None,
         );
 
         let batch = ReloadBatch {

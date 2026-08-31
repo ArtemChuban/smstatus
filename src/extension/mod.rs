@@ -1,6 +1,7 @@
 mod audit;
 mod bus;
 mod client;
+mod event_hub;
 mod registry;
 mod status;
 
@@ -9,6 +10,7 @@ pub(crate) use audit::{
     redact_payload,
 };
 pub(crate) use bus::ExtensionEventBus;
+pub(crate) use event_hub::ExtensionEventHub;
 pub(crate) use registry::{ExtensionLiveState, ExtensionRegistry, is_safe_extension_name};
 pub(crate) use status::{cmd_extension_status, encode_status_snapshot};
 

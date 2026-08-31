@@ -6,7 +6,7 @@ use wasmtime::{Engine, Store};
 
 use crate::bindings::GuestModule;
 use crate::error::Result;
-use crate::extension::{ExtensionCallAudit, ExtensionRegistry};
+use crate::extension::{ExtensionCallAudit, ExtensionEventHub, ExtensionRegistry};
 use crate::host::{self, HostState};
 use crate::lock;
 
@@ -43,6 +43,7 @@ impl WasmProbe {
             Arc::clone(&self.extensions),
             Arc::<[extension_protocol::PermissionEntry]>::from([]),
             Arc::new(ExtensionCallAudit::new()),
+            Arc::new(ExtensionEventHub::new()),
             FUEL_PER_PROBE,
         )
     }
