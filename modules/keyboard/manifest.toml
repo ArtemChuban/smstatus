@@ -10,3 +10,7 @@ required_extensions = [
 [[permissions]]
 extension = "xkb"
 method = "state"
+
+[[permissions]]
+extension = "xkb"
+method = "state-changed"

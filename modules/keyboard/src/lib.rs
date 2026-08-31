@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 
 const DEFAULT_FORMAT: &str = "{}";
+const FALLBACK_INTERVAL_MS: u32 = 300_000;
 
 #[derive(Deserialize, Default, Debug, PartialEq)]
 struct Config {
@@ -18,6 +19,7 @@ struct Config {
 
 thread_local! {
     static FORMAT: RefCell<String> = RefCell::new(DEFAULT_FORMAT.to_string());
+    static SUBSCRIBE_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 mod logic {
@@ -70,6 +72,26 @@ mod logic {
     pub fn format_error(err: &str) -> String {
         format!("KBD error: {err}")
     }
+
+    pub fn text_from_xkb_json(format: &str, json: &str) -> String {
+        match parse_xkb_state_json(json) {
+            Ok((active_group, symbols)) => match extract_layout(&symbols, active_group) {
+                Ok(layout) => format_layout(format, &layout),
+                Err(err) => format_error(&err),
+            },
+            Err(err) => format_error(&err),
+        }
+    }
+}
+
+fn take_latest_xkb_state_changed() -> Option<String> {
+    let mut latest = None;
+    while let Some(event) = host::take_extension_event() {
+        if event.extension == "xkb" && event.event == "state-changed" {
+            latest = Some(event.payload);
+        }
+    }
+    latest
 }
 
 struct Component;
@@ -80,24 +102,30 @@ impl Guest for Component {
             let format = parsed.format.unwrap_or_else(|| DEFAULT_FORMAT.to_string());
             FORMAT.with(|f| *f.borrow_mut() = format);
         }
+        match host::subscribe_extension_event("xkb", "state-changed") {
+            Ok(()) => SUBSCRIBE_ERROR.with(|err| *err.borrow_mut() = None),
+            Err(err) => SUBSCRIBE_ERROR.with(|slot| *slot.borrow_mut() = Some(err)),
+        }
     }
 
     fn update() -> Output {
-        let text = match host::call_extension("xkb", "state", "") {
-            Ok(json) => match logic::parse_xkb_state_json(&json) {
-                Ok((active_group, symbols)) => {
-                    match logic::extract_layout(&symbols, active_group) {
-                        Ok(layout) => FORMAT.with(|f| logic::format_layout(&f.borrow(), &layout)),
-                        Err(err) => logic::format_error(&err),
-                    }
-                }
+        if let Some(err) = SUBSCRIBE_ERROR.with(|slot| slot.borrow().clone()) {
+            return Output {
+                text: logic::format_error(&format!("subscribe: {err}")),
+                interval_ms: FALLBACK_INTERVAL_MS,
+            };
+        }
+        let format = FORMAT.with(|f| f.borrow().clone());
+        let text = match take_latest_xkb_state_changed() {
+            Some(json) => logic::text_from_xkb_json(&format, &json),
+            None => match host::call_extension("xkb", "state", "") {
+                Ok(json) => logic::text_from_xkb_json(&format, &json),
                 Err(err) => logic::format_error(&err),
             },
-            Err(err) => logic::format_error(&err),
         };
         Output {
             text,
-            interval_ms: 300,
+            interval_ms: FALLBACK_INTERVAL_MS,
         }
     }
 
@@ -291,5 +319,13 @@ mod tests {
     #[test]
     fn parse_xkb_state_json_garbage() {
         assert!(parse_xkb_state_json("not json").is_err());
+    }
+
+    #[test]
+    fn text_from_xkb_json_formats_layout() {
+        assert_eq!(
+            text_from_xkb_json("[{}]", r#"{"active_group":0,"symbols":"pc+us"}"#),
+            "[us]"
+        );
     }
 }
