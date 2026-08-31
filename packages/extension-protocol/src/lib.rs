@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::mpsc;
+use std::thread;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 const MAX_FRAME_SIZE: u32 = 8 * 1024 * 1024;
 
 pub const CHECK_METHOD: &str = "check";
@@ -102,10 +104,43 @@ pub struct Request {
     pub payload: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Response {
     Ok(String),
     Err(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    pub name: String,
+    pub payload: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FromExtension {
+    Response(Response),
+    Event(Event),
+}
+
+#[derive(Clone)]
+pub struct EventEmit {
+    tx: mpsc::Sender<ServerMsg>,
+}
+
+impl EventEmit {
+    pub fn emit(&self, name: impl Into<String>, payload: impl Into<String>) -> Result<(), String> {
+        self.tx
+            .send(ServerMsg::Event(Event {
+                name: name.into(),
+                payload: payload.into(),
+            }))
+            .map_err(|_| "event channel closed".to_string())
+    }
+}
+
+enum ServerMsg {
+    Request(Request),
+    Event(Event),
 }
 
 pub fn allowlist_check_response(payload: &str, extension: &str) -> Response {
@@ -155,7 +190,38 @@ fn accept_and_handshake(socket_path: &str) -> Result<UnixStream, String> {
 fn drive_loop<S: Read + Write>(mut stream: S, mut respond: impl FnMut(&Request) -> Response) {
     while let Ok(request) = read_frame::<_, Request>(&mut stream) {
         let response = respond(&request);
-        if write_frame(&mut stream, &response).is_err() {
+        if write_frame(&mut stream, &FromExtension::Response(response)).is_err() {
+            break;
+        }
+    }
+}
+
+fn drive_loop_with_events(
+    stream: UnixStream,
+    event_rx_bridge: mpsc::Sender<ServerMsg>,
+    rx: mpsc::Receiver<ServerMsg>,
+    mut respond: impl FnMut(&Request) -> Response,
+) {
+    let mut reader = match stream.try_clone() {
+        Ok(reader) => reader,
+        Err(_) => return,
+    };
+    let req_tx = event_rx_bridge;
+    thread::spawn(move || {
+        while let Ok(request) = read_frame::<_, Request>(&mut reader) {
+            if req_tx.send(ServerMsg::Request(request)).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut writer = stream;
+    for msg in rx {
+        let frame = match msg {
+            ServerMsg::Request(request) => FromExtension::Response(respond(&request)),
+            ServerMsg::Event(event) => FromExtension::Event(event),
+        };
+        if write_frame(&mut writer, &frame).is_err() {
             break;
         }
     }
@@ -180,6 +246,40 @@ pub fn serve(handler: impl FnMut(&Request) -> Response) {
         .expect("missing socket path argument");
     let stream = accept_and_handshake(&socket_path).expect("extension server failed");
     drive_loop(stream, handler);
+}
+
+pub fn serve_with_events<F, H>(factory: F)
+where
+    F: FnOnce(EventEmit) -> H,
+    H: FnMut(&Request) -> Response,
+{
+    let socket_path = std::env::args()
+        .nth(1)
+        .expect("missing socket path argument");
+    serve_with_events_at(&socket_path, factory).expect("extension server failed");
+}
+
+fn serve_with_events_at<F, H>(socket_path: &str, factory: F) -> Result<(), String>
+where
+    F: FnOnce(EventEmit) -> H,
+    H: FnMut(&Request) -> Response,
+{
+    let stream = accept_and_handshake(socket_path)?;
+    let (tx, rx) = mpsc::channel();
+    let emit = EventEmit { tx: tx.clone() };
+    let handler = factory(emit);
+    drive_loop_with_events(stream, tx, rx, handler);
+    Ok(())
+}
+
+pub fn write_event<W: Write>(writer: &mut W, name: &str, payload: &str) -> io::Result<()> {
+    write_frame(
+        writer,
+        &FromExtension::Event(Event {
+            name: name.to_string(),
+            payload: payload.to_string(),
+        }),
+    )
 }
 
 pub fn check_request(
@@ -645,11 +745,111 @@ mod tests {
             },
         )
         .unwrap();
-        let response: Response = read_frame(&mut stream).unwrap();
-        match response {
-            Response::Ok(body) => assert_eq!(body, "pong:hi"),
-            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        let frame: FromExtension = read_frame(&mut stream).unwrap();
+        match frame {
+            FromExtension::Response(Response::Ok(body)) => assert_eq!(body, "pong:hi"),
+            FromExtension::Response(Response::Err(msg)) => panic!("expected Ok, got Err: {msg}"),
+            FromExtension::Event(_) => panic!("expected Response, got Event"),
         }
+        drop(stream);
+        server.join().unwrap().unwrap();
+        let _ = std::fs::remove_file(&socket_path_str);
+    }
+
+    #[test]
+    fn event_frame_round_trips_through_a_buffer() {
+        let mut buf = Vec::new();
+        write_event(&mut buf, "state-changed", "{\"group\":1}").unwrap();
+
+        let mut cursor = Cursor::new(buf);
+        let decoded: FromExtension = read_frame(&mut cursor).unwrap();
+        assert_eq!(
+            decoded,
+            FromExtension::Event(Event {
+                name: "state-changed".to_string(),
+                payload: "{\"group\":1}".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn from_extension_response_round_trips() {
+        let mut buf = Vec::new();
+        write_frame(
+            &mut buf,
+            &FromExtension::Response(Response::Ok("body".to_string())),
+        )
+        .unwrap();
+        let mut cursor = Cursor::new(buf);
+        let decoded: FromExtension = read_frame(&mut cursor).unwrap();
+        assert_eq!(
+            decoded,
+            FromExtension::Response(Response::Ok("body".to_string()))
+        );
+    }
+
+    #[test]
+    fn serve_with_events_emits_event_and_answers_rpc() {
+        use std::os::unix::net::UnixStream;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let socket_path =
+            std::env::temp_dir().join(format!("extension-protocol-events-test-{nanos}.sock"));
+        let socket_path_str = socket_path.to_string_lossy().into_owned();
+
+        let server_path = socket_path_str.clone();
+        let server = thread::spawn(move || {
+            serve_with_events_at(&server_path, |emit| {
+                emit.emit("ready", "1").unwrap();
+                move |request: &Request| Response::Ok(format!("echo:{}", request.payload))
+            })
+        });
+
+        let mut stream = None;
+        for _ in 0..100 {
+            match UnixStream::connect(&socket_path_str) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+        let mut stream = stream.expect("connect");
+        perform_handshake_client(&mut stream).expect("handshake");
+
+        let mut saw_event = false;
+        let mut saw_response = false;
+        write_frame(
+            &mut stream,
+            &Request {
+                method: "ping".to_string(),
+                payload: "hi".to_string(),
+            },
+        )
+        .unwrap();
+
+        while !(saw_event && saw_response) {
+            match read_frame::<_, FromExtension>(&mut stream).unwrap() {
+                FromExtension::Event(event) => {
+                    assert_eq!(event.name, "ready");
+                    assert_eq!(event.payload, "1");
+                    saw_event = true;
+                }
+                FromExtension::Response(Response::Ok(body)) => {
+                    assert_eq!(body, "echo:hi");
+                    saw_response = true;
+                }
+                FromExtension::Response(Response::Err(msg)) => {
+                    panic!("expected Ok, got Err: {msg}")
+                }
+            }
+        }
+
         drop(stream);
         server.join().unwrap().unwrap();
         let _ = std::fs::remove_file(&socket_path_str);

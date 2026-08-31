@@ -2,7 +2,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use extension_protocol::{self as protocol, Request, Response};
+use extension_protocol::{self as protocol, FromExtension, Request, Response};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -24,6 +24,15 @@ pub(crate) fn connect_and_handshake(socket_path: &Path) -> Result<UnixStream, St
 }
 
 pub(crate) fn call(stream: &mut UnixStream, method: &str, payload: &str) -> Result<String, String> {
+    call_with_events(stream, method, payload, |_, _| {})
+}
+
+pub(crate) fn call_with_events(
+    stream: &mut UnixStream,
+    method: &str,
+    payload: &str,
+    mut on_event: impl FnMut(&str, &str),
+) -> Result<String, String> {
     set_stream_timeouts(stream)?;
     protocol::write_frame(
         stream,
@@ -34,15 +43,19 @@ pub(crate) fn call(stream: &mut UnixStream, method: &str, payload: &str) -> Resu
     )
     .map_err(|e| e.to_string())?;
 
-    match protocol::read_frame(stream).map_err(|e| e.to_string())? {
-        Response::Ok(value) => Ok(value),
-        Response::Err(err) => Err(err),
+    loop {
+        match protocol::read_frame(stream).map_err(|e| e.to_string())? {
+            FromExtension::Event(event) => on_event(&event.name, &event.payload),
+            FromExtension::Response(Response::Ok(value)) => return Ok(value),
+            FromExtension::Response(Response::Err(err)) => return Err(err),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use super::*;
@@ -75,12 +88,52 @@ mod tests {
             let request: Request = protocol::read_frame(&mut stream).unwrap();
             assert_eq!(request.method, "ping");
             assert_eq!(request.payload, "hello");
-            protocol::write_frame(&mut stream, &Response::Ok("hello".to_string())).unwrap();
+            protocol::write_frame(
+                &mut stream,
+                &FromExtension::Response(Response::Ok("hello".to_string())),
+            )
+            .unwrap();
         });
 
         let mut stream = connect_and_handshake(&path).unwrap();
         let response = call(&mut stream, "ping", "hello").unwrap();
         assert_eq!(response, "hello");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn call_ignores_events_before_response() {
+        let path = socket_path("events-before-response");
+        let server = spawn_server(path.clone(), |mut stream| {
+            protocol::perform_handshake_server(&mut stream).unwrap();
+            let _request: Request = protocol::read_frame(&mut stream).unwrap();
+            protocol::write_event(&mut stream, "tick", "1").unwrap();
+            protocol::write_event(&mut stream, "tick", "2").unwrap();
+            protocol::write_frame(
+                &mut stream,
+                &FromExtension::Response(Response::Ok("done".to_string())),
+            )
+            .unwrap();
+        });
+
+        let mut stream = connect_and_handshake(&path).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_cb = Arc::clone(&seen);
+        let response = call_with_events(&mut stream, "ping", "hello", |name, payload| {
+            seen_cb
+                .lock()
+                .unwrap()
+                .push((name.to_string(), payload.to_string()));
+        })
+        .unwrap();
+        assert_eq!(response, "done");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ("tick".to_string(), "1".to_string()),
+                ("tick".to_string(), "2".to_string()),
+            ]
+        );
         server.join().unwrap();
     }
 
