@@ -28,8 +28,15 @@ enum ClientOutcome {
     Ignored,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WaitResult {
+    Reload(ReloadBatch),
+    ExtensionWake(Vec<String>),
+}
+
 pub(crate) struct ControlListener {
     reload_rx: Receiver<ReloadBatch>,
+    event_rx: Receiver<Vec<String>>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     path: PathBuf,
@@ -38,6 +45,7 @@ pub(crate) struct ControlListener {
 impl ControlListener {
     pub(crate) fn new(
         status_provider: Option<Box<dyn Fn() -> String + Send>>,
+        event_rx: Receiver<Vec<String>>,
     ) -> Result<Self, String> {
         let path = lock::control_socket_path().map_err(|err| err.to_string())?;
         if let Some(parent) = path.parent() {
@@ -58,16 +66,51 @@ impl ControlListener {
 
         Ok(Self {
             reload_rx,
+            event_rx,
             shutdown,
             thread: Some(thread),
             path,
         })
     }
 
-    pub(crate) fn wait_for_reload_or_timeout(&mut self, timeout: Duration) -> Option<ReloadBatch> {
-        match self.reload_rx.recv_timeout(timeout) {
-            Ok(batch) => Some(batch),
-            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => None,
+    pub(crate) fn wait_for_reload_or_timeout(&mut self, timeout: Duration) -> Option<WaitResult> {
+        wait_for_reload_or_event(&self.reload_rx, &self.event_rx, timeout)
+    }
+}
+
+pub(crate) fn wait_for_reload_or_event(
+    reload_rx: &Receiver<ReloadBatch>,
+    event_rx: &Receiver<Vec<String>>,
+    timeout: Duration,
+) -> Option<WaitResult> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match event_rx.try_recv() {
+            Ok(mut names) => {
+                while let Ok(more) = event_rx.try_recv() {
+                    names.extend(more);
+                }
+                names.sort();
+                names.dedup();
+                return Some(WaitResult::ExtensionWake(names));
+            }
+            Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+
+        let slice = remaining.min(Duration::from_millis(50));
+        match reload_rx.recv_timeout(slice) {
+            Ok(batch) => return Some(WaitResult::Reload(batch)),
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+            }
         }
     }
 }
@@ -483,5 +526,43 @@ mod tests {
         assert_eq!(value["daemon_pid"], 9);
         server.join().unwrap();
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wait_helper_returns_extension_wake_before_full_timeout() {
+        let (reload_tx, reload_rx) = mpsc::channel::<ReloadBatch>();
+        let (event_tx, event_rx) = mpsc::channel::<Vec<String>>();
+        drop(reload_tx);
+
+        let started = Instant::now();
+        let waiter = thread::spawn(move || {
+            wait_for_reload_or_event(&reload_rx, &event_rx, Duration::from_secs(5))
+        });
+        thread::sleep(Duration::from_millis(20));
+        event_tx.send(vec!["keyboard".to_string()]).unwrap();
+        let result = waiter.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        match result {
+            Some(WaitResult::ExtensionWake(names)) => {
+                assert_eq!(names, vec!["keyboard".to_string()]);
+            }
+            other => panic!("expected ExtensionWake, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wait_helper_returns_reload_when_signaled() {
+        let (reload_tx, reload_rx) = mpsc::channel::<ReloadBatch>();
+        let (_event_tx, event_rx) = mpsc::channel::<Vec<String>>();
+
+        let waiter = thread::spawn(move || {
+            wait_for_reload_or_event(&reload_rx, &event_rx, Duration::from_secs(5))
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut batch = ReloadBatch::default();
+        batch.config = true;
+        reload_tx.send(batch.clone()).unwrap();
+        let result = waiter.join().unwrap();
+        assert_eq!(result, Some(WaitResult::Reload(batch)));
     }
 }

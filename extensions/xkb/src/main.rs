@@ -1,11 +1,17 @@
-use extension_protocol::{self as protocol, Request, Response};
+use std::thread;
+use std::time::Duration;
+
+use extension_protocol::{self as protocol, EventEmit, Request, Response};
 use serde::Serialize;
+use x11rb::connection::Connection;
 use x11rb::protocol::xkb;
 use x11rb::protocol::xkb::ConnectionExt as _;
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-#[derive(Serialize)]
+const STATE_CHANGED_EVENT: &str = "state-changed";
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 struct XkbStateJson {
     active_group: u8,
     symbols: String,
@@ -13,6 +19,10 @@ struct XkbStateJson {
 
 fn xkb_state_json(state: &XkbStateJson) -> String {
     serde_json::to_string(state).expect("XkbStateJson always serializes")
+}
+
+fn state_changed_payload(state: &XkbStateJson) -> (String, String) {
+    (STATE_CHANGED_EVENT.to_string(), xkb_state_json(state))
 }
 
 fn read_xkb_state_from(connection: &RustConnection) -> Result<XkbStateJson, String> {
@@ -87,10 +97,57 @@ fn handle_request_with(
     }
 }
 
+fn enable_state_notify(connection: &RustConnection) -> Result<(), String> {
+    let details = xkb::SelectEventsAux::new().state_notify(xkb::SelectEventsAuxStateNotify {
+        affect_state: xkb::StatePart::GROUP_STATE,
+        state_details: xkb::StatePart::GROUP_STATE,
+    });
+    connection
+        .xkb_select_events(
+            xkb::ID::USE_CORE_KBD.into(),
+            xkb::EventType::from(0u16),
+            xkb::EventType::STATE_NOTIFY,
+            xkb::MapPart::from(0u16),
+            xkb::MapPart::from(0u16),
+            &details,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn watch_state_changes(emit: &EventEmit) -> Result<(), String> {
+    let connection = connect_xkb()?;
+    enable_state_notify(&connection)?;
+    let mut last = read_xkb_state_from(&connection)?;
+
+    loop {
+        let _event = connection.wait_for_event().map_err(|e| e.to_string())?;
+        let state = read_xkb_state_from(&connection)?;
+        if state != last {
+            last = state;
+            let (name, payload) = state_changed_payload(&last);
+            emit.emit(name, payload)?;
+        }
+    }
+}
+
+fn spawn_state_watcher(emit: EventEmit) {
+    thread::spawn(move || {
+        loop {
+            if let Err(_err) = watch_state_changes(&emit) {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    });
+}
+
 fn main() {
-    let mut connection = None;
-    protocol::serve(move |request| {
-        handle_request_with(request, || read_with_cached_connection(&mut connection))
+    protocol::serve_with_events(|emit| {
+        spawn_state_watcher(emit);
+        let mut connection = None;
+        move |request: &Request| {
+            handle_request_with(request, || read_with_cached_connection(&mut connection))
+        }
     });
 }
 
@@ -107,6 +164,19 @@ mod tests {
         let json = xkb_state_json(&state);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["active_group"], 1);
+        assert_eq!(value["symbols"], "pc+us+ru:2");
+    }
+
+    #[test]
+    fn state_changed_event_uses_state_json_shape() {
+        let state = XkbStateJson {
+            active_group: 2,
+            symbols: "pc+us+ru:2".to_string(),
+        };
+        let (name, payload) = state_changed_payload(&state);
+        assert_eq!(name, "state-changed");
+        let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(value["active_group"], 2);
         assert_eq!(value["symbols"], "pc+us+ru:2");
     }
 

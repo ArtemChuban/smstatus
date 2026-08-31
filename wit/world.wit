@@ -2,6 +2,15 @@ package smstatus:module;
 
 interface host {
   call-extension: func(extension: string, method: string, payload: string) -> result<string, string>;
+
+  record extension-event {
+    extension: string,
+    event: string,
+    payload: string,
+  }
+
+  subscribe-extension-event: func(extension: string, event: string) -> result<_, string>;
+  take-extension-event: func() -> option<extension-event>;
 }
 
 interface guest {
