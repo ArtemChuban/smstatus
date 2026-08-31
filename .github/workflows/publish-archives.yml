@@ -28,11 +28,6 @@ on:
           - all
           - changed
         default: all
-  push:
-    branches: [main]
-    paths:
-      - 'modules/**'
-      - 'extensions/**'
 
 permissions:
   contents: read
@@ -43,6 +38,7 @@ concurrency:
 
 jobs:
   publish:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
