@@ -320,6 +320,11 @@ pack-release-archives *args:
     set -euo pipefail
     .github/scripts/pack-release-archives.sh {{args}}
 
+# Derived catalog/v1 index from dist/release archives + on-disk manifests.
+# Requires --base-url (HTTPS origin, no trailing slash). Optional --merge-from, --out, --release-dir.
+generate-catalog *args:
+    .github/scripts/generate-catalog-index.sh {{args}}
+
 stage-module name dest: (pack-module name)
     #!/usr/bin/env bash
     set -euo pipefail

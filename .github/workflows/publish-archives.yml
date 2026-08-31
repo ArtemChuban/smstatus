@@ -1,19 +1,25 @@
-# Publish module and extension archives to S3.
+# Publish module and extension archives to S3, then refresh catalog/v1/index.json.
 #
-# Object key layout (immutable versioned keys; do not overwrite):
+# Object key layout (immutable versioned archive keys; do not overwrite):
 #   modules/<name>/<version>/module-<name>-<version>.tar.gz
 #   modules/<name>/<version>/module-<name>-<version>.tar.gz.sha256
 #   extensions/<name>/<version>/linux-x86_64/extension-<name>-<version>-linux-x86_64.tar.gz
 #   extensions/<name>/<version>/linux-x86_64/extension-<name>-<version>-linux-x86_64.tar.gz.sha256
 #
+# Catalog feed (mutable pointer; overwrite allowed):
+#   catalog/v1/index.json
+#
 # Arch policy: extensions = linux-x86_64 only for now. Modules are WASM (no arch).
 #
 # Secrets / variables
-#   SMSTATUS_ARCHIVE_S3_BUCKET               variable
+#   SMSTATUS_ARCHIVE_S3_BUCKET               variable (or secret fallback)
 #   SMSTATUS_ARCHIVE_S3_REGION               variable
 #   SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID       secret
 #   SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY   secret
-#   SMSTATUS_ARCHIVE_S3_ENDPOINT             variable
+#   SMSTATUS_ARCHIVE_S3_ENDPOINT             variable (optional; empty = AWS default)
+#   SMSTATUS_ARCHIVE_PUBLIC_BASE_URL         variable (HTTPS origin, no trailing slash;
+#                                            used for absolute catalog entry URLs and must
+#                                            match src/catalog.rs DEFAULT_CATALOG_PUBLIC_BASE)
 
 name: Publish archives
 
@@ -38,7 +44,8 @@ concurrency:
 
 jobs:
   publish:
-    if: false
+    # Run when bucket is configured; upload steps still fail closed if credentials are missing.
+    if: ${{ vars.SMSTATUS_ARCHIVE_S3_BUCKET != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -229,3 +236,49 @@ jobs:
                 ;;
             esac
           done
+
+      - name: Publish catalog/v1/index.json
+        if: steps.pack.outputs.skip != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.SMSTATUS_ARCHIVE_S3_REGION }}
+          AWS_ENDPOINT_URL: ${{ vars.SMSTATUS_ARCHIVE_S3_ENDPOINT }}
+          BUCKET_VAR: ${{ vars.SMSTATUS_ARCHIVE_S3_BUCKET }}
+          BUCKET_SECRET: ${{ secrets.SMSTATUS_ARCHIVE_S3_BUCKET }}
+          PUBLIC_BASE: ${{ vars.SMSTATUS_ARCHIVE_PUBLIC_BASE_URL }}
+          MODE: ${{ steps.scope.outputs.mode }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID secret required}"
+          : "${AWS_SECRET_ACCESS_KEY:?SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY secret required}"
+          : "${AWS_DEFAULT_REGION:?SMSTATUS_ARCHIVE_S3_REGION variable required}"
+          : "${PUBLIC_BASE:?SMSTATUS_ARCHIVE_PUBLIC_BASE_URL variable required for absolute catalog URLs}"
+
+          BUCKET="${BUCKET_VAR:-}"
+          if [ -z "${BUCKET}" ]; then
+            BUCKET="${BUCKET_SECRET:-}"
+          fi
+          : "${BUCKET:?SMSTATUS_ARCHIVE_S3_BUCKET variable or secret required}"
+
+          if [ -z "${AWS_ENDPOINT_URL:-}" ]; then
+            unset AWS_ENDPOINT_URL
+          fi
+
+          INDEX_KEY="catalog/v1/index.json"
+          INDEX_OUT="dist/release/catalog-v1-index.json"
+          MERGE_ARGS=()
+
+          if [ "${MODE}" = "changed" ]; then
+            MERGE_PATH="dist/release/catalog-v1-index.prev.json"
+            if aws s3 cp "s3://${BUCKET}/${INDEX_KEY}" "${MERGE_PATH}"; then
+              MERGE_ARGS=(--merge-from "${MERGE_PATH}")
+              echo "merging with existing s3://${BUCKET}/${INDEX_KEY}"
+            else
+              echo "no existing catalog index; building from this pack only"
+            fi
+          fi
+
+          just generate-catalog --base-url "${PUBLIC_BASE}" --out "${INDEX_OUT}" "${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"}"
+          aws s3 cp "${INDEX_OUT}" "s3://${BUCKET}/${INDEX_KEY}"
+          echo "uploaded s3://${BUCKET}/${INDEX_KEY}"

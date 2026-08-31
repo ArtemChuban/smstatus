@@ -13,7 +13,8 @@ use crate::install::{self, InstallOptions, InstallOutput};
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
 
-/// Placeholder public base until publish wiring locks the real origin.
+/// Public HTTPS origin for official archives / catalog (no trailing slash).
+/// Must match GitHub Actions variable `SMSTATUS_ARCHIVE_PUBLIC_BASE_URL` when publishing.
 pub(crate) const DEFAULT_CATALOG_PUBLIC_BASE: &str = "https://archives.smstatus.invalid";
 
 fn default_catalog_url() -> String {
