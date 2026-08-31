@@ -1,0 +1,231 @@
+# Publish module and extension archives to S3.
+#
+# Object key layout (immutable versioned keys; do not overwrite):
+#   modules/<name>/<version>/module-<name>-<version>.tar.gz
+#   modules/<name>/<version>/module-<name>-<version>.tar.gz.sha256
+#   extensions/<name>/<version>/linux-x86_64/extension-<name>-<version>-linux-x86_64.tar.gz
+#   extensions/<name>/<version>/linux-x86_64/extension-<name>-<version>-linux-x86_64.tar.gz.sha256
+#
+# Arch policy: extensions = linux-x86_64 only for now. Modules are WASM (no arch).
+#
+# Secrets / variables
+#   SMSTATUS_ARCHIVE_S3_BUCKET               variable
+#   SMSTATUS_ARCHIVE_S3_REGION               variable
+#   SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID       secret
+#   SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY   secret
+#   SMSTATUS_ARCHIVE_S3_ENDPOINT             variable
+
+name: Publish archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Pack/upload all shipped packages, or only trees changed vs previous SHA
+        required: true
+        type: choice
+        options:
+          - all
+          - changed
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-archives
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ github.job }}
+
+      - uses: taiki-e/install-action@just
+
+      - name: Resolve publish scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SCOPE: ${{ inputs.scope }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "push" ]; then
+            SCOPE="changed"
+          else
+            SCOPE="${DISPATCH_SCOPE}"
+          fi
+          echo "scope=${SCOPE}" >> "${GITHUB_OUTPUT}"
+
+          mkdir -p dist
+          LIST="dist/changed-packages.txt"
+          : >"${LIST}"
+
+          if [ "${SCOPE}" = "all" ]; then
+            echo "list=${LIST}" >> "${GITHUB_OUTPUT}"
+            echo "mode=all" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Push provides github.event.before; workflow_dispatch does not.
+          # Diff against the parent commit instead of silently packing everything.
+          if [ -z "${BEFORE}" ] || [ "${BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+            if git rev-parse --verify --quiet "${SHA}^" >/dev/null; then
+              BEFORE="$(git rev-parse "${SHA}^")"
+              echo "No usable event before SHA; diffing against parent ${BEFORE}"
+            else
+              echo "::error::scope=changed needs a before SHA or parent commit; use scope=all" >&2
+              exit 1
+            fi
+          fi
+
+          # Allowlist: .github/scripts/pack-release-archives.sh (single source).
+          changed="$(git diff --name-only "${BEFORE}" "${SHA}" || true)"
+          while IFS= read -r name; do
+            [ -z "${name}" ] && continue
+            if printf '%s\n' "${changed}" | grep -q "^modules/${name}/"; then
+              echo "module:${name}" >>"${LIST}"
+            fi
+          done < <(.github/scripts/pack-release-archives.sh --list-modules)
+          while IFS= read -r bin; do
+            [ -z "${bin}" ] && continue
+            if printf '%s\n' "${changed}" | grep -q "^extensions/${bin}/"; then
+              echo "extension:${bin}" >>"${LIST}"
+            fi
+          done < <(.github/scripts/pack-release-archives.sh --list-extension-bins)
+
+          echo "list=${LIST}" >> "${GITHUB_OUTPUT}"
+          echo "mode=changed" >> "${GITHUB_OUTPUT}"
+          echo "Changed packages:"
+          cat "${LIST}" || true
+
+      - name: Pack release archives
+        id: pack
+        env:
+          MODE: ${{ steps.scope.outputs.mode }}
+          LIST: ${{ steps.scope.outputs.list }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = "all" ]; then
+            just pack-release-archives all
+          else
+            if [ ! -s "${LIST}" ]; then
+              echo "No package trees changed; skipping pack/upload"
+              echo "skip=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            just pack-release-archives --changed-list "${LIST}"
+          fi
+          echo "skip=false" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload archives to S3
+        if: steps.pack.outputs.skip != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.SMSTATUS_ARCHIVE_S3_REGION }}
+          AWS_ENDPOINT_URL: ${{ vars.SMSTATUS_ARCHIVE_S3_ENDPOINT }}
+          BUCKET_VAR: ${{ vars.SMSTATUS_ARCHIVE_S3_BUCKET }}
+          BUCKET_SECRET: ${{ secrets.SMSTATUS_ARCHIVE_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?SMSTATUS_ARCHIVE_AWS_ACCESS_KEY_ID secret required}"
+          : "${AWS_SECRET_ACCESS_KEY:?SMSTATUS_ARCHIVE_AWS_SECRET_ACCESS_KEY secret required}"
+          : "${AWS_DEFAULT_REGION:?SMSTATUS_ARCHIVE_S3_REGION variable required}"
+
+          BUCKET="${BUCKET_VAR:-}"
+          if [ -z "${BUCKET}" ]; then
+            BUCKET="${BUCKET_SECRET:-}"
+          fi
+          : "${BUCKET:?SMSTATUS_ARCHIVE_S3_BUCKET variable or secret required}"
+
+          # Empty endpoint means AWS default; unset so the CLI does not send "".
+          if [ -z "${AWS_ENDPOINT_URL:-}" ]; then
+            unset AWS_ENDPOINT_URL
+          fi
+
+          RELEASE_DIR="dist/release"
+          [ -d "${RELEASE_DIR}" ] || { echo "error: missing ${RELEASE_DIR}" >&2; exit 1; }
+
+          shopt -s nullglob
+          archives=("${RELEASE_DIR}"/*.tar.gz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "error: no archives in ${RELEASE_DIR}" >&2
+            exit 1
+          fi
+
+          object_exists() {
+            local key="$1"
+            if aws s3api head-object --bucket "${BUCKET}" --key "${key}" >/dev/null 2>&1; then
+              return 0
+            fi
+            return 1
+          }
+
+          upload_pair() {
+            local archive="$1"
+            local key="$2"
+            local sidecar="${archive}.sha256"
+            local sidecar_key="${key}.sha256"
+            [ -f "${sidecar}" ] || { echo "error: missing sidecar ${sidecar}" >&2; exit 1; }
+
+            if object_exists "${key}"; then
+              echo "error: object already exists (immutable versions): s3://${BUCKET}/${key}" >&2
+              exit 1
+            fi
+            if object_exists "${sidecar_key}"; then
+              echo "error: object already exists (immutable versions): s3://${BUCKET}/${sidecar_key}" >&2
+              exit 1
+            fi
+
+            aws s3 cp "${archive}" "s3://${BUCKET}/${key}"
+            aws s3 cp "${sidecar}" "s3://${BUCKET}/${sidecar_key}"
+            echo "uploaded s3://${BUCKET}/${key}"
+          }
+
+          for archive in "${archives[@]}"; do
+            base="$(basename "${archive}")"
+            case "${base}" in
+              module-*-*.tar.gz)
+                # module-<name>-<version>.tar.gz
+                rest="${base#module-}"
+                rest="${rest%.tar.gz}"
+                version="${rest##*-}"
+                name="${rest%-"${version}"}"
+                [ -n "${name}" ] && [ -n "${version}" ] && [ "${name}" != "${rest}" ] \
+                  || { echo "error: bad module archive name ${base}" >&2; exit 1; }
+                key="modules/${name}/${version}/${base}"
+                upload_pair "${archive}" "${key}"
+                ;;
+              extension-*-*-linux-x86_64.tar.gz)
+                # extension-<name>-<version>-linux-x86_64.tar.gz
+                rest="${base#extension-}"
+                rest="${rest%-linux-x86_64.tar.gz}"
+                version="${rest##*-}"
+                name="${rest%-"${version}"}"
+                [ -n "${name}" ] && [ -n "${version}" ] && [ "${name}" != "${rest}" ] \
+                  || { echo "error: bad extension archive name ${base}" >&2; exit 1; }
+                key="extensions/${name}/${version}/linux-x86_64/${base}"
+                upload_pair "${archive}" "${key}"
+                ;;
+              *)
+                echo "error: unrecognized archive basename ${base}" >&2
+                exit 1
+                ;;
+            esac
+          done
