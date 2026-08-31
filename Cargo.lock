@@ -2497,6 +2497,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smstatus-power"
+version = "0.1.0"
+dependencies = [
+ "extension-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "smstatus-process"
 version = "0.1.0"
 dependencies = [
