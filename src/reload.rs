@@ -99,17 +99,6 @@ pub(crate) fn reload_request_from_cli(
     request
 }
 
-#[expect(
-    dead_code,
-    reason = "reload-only parser kept for tests and future callers"
-)]
-pub(crate) fn parse_command_line(line: &str) -> Result<ReloadRequest, String> {
-    match parse_control_line(line)? {
-        ControlLine::Reload(request) => Ok(request),
-        ControlLine::Status => Err("status is not a reload command".to_string()),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ControlLine {
     Reload(ReloadRequest),
@@ -184,31 +173,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_command_line_accepts_known_commands() {
+    fn parse_control_line_accepts_known_commands() {
         assert_eq!(
-            parse_command_line("config").unwrap(),
-            ReloadRequest::config()
+            parse_control_line("config").unwrap(),
+            ControlLine::Reload(ReloadRequest::config())
         );
         assert_eq!(
-            parse_command_line("module:cpu").unwrap(),
-            ReloadRequest::module("cpu")
+            parse_control_line("module:cpu").unwrap(),
+            ControlLine::Reload(ReloadRequest::module("cpu"))
         );
         assert_eq!(
-            parse_command_line("extension:echo").unwrap(),
-            ReloadRequest::extension("echo")
+            parse_control_line("extension:echo").unwrap(),
+            ControlLine::Reload(ReloadRequest::extension("echo"))
         );
     }
 
     #[test]
     fn parse_control_line_accepts_status_without_merging_into_reload() {
         assert_eq!(parse_control_line("status").unwrap(), ControlLine::Status);
-        assert!(parse_command_line("status").is_err());
     }
 
     #[test]
-    fn parse_command_line_rejects_unsafe_extension_names() {
+    fn parse_control_line_rejects_unsafe_extension_names() {
         for name in ["../etc/passwd", "a/b", ".", ".."] {
-            let err = parse_command_line(&format!("extension:{name}")).unwrap_err();
+            let err = parse_control_line(&format!("extension:{name}")).unwrap_err();
             assert!(
                 err.contains("invalid extension name"),
                 "name {name:?} err {err}"

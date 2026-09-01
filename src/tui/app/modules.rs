@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use super::text::clamped_scroll_offset;
+use super::text::{apply_text_edit, clamped_scroll_offset, move_list_selection};
 use super::{App, Mode, PanelFocus};
 
 impl App {
@@ -112,18 +112,20 @@ impl App {
         };
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Up => {
-                *selected = selected.saturating_sub(1);
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
-            }
-            KeyCode::Down => {
-                if !available.is_empty() {
-                    *selected = (*selected + 1).min(available.len() - 1);
-                }
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
-            }
+            KeyCode::Up => move_list_selection(
+                selected,
+                scroll_offset,
+                available.len(),
+                self.overlay_viewport_height,
+                -1,
+            ),
+            KeyCode::Down => move_list_selection(
+                selected,
+                scroll_offset,
+                available.len(),
+                self.overlay_viewport_height,
+                1,
+            ),
             KeyCode::Enter => self.begin_naming_module_instance(),
             _ => {}
         }
@@ -157,26 +159,8 @@ impl App {
                 self.mode = Mode::Normal;
                 return;
             }
-            KeyCode::Left => {
-                *cursor = cursor.saturating_sub(1);
-                return;
-            }
-            KeyCode::Right => {
-                *cursor = (*cursor + 1).min(buffer.chars().count());
-                return;
-            }
-            KeyCode::Backspace => {
-                if *cursor > 0 {
-                    let byte = super::super::util::char_byte_offset(buffer, *cursor - 1);
-                    buffer.remove(byte);
-                    *cursor -= 1;
-                }
-                return;
-            }
-            KeyCode::Char(c) => {
-                let byte = super::super::util::char_byte_offset(buffer, *cursor);
-                buffer.insert(byte, c);
-                *cursor += 1;
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
+                apply_text_edit(buffer, cursor, key);
                 return;
             }
             KeyCode::Enter => {}

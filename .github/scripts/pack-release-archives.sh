@@ -49,28 +49,9 @@ die() {
   exit 1
 }
 
-toml_string() {
+toml_field() {
   local file="$1" key="$2"
-  local line
-  line="$(grep -E "^${key}[[:space:]]*=" "$file" | head -n1)" || true
-  [ -n "$line" ] || die "missing ${key} in ${file}"
-  local value="${line#*=}"
-  value="${value%%#*}"
-  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')"
-  [ -n "$value" ] || die "empty ${key} in ${file}"
-  printf '%s' "$value"
-}
-
-toml_api_major_minor() {
-  local file="$1" key="$2"
-  local line
-  line="$(grep -E "^${key}[[:space:]]*=" "$file" | head -n1)" || true
-  [ -n "$line" ] || die "missing ${key} in ${file}"
-  local major minor
-  major="$(printf '%s' "$line" | sed -n 's/.*major[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-  minor="$(printf '%s' "$line" | sed -n 's/.*minor[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
-  [ -n "$major" ] && [ -n "$minor" ] || die "could not parse ${key} in ${file}"
-  printf '%s %s' "$major" "$minor"
+  cargo run -q -p release-check -- manifest-field --manifest "$file" --key "$key"
 }
 
 parse_host_api() {
@@ -237,9 +218,9 @@ pack_module() {
   [ -f "$manifest" ] || die "missing ${manifest}"
 
   local pkg_name version req_major req_minor asset_base
-  pkg_name="$(toml_string "$manifest" name)"
-  version="$(toml_string "$manifest" version)"
-  read -r req_major req_minor <<<"$(toml_api_major_minor "$manifest" "modules-api")"
+  pkg_name="$(toml_field "$manifest" name)"
+  version="$(toml_field "$manifest" version)"
+  read -r req_major req_minor <<<"$(toml_field "$manifest" "modules-api")"
 
   if ! api_compatible "$HOST_MOD_MAJOR" "$HOST_MOD_MINOR" "$req_major" "$req_minor"; then
     die "module '${pkg_name}' requires modules-api ${req_major}.${req_minor}, host provides ${HOST_MOD_MAJOR}.${HOST_MOD_MINOR}"
@@ -261,9 +242,9 @@ pack_extension() {
   [ -f "$manifest" ] || die "missing ${manifest}"
 
   local pkg_name version req_major req_minor asset_base
-  pkg_name="$(toml_string "$manifest" name)"
-  version="$(toml_string "$manifest" version)"
-  read -r req_major req_minor <<<"$(toml_api_major_minor "$manifest" "extensions-api")"
+  pkg_name="$(toml_field "$manifest" name)"
+  version="$(toml_field "$manifest" version)"
+  read -r req_major req_minor <<<"$(toml_field "$manifest" "extensions-api")"
 
   if ! api_compatible "$HOST_EXT_MAJOR" "$HOST_EXT_MINOR" "$req_major" "$req_minor"; then
     die "extension '${pkg_name}' requires extensions-api ${req_major}.${req_minor}, host provides ${HOST_EXT_MAJOR}.${HOST_EXT_MINOR}"

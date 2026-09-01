@@ -1,3 +1,20 @@
+const COMM_MAX_LEN: usize = 15;
+
+pub fn process_name_matches(comm_contents: &str, target_name: &str) -> bool {
+    let comm = comm_contents.trim();
+    if comm == target_name {
+        return true;
+    }
+    if target_name.len() <= COMM_MAX_LEN {
+        return false;
+    }
+    let mut boundary = COMM_MAX_LEN;
+    while !target_name.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    Some(comm) == target_name.get(..boundary)
+}
+
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
     let mut value = bytes as f64;
@@ -125,6 +142,27 @@ mod tests {
     #[test]
     fn human_bytes_zero() {
         assert_eq!(human_bytes(0), "0B");
+    }
+
+    #[test]
+    fn process_name_matches_exact_comm() {
+        assert!(process_name_matches("firefox", "firefox"));
+    }
+
+    #[test]
+    fn process_name_matches_truncated_prefix_of_long_target() {
+        assert!(process_name_matches(
+            "some-very-long-",
+            "some-very-long-process-name"
+        ));
+    }
+
+    #[test]
+    fn process_name_matches_rejects_unrelated_comm() {
+        assert!(!process_name_matches(
+            "other-name",
+            "some-very-long-process-name"
+        ));
     }
 
     #[test]

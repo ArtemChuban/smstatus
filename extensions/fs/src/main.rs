@@ -1,6 +1,6 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use extension_protocol::{self as protocol, Request, Response};
+use extension_protocol::{self as protocol, Request, Response, lexical_normalize};
 
 const EXTENSION_NAME: &str = "fs";
 
@@ -12,21 +12,6 @@ fn expand_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, String> {
         }
         None => Ok(PathBuf::from(path)),
     }
-}
-
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => out.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Normal(part) => out.push(part),
-        }
-    }
-    out
 }
 
 fn resolve_for_check(path: &Path) -> PathBuf {

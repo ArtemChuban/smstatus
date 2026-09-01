@@ -2170,9 +2170,17 @@ name = "release-check"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "repo-root",
  "smstatus",
  "tempfile",
  "toml_edit",
+]
+
+[[package]]
+name = "repo-root"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]
@@ -2286,6 +2294,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "regex",
+ "repo-root",
  "tempfile",
  "toml_edit",
 ]
@@ -2511,6 +2520,7 @@ name = "smstatus-process"
 version = "0.1.0"
 dependencies = [
  "extension-protocol",
+ "fmt-common",
  "libc",
  "serde",
  "serde_json",

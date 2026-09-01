@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::io::{self, Read};
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use extension_protocol::{self as protocol, EventEmit, Request, Response};
+use extension_protocol::{self as protocol, EventEmit, Request, Response, lexical_normalize};
 use serde::Serialize;
 
 const EXTENSION_NAME: &str = "power";
@@ -24,21 +24,6 @@ fn capacity_changed_payload(event: &CapacityChangedJson) -> (String, String) {
         CAPACITY_CHANGED_EVENT.to_string(),
         serde_json::to_string(event).expect("CapacityChangedJson always serializes"),
     )
-}
-
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => out.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Normal(part) => out.push(part),
-        }
-    }
-    out
 }
 
 fn resolved_keeps_power_supply(resolved: &Path) -> bool {

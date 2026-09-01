@@ -3,7 +3,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::config::{list_preset_names, read_active_name};
 use crate::preset::{UsePresetOutcome, remove_preset_in, save_preset_in, use_preset_in};
 
-use super::text::{apply_text_edit, clamped_scroll_offset};
+use super::text::{apply_text_edit, move_list_selection};
 use super::{App, Mode};
 
 impl App {
@@ -46,18 +46,20 @@ impl App {
             .and_then(|dir| read_active_name(dir).ok());
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Up => {
-                *selected = selected.saturating_sub(1);
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
-            }
-            KeyCode::Down => {
-                if !names.is_empty() {
-                    *selected = (*selected + 1).min(names.len() - 1);
-                }
-                *scroll_offset =
-                    clamped_scroll_offset(*scroll_offset, *selected, self.overlay_viewport_height);
-            }
+            KeyCode::Up => move_list_selection(
+                selected,
+                scroll_offset,
+                names.len(),
+                self.overlay_viewport_height,
+                -1,
+            ),
+            KeyCode::Down => move_list_selection(
+                selected,
+                scroll_offset,
+                names.len(),
+                self.overlay_viewport_height,
+                1,
+            ),
             KeyCode::Enter => {
                 let name = names.get(*selected).cloned();
                 if let Some(name) = name {

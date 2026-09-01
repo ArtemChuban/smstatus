@@ -1,5 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
+use super::text::apply_text_edit;
 use super::{App, Mode};
 
 impl App {
@@ -7,32 +8,9 @@ impl App {
         match key.code {
             KeyCode::Esc => self.cancel_edit_separator(),
             KeyCode::Enter => self.commit_edit_separator(),
-            KeyCode::Left => {
-                if let Mode::EditingSeparator { cursor, .. } = &mut self.mode {
-                    *cursor = cursor.saturating_sub(1);
-                }
-            }
-            KeyCode::Right => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(_) => {
                 if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode {
-                    *cursor = (*cursor + 1).min(buffer.chars().count());
-                }
-            }
-            KeyCode::Backspace => {
-                if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode
-                    && *cursor > 0
-                {
-                    let byte_idx = super::super::util::char_byte_offset(buffer, *cursor - 1);
-                    buffer.remove(byte_idx);
-                    *cursor -= 1;
-                }
-            }
-            KeyCode::Char(c)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                if let Mode::EditingSeparator { buffer, cursor } = &mut self.mode {
-                    let byte_idx = super::super::util::char_byte_offset(buffer, *cursor);
-                    buffer.insert(byte_idx, c);
-                    *cursor += 1;
+                    apply_text_edit(buffer, cursor, key);
                 }
             }
             _ => {}
