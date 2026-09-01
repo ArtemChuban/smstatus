@@ -1,25 +1,8 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use regex::Regex;
 use toml_edit::{DocumentMut, Value};
-
-pub fn find_repo_root(start: &Path) -> Result<PathBuf, String> {
-    let mut dir = start.to_path_buf();
-    loop {
-        let cargo = dir.join("Cargo.toml");
-        if cargo.is_file()
-            && let Ok(text) = fs::read_to_string(&cargo)
-            && text.contains("name = \"smstatus\"")
-            && text.contains("[workspace]")
-        {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            return Err("could not find smstatus workspace root".into());
-        }
-    }
-}
 
 pub fn read_host_api_floor(version_rs: &str, const_name: &str) -> Result<(u32, u32), String> {
     let pattern = format!(r"{const_name}:\s*\(u32,\s*u32,\s*u32\)\s*=\s*\((\d+),\s*(\d+),\s*\d+\)");
@@ -336,26 +319,5 @@ members = ["modules/a", "packages/x", "extensions/y", "extensions/z"]
             ],
         );
         assert_eq!(out, "name=foo api=0.1");
-    }
-
-    #[test]
-    fn find_repo_root_walks_ancestors() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::write(
-            root.join("Cargo.toml"),
-            r#"
-[workspace]
-members = []
-
-[package]
-name = "smstatus"
-version = "0.1.0"
-"#,
-        )
-        .unwrap();
-        let nested = root.join("a/b");
-        fs::create_dir_all(&nested).unwrap();
-        assert_eq!(find_repo_root(&nested).unwrap(), root);
     }
 }

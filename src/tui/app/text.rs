@@ -11,6 +11,21 @@ pub(super) fn clamped_scroll_offset(offset: usize, idx: usize, viewport_height: 
     }
 }
 
+pub(super) fn move_list_selection(
+    selected: &mut usize,
+    scroll_offset: &mut usize,
+    len: usize,
+    viewport_height: usize,
+    delta: isize,
+) {
+    if delta < 0 {
+        *selected = selected.saturating_sub(1);
+    } else if len > 0 {
+        *selected = (*selected + 1).min(len - 1);
+    }
+    *scroll_offset = clamped_scroll_offset(*scroll_offset, *selected, viewport_height);
+}
+
 pub(super) fn is_hard_quit(key: KeyEvent) -> bool {
     (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
         && key.modifiers.contains(KeyModifiers::CONTROL)

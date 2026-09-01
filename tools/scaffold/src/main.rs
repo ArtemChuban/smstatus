@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 use validate::is_safe_name;
 use workspace::{
-    author_from_git, collect_package_names, copy_template_dir, display_name_from, find_repo_root,
+    author_from_git, collect_package_names, copy_template_dir, display_name_from,
     insert_workspace_member, read_host_api_floor, workspace_members,
 };
 
@@ -113,7 +113,7 @@ fn prepare_crate(name: &str, kind: &str) -> Result<PathBuf, String> {
     }
 
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let root = find_repo_root(&cwd)?;
+    let root = repo_root::find_repo_root(&cwd)?;
     let member = format!("{kind}/{name}");
     let dest = root.join(&member);
 

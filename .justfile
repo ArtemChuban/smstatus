@@ -132,6 +132,9 @@ test-fmt-common:
 test-extension-protocol:
     cargo test -p extension-protocol
 
+test-repo-root:
+    cargo test -p repo-root
+
 test-echo:
     cargo test -p echo
 
@@ -167,7 +170,7 @@ test-scaffold:
 test-release-check:
     cargo test -p release-check
 
-test-packages: test-fmt-common test-extension-protocol test-scaffold test-release-check
+test-packages: test-fmt-common test-extension-protocol test-repo-root test-scaffold test-release-check
 
 test-extensions: test-echo test-time test-fs test-mem test-xkb test-power test-disk-extension test-smstatus-process test-http
 

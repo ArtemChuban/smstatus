@@ -25,6 +25,7 @@ enum Command {
     Validate(ValidateArgs),
     FormatReleaseBody,
     SetVersion(SetVersionArgs),
+    ManifestField(ManifestFieldArgs),
 }
 
 #[derive(Parser)]
@@ -51,21 +52,12 @@ struct SetVersionArgs {
     cargo_toml: Option<PathBuf>,
 }
 
-fn find_repo_root(start: &Path) -> Result<PathBuf, String> {
-    let mut dir = start.to_path_buf();
-    loop {
-        let cargo = dir.join("Cargo.toml");
-        if cargo.is_file()
-            && let Ok(text) = fs::read_to_string(&cargo)
-            && text.contains("name = \"smstatus\"")
-            && text.contains("[workspace]")
-        {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            return Err("could not find smstatus workspace root".into());
-        }
-    }
+#[derive(Parser)]
+struct ManifestFieldArgs {
+    #[arg(long)]
+    manifest: PathBuf,
+    #[arg(long)]
+    key: String,
 }
 
 fn default_cargo_toml(override_path: Option<&Path>) -> Result<PathBuf, String> {
@@ -73,7 +65,7 @@ fn default_cargo_toml(override_path: Option<&Path>) -> Result<PathBuf, String> {
         Some(path) => Ok(path.to_path_buf()),
         None => {
             let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-            Ok(find_repo_root(&cwd)?.join("Cargo.toml"))
+            Ok(repo_root::find_repo_root(&cwd)?.join("Cargo.toml"))
         }
     }
 }
@@ -161,6 +153,38 @@ fn set_version(args: &SetVersionArgs) -> Result<(), String> {
     fs::write(&cargo_path, doc.to_string()).map_err(|e| e.to_string())
 }
 
+/// Prints a manifest.toml field: a string value as-is, or `{ major, minor }`
+/// as `"<major> <minor>"`, matching the shapes pack-release-archives.sh needs.
+fn manifest_field(args: &ManifestFieldArgs) -> Result<String, String> {
+    let text = fs::read_to_string(&args.manifest).map_err(|e| e.to_string())?;
+    let doc: DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| e.to_string())?;
+    let item = doc
+        .get(&args.key)
+        .ok_or_else(|| format!("missing `{}` in {}", args.key, args.manifest.display()))?;
+    if let Some(s) = item.as_str() {
+        return Ok(s.to_string());
+    }
+    if let Some(table) = item.as_table_like() {
+        let field = |name: &str| -> Result<i64, String> {
+            table.get(name).and_then(|v| v.as_integer()).ok_or_else(|| {
+                format!(
+                    "missing `{name}` in `{}` of {}",
+                    args.key,
+                    args.manifest.display()
+                )
+            })
+        };
+        return Ok(format!("{} {}", field("major")?, field("minor")?));
+    }
+    Err(format!(
+        "unsupported field type for `{}` in {}",
+        args.key,
+        args.manifest.display()
+    ))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -170,6 +194,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Command::SetVersion(args) => set_version(&args),
+        Command::ManifestField(args) => manifest_field(&args).map(|value| print!("{value}")),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -234,5 +259,45 @@ version = "2026.8.27"
         })
         .unwrap();
         assert_eq!(fs::read_to_string(&cargo_path).unwrap(), original);
+    }
+
+    fn write_manifest(text: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.toml");
+        fs::write(&path, text).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn manifest_field_reads_string_value() {
+        let (_dir, manifest) = write_manifest("name = \"battery\"\nversion = \"0.1.0\"\n");
+        let value = manifest_field(&ManifestFieldArgs {
+            manifest: manifest.clone(),
+            key: "name".to_string(),
+        })
+        .unwrap();
+        assert_eq!(value, "battery");
+    }
+
+    #[test]
+    fn manifest_field_reads_api_major_minor() {
+        let (_dir, manifest) = write_manifest("modules-api = { major = 0, minor = 1 }\n");
+        let value = manifest_field(&ManifestFieldArgs {
+            manifest,
+            key: "modules-api".to_string(),
+        })
+        .unwrap();
+        assert_eq!(value, "0 1");
+    }
+
+    #[test]
+    fn manifest_field_errors_on_missing_key() {
+        let (_dir, manifest) = write_manifest("name = \"battery\"\n");
+        let err = manifest_field(&ManifestFieldArgs {
+            manifest,
+            key: "version".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.contains("missing `version`"));
     }
 }

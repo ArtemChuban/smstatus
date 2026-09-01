@@ -35,8 +35,6 @@ mod logic {
     use super::Config;
     use serde::Deserialize;
 
-    const COMM_MAX_LEN: usize = 15;
-
     #[derive(Deserialize)]
     struct RunningChanged {
         process: String,
@@ -47,24 +45,9 @@ mod logic {
         serde_json::from_str::<Config>(config).ok()
     }
 
-    pub fn process_name_matches(comm_contents: &str, target_name: &str) -> bool {
-        let comm = comm_contents.trim();
-        if comm == target_name {
-            return true;
-        }
-        if target_name.len() <= COMM_MAX_LEN {
-            return false;
-        }
-        let mut boundary = COMM_MAX_LEN;
-        while !target_name.is_char_boundary(boundary) {
-            boundary -= 1;
-        }
-        Some(comm) == target_name.get(..boundary)
-    }
-
     pub fn running_from_matching_payload(json: &str, configured: &str) -> Option<bool> {
         let parsed: RunningChanged = serde_json::from_str(json).ok()?;
-        if process_name_matches(&parsed.process, configured) {
+        if fmt_common::process_name_matches(&parsed.process, configured) {
             Some(parsed.running)
         } else {
             None
@@ -380,27 +363,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn process_name_matches_exact_comm() {
-        assert!(process_name_matches("firefox", "firefox"));
-    }
-
-    #[test]
-    fn process_name_matches_truncated_prefix_of_long_config() {
-        assert!(process_name_matches(
-            "some-very-long-",
-            "some-very-long-process-name"
-        ));
-    }
-
-    #[test]
-    fn process_name_matches_rejects_unrelated_comm() {
-        assert!(!process_name_matches(
-            "other-name",
-            "some-very-long-process-name"
-        ));
     }
 
     #[test]

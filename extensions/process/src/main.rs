@@ -9,7 +9,6 @@ use extension_protocol::{self as protocol, EventEmit, Request, Response};
 use serde::Serialize;
 
 const RUNNING_CHANGED_EVENT: &str = "running-changed";
-const COMM_MAX_LEN: usize = 15;
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 struct RunningChanged {
@@ -32,21 +31,6 @@ fn is_pid_dir(file_name: &str) -> bool {
     !file_name.is_empty() && file_name.bytes().all(|b| b.is_ascii_digit())
 }
 
-fn process_name_matches(comm_contents: &str, target_name: &str) -> bool {
-    let comm = comm_contents.trim();
-    if comm == target_name {
-        return true;
-    }
-    if target_name.len() <= COMM_MAX_LEN {
-        return false;
-    }
-    let mut boundary = COMM_MAX_LEN;
-    while !target_name.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    Some(comm) == target_name.get(..boundary)
-}
-
 fn process_running(name: &str) -> Result<bool, String> {
     let entries = std::fs::read_dir("/proc").map_err(|e| format!("cannot read /proc: {e}"))?;
     for entry in entries.flatten() {
@@ -57,7 +41,7 @@ fn process_running(name: &str) -> Result<bool, String> {
         let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
             continue;
         };
-        if process_name_matches(&comm, name) {
+        if fmt_common::process_name_matches(&comm, name) {
             return Ok(true);
         }
     }
@@ -427,27 +411,6 @@ mod tests {
     #[test]
     fn is_pid_dir_should_return_false_when_name_is_empty() {
         assert!(!is_pid_dir(""));
-    }
-
-    #[test]
-    fn process_name_matches_should_return_true_when_comm_trimmed_equals_target() {
-        assert!(process_name_matches("firefox\n", "firefox"));
-    }
-
-    #[test]
-    fn process_name_matches_should_return_true_when_comm_is_truncated_prefix_of_long_target() {
-        assert!(process_name_matches(
-            "some-very-long-\n",
-            "some-very-long-process-name"
-        ));
-    }
-
-    #[test]
-    fn process_name_matches_should_return_false_when_comm_differs_from_truncated_target() {
-        assert!(!process_name_matches(
-            "other-name\n",
-            "some-very-long-process-name"
-        ));
     }
 
     #[test]

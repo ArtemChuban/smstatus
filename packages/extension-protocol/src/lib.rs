@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
@@ -11,6 +12,21 @@ pub const PROTOCOL_VERSION: u32 = 2;
 const MAX_FRAME_SIZE: u32 = 8 * 1024 * 1024;
 
 pub const CHECK_METHOD: &str = "check";
+
+pub fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionEntry {
@@ -154,32 +170,6 @@ pub fn allowlist_check_response(payload: &str, extension: &str) -> Response {
     }
 }
 
-pub type MethodHandler = fn(&Request) -> Response;
-
-pub fn dispatch_request(
-    request: &Request,
-    handlers: &HashMap<String, MethodHandler>,
-    check: Option<MethodHandler>,
-    fallback: Option<MethodHandler>,
-) -> Response {
-    if is_reserved_method(&request.method) {
-        return match check {
-            Some(handler) => handler(request),
-            None => Response::Err(format!(
-                "reserved method `{}` has no handler",
-                request.method
-            )),
-        };
-    }
-    if let Some(handler) = handlers.get(&request.method) {
-        return handler(request);
-    }
-    match fallback {
-        Some(handler) => handler(request),
-        None => Response::Err(format!("unknown method: {}", request.method)),
-    }
-}
-
 fn accept_and_handshake(socket_path: &str) -> Result<UnixStream, String> {
     let _ = std::fs::remove_file(socket_path);
     let listener = UnixListener::bind(socket_path).map_err(|e| e.to_string())?;
@@ -228,19 +218,6 @@ fn drive_loop_with_events(
             break;
         }
     }
-}
-
-pub fn run_unix_extension_server(
-    socket_path: &str,
-    handlers: HashMap<String, MethodHandler>,
-    check: Option<MethodHandler>,
-    fallback: Option<MethodHandler>,
-) -> Result<(), String> {
-    let stream = accept_and_handshake(socket_path)?;
-    drive_loop(stream, |request| {
-        dispatch_request(request, &handlers, check, fallback)
-    });
-    Ok(())
 }
 
 pub fn serve(handler: impl FnMut(&Request) -> Response) {
@@ -606,157 +583,6 @@ mod tests {
         };
         let err = constraint_string_list(&entry, "url_prefixes").unwrap_err();
         assert!(err.contains("must be a string array"));
-    }
-
-    fn ping_handler(request: &Request) -> Response {
-        Response::Ok(format!("pong:{}", request.payload))
-    }
-
-    fn check_handler(request: &Request) -> Response {
-        Response::Ok(format!("checked:{}", request.payload))
-    }
-
-    fn fallback_handler(request: &Request) -> Response {
-        Response::Ok(format!("fallback:{}", request.payload))
-    }
-
-    #[test]
-    fn dispatch_request_routes_registered_method() {
-        let mut handlers = HashMap::new();
-        handlers.insert("ping".to_string(), ping_handler as MethodHandler);
-        let response = dispatch_request(
-            &Request {
-                method: "ping".to_string(),
-                payload: "hi".to_string(),
-            },
-            &handlers,
-            None,
-            None,
-        );
-        match response {
-            Response::Ok(body) => assert_eq!(body, "pong:hi"),
-            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
-        }
-    }
-
-    #[test]
-    fn dispatch_request_errors_on_unknown_without_fallback() {
-        let response = dispatch_request(
-            &Request {
-                method: "missing".to_string(),
-                payload: String::new(),
-            },
-            &HashMap::new(),
-            None,
-            None,
-        );
-        match response {
-            Response::Err(msg) => assert_eq!(msg, "unknown method: missing"),
-            Response::Ok(_) => panic!("expected Err"),
-        }
-    }
-
-    #[test]
-    fn dispatch_request_uses_fallback_on_map_miss() {
-        let response = dispatch_request(
-            &Request {
-                method: "anything".to_string(),
-                payload: "data".to_string(),
-            },
-            &HashMap::new(),
-            None,
-            Some(fallback_handler),
-        );
-        match response {
-            Response::Ok(body) => assert_eq!(body, "fallback:data"),
-            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
-        }
-    }
-
-    #[test]
-    fn dispatch_request_routes_reserved_method_to_check() {
-        let response = dispatch_request(
-            &Request {
-                method: CHECK_METHOD.to_string(),
-                payload: "payload".to_string(),
-            },
-            &HashMap::new(),
-            Some(check_handler),
-            None,
-        );
-        match response {
-            Response::Ok(body) => assert_eq!(body, "checked:payload"),
-            Response::Err(msg) => panic!("expected Ok, got Err: {msg}"),
-        }
-    }
-
-    #[test]
-    fn dispatch_request_errors_when_check_is_none() {
-        let response = dispatch_request(
-            &Request {
-                method: CHECK_METHOD.to_string(),
-                payload: String::new(),
-            },
-            &HashMap::new(),
-            None,
-            None,
-        );
-        match response {
-            Response::Err(msg) => assert!(msg.contains("has no handler")),
-            Response::Ok(_) => panic!("expected Err"),
-        }
-    }
-
-    #[test]
-    fn run_unix_extension_server_round_trips_request() {
-        use std::os::unix::net::UnixStream;
-        use std::thread;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let socket_path =
-            std::env::temp_dir().join(format!("extension-protocol-test-{nanos}.sock"));
-        let socket_path_str = socket_path.to_string_lossy().into_owned();
-
-        let server_path = socket_path_str.clone();
-        let server = thread::spawn(move || {
-            let mut handlers = HashMap::new();
-            handlers.insert("ping".to_string(), ping_handler as MethodHandler);
-            run_unix_extension_server(&server_path, handlers, None, None)
-        });
-
-        let mut stream = None;
-        for _ in 0..100 {
-            match UnixStream::connect(&socket_path_str) {
-                Ok(s) => {
-                    stream = Some(s);
-                    break;
-                }
-                Err(_) => thread::sleep(std::time::Duration::from_millis(10)),
-            }
-        }
-        let mut stream = stream.expect("connect");
-        perform_handshake_client(&mut stream).expect("handshake");
-        write_frame(
-            &mut stream,
-            &Request {
-                method: "ping".to_string(),
-                payload: "hi".to_string(),
-            },
-        )
-        .unwrap();
-        let frame: FromExtension = read_frame(&mut stream).unwrap();
-        match frame {
-            FromExtension::Response(Response::Ok(body)) => assert_eq!(body, "pong:hi"),
-            FromExtension::Response(Response::Err(msg)) => panic!("expected Ok, got Err: {msg}"),
-            FromExtension::Event(_) => panic!("expected Response, got Event"),
-        }
-        drop(stream);
-        server.join().unwrap().unwrap();
-        let _ = std::fs::remove_file(&socket_path_str);
     }
 
     #[test]

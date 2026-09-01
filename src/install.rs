@@ -12,7 +12,6 @@ use crate::error::Result;
 use crate::extension::is_safe_extension_name;
 use crate::manifest;
 use crate::manifest::Metadata;
-use crate::meta;
 use crate::reload::ReloadRequest;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -171,10 +170,6 @@ fn source_label_for_install(source: &str) -> PathBuf {
     } else {
         PathBuf::from(source)
     }
-}
-
-fn warn_extension_native_code() -> String {
-    EXTENSION_NATIVE_CODE_WARNING.to_string()
 }
 
 pub(crate) fn is_remote_install_source(source: &str) -> bool {
@@ -859,17 +854,13 @@ pub(crate) enum ExtensionInstallOutcome {
 }
 
 fn set_executable(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)
-            .map_err(|e| format!("failed to read permissions for `{}`: {e}", path.display()))?
-            .permissions();
-        perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(path, perms)
-            .map_err(|e| format!("failed to set executable bit on `{}`: {e}", path.display()))?;
-    }
-    let _ = path;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)
+        .map_err(|e| format!("failed to read permissions for `{}`: {e}", path.display()))?
+        .permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    fs::set_permissions(path, perms)
+        .map_err(|e| format!("failed to set executable bit on `{}`: {e}", path.display()))?;
     Ok(())
 }
 
@@ -906,7 +897,7 @@ pub(crate) fn install_extension_into(
         .into());
     }
 
-    let mut warnings = vec![warn_extension_native_code()];
+    let mut warnings = vec![EXTENSION_NATIVE_CODE_WARNING.to_string()];
     let resolved = resolve_source(source, options)?;
     verify_resolved_source(&resolved, source, options, &mut warnings)?;
 
@@ -981,73 +972,11 @@ pub(crate) fn install_extension(
     install_extension_into(&extensions_dir, source, options)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) enum PackageKind {
-    Module,
-    Extension,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct PackageManifestPeek {
-    pub kind: PackageKind,
-    pub name: String,
-    pub version: String,
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn peek_package_manifest(
-    source: &str,
-    options: &InstallOptions,
-) -> Result<PackageManifestPeek> {
-    let check_path = source_label_for_install(source);
-    if !has_tar_gz_extension(&check_path) {
-        return Err(format!(
-            "package source must be a `.tar.gz` archive, got `{}`",
-            check_path.display()
-        )
-        .into());
-    }
-
-    let mut warnings = Vec::new();
-    let resolved = resolve_source(source, options)?;
-    verify_resolved_source(&resolved, source, options, &mut warnings)?;
-
-    let unpack = ScratchDir(unique_temp_dir("peek-unpack")?);
-    unpack_archive(resolved.path(), &unpack.0)?;
-    let root = package_root(&unpack.0)?;
-
-    let has_module = root.join("module.wasm").is_file();
-    let has_extension = root.join("extension").is_file();
-    match (has_module, has_extension) {
-        (true, false) => {
-            require_module_files(&root)?;
-            let manifest = manifest::read_module_manifest_from(&root.join("manifest.toml"))?;
-            Ok(PackageManifestPeek {
-                kind: PackageKind::Module,
-                name: manifest.name,
-                version: manifest.version,
-            })
-        }
-        (false, true) => {
-            require_extension_files(&root)?;
-            let manifest = manifest::read_extension_manifest_from(&root.join("manifest.toml"))?;
-            Ok(PackageManifestPeek {
-                kind: PackageKind::Extension,
-                name: manifest.name,
-                version: manifest.version,
-            })
-        }
-        _ => Err("archive is not a recognized module or extension package".into()),
-    }
-}
-
 pub(crate) fn list_modules_in(modules_dir: &Path) -> Result<Vec<String>> {
     let kinds = crate::config::discover_module_kinds(modules_dir)?;
     let mut lines = Vec::with_capacity(kinds.len());
     for kind in kinds {
-        match meta::read(modules_dir, &kind) {
+        match manifest::read_module_manifest(modules_dir, &kind).map(|m| m.to_metadata()) {
             Ok(metadata) => lines.push(format!(
                 "{kind}\t{}\t{}\t{}",
                 metadata.display_name, metadata.version, metadata.author
@@ -1603,43 +1532,6 @@ mod tests {
         assert_eq!(
             decide_extension_install(Some(&installed), &candidate, true),
             ModuleInstallAction::Replace
-        );
-    }
-
-    #[test]
-    fn peek_package_manifest_reads_module_archive() {
-        let archive = pack_module_archive("battery", "0.1.0");
-        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
-        assert_eq!(peek.kind, PackageKind::Module);
-        assert_eq!(peek.name, "battery");
-        assert_eq!(peek.version, "0.1.0");
-    }
-
-    #[test]
-    fn peek_package_manifest_reads_extension_archive() {
-        let archive = pack_echo_archive();
-        let peek = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap();
-        assert_eq!(peek.kind, PackageKind::Extension);
-        assert_eq!(peek.name, "echo");
-        assert_eq!(peek.version, "0.1.0");
-    }
-
-    #[test]
-    fn peek_package_manifest_rejects_ambiguous_archive() {
-        let staging = temp_modules_dir("peek-ambiguous");
-        fs::write(
-            staging.join("manifest.toml"),
-            extension_manifest_toml("echo", "0.1.0"),
-        )
-        .unwrap();
-        fs::write(staging.join("module.wasm"), b"wasm").unwrap();
-        fs::write(staging.join("extension"), b"bin").unwrap();
-        let archive = PathBuf::from(format!("{}.tar.gz", staging.display()));
-        write_tar_gz(&staging, &archive).unwrap();
-        let err = peek_package_manifest(archive.to_str().unwrap(), &install_options()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("not a recognized module or extension package")
         );
     }
 

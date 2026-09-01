@@ -39,13 +39,10 @@ pub(crate) fn parse_pin_file(text: &str) -> Result<PinFile> {
 }
 
 fn resolve_pin_source(entry: &PinEntry) -> Result<String> {
-    match (&entry.source, &entry.name, &entry.version) {
-        (Some(source), _, _) => Ok(source.clone()),
-        (None, Some(_), _) | (None, _, Some(_)) => {
-            Err("catalog resolution not implemented: pin entry requires `source`".into())
-        }
-        (None, None, None) => Err("pin entry missing required field `source`".into()),
-    }
+    entry
+        .source
+        .clone()
+        .ok_or_else(|| "pin entry missing required field `source`".into())
 }
 
 fn install_options_for_entry(
@@ -198,10 +195,7 @@ mod tests {
         .unwrap();
         let err =
             apply_pin_file_in(&config_dir, &pin_path, &PinApplyOptions::default()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("catalog resolution not implemented")
-        );
+        assert!(err.to_string().contains("missing required field `source`"));
     }
 
     #[test]
